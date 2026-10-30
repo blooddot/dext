@@ -1,7 +1,7 @@
 :root {
   color-scheme: light dark;
   font-family: var(--vscode-font-family, sans-serif);
-  font-size: var(--vscode-font-size, 13px);
+  font-size: 14px;
   color: var(--vscode-foreground);
   background: var(--vscode-editor-background);
   --resource-api-accent: #79b8ff;
@@ -78,7 +78,7 @@ html:has(.project-panel) { scrollbar-gutter: stable; }
 .resource-group-actions { display: inline-flex; margin-left: auto; }
 .resource-pack > summary .resource-pack-actions { opacity: 0; pointer-events: none; }
 .resource-pack > summary:hover .resource-pack-actions, .resource-pack > summary:focus-within .resource-pack-actions { opacity: 1; pointer-events: auto; }
-.resource-pack-version { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
+.resource-pack-version { color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 400; }
 @media (hover: none) { .resource-pack > summary .resource-pack-actions { opacity: 1; pointer-events: auto; } }
 .resource-group-chevron { transition: transform 120ms ease; }
 .resource-group:not([open]) .resource-group-chevron { transform: rotate(-90deg); }
@@ -102,12 +102,12 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-navigation > button { flex-shrink: 0; }
 .resource-navigation-current { min-width: 0; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family, monospace); }
 .resource-navigation-home { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: transparent; }
-.resource-group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
-.resource-count, .resource-source { color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 400; }
+.resource-group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; }
+.resource-count, .resource-source { color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 400; }
 .resource-count { border-radius: 10px; padding: 0 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .resource-group ul, .project-objects { list-style: none; padding: 0; margin: 0; }
 .resource-api-node > ul { padding-left: 16px; }
-.resource-api-node > summary { font-size: 13px; }
+.resource-api-node > summary { font-size: 14px; }
 .resource-entry > button { display: block; width: 100%; padding: 8px 10px; text-align: left; border-color: transparent; color: inherit; background: transparent; }
 .resource-entry > button:hover { background: var(--vscode-list-hoverBackground); }
 .resource-entry > button:focus-visible { outline-offset: -1px; }
@@ -148,10 +148,10 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-api-type, .resource-api-default { color: var(--vscode-descriptionForeground); font-weight: normal; }
 .resource-source-heading { margin-top: 20px; }
 .resource-api-reference { margin: 0 0 24px; padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
-.resource-api-reference h3 { margin: 20px 0 8px; font-size: 13px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
+.resource-api-reference h3 { margin: 20px 0 8px; font-size: 14px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
 .resource-api-specifier { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 .resource-api-specifier code { font-size: 1.05em; }
-.resource-api-copy { padding: 2px 8px; font-size: 11px; }
+.resource-api-copy { padding: 2px 8px; font-size: 12px; }
 .resource-api-members { list-style: none; margin: 0; padding: 0; }
 .resource-api-members .resource-api-members { margin: 8px 0 0 16px; padding-left: 12px; border-left: 1px solid var(--vscode-panel-border); }
 .resource-api-member { padding: 8px 0; border-top: 1px solid var(--vscode-panel-border); }
@@ -201,7 +201,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-topic { border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; margin: 10px 0; overflow-wrap: anywhere; }
 .project-topic > summary { padding: 14px; cursor: pointer; line-height: 1.7; }
 .project-topic > summary:hover { background: var(--vscode-list-hoverBackground); }
-.project-topic-kind { color: var(--vscode-descriptionForeground); font-size: 11px; margin-right: 10px; }
+.project-topic-kind { color: var(--vscode-descriptionForeground); font-size: 12px; margin-right: 10px; }
 .project-topic-check { display: block; margin-left: 16px; color: var(--vscode-descriptionForeground); font-size: 12px; }
 .project-topic-check[data-state="changed"], .project-topic-check[data-state="missing"] { color: var(--vscode-editorWarning-foreground); }
 .project-topic-content { padding: 0 18px 18px; max-width: 900px; line-height: 1.65; }
@@ -285,7 +285,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
   grid-column: 2;
   margin-top: -2px;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -382,17 +382,17 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-model-category:hover:not(:disabled), .project-model-choice:hover { background: var(--vscode-list-hoverBackground); }
 .project-model-category:disabled { opacity: .55; cursor: default; }
 .project-model-category > span { color: var(--vscode-descriptionForeground); }
-.project-model-category-value { color: var(--vscode-descriptionForeground); font-size: 11px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-model-category-value { color: var(--vscode-descriptionForeground); font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-model-submenu { position: absolute; top: 0; left: calc(100% + 4px); width: min(216px, calc(100vw - 24px)); max-height: 310px; overflow: auto; padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); box-shadow: 0 4px 14px var(--vscode-widget-shadow, rgba(0,0,0,.35)); }
 .project-model-submenu[data-submenu-side="left"] { right: calc(100% + 4px); left: auto; }
 .project-model-submenu[data-submenu-side="above"] { top: auto; bottom: calc(100% + 4px); left: 0; }
-.project-model-submenu-heading { min-height: 28px; padding: 3px 6px; display: flex; align-items: center; border-bottom: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border)); color: var(--vscode-descriptionForeground); font-size: 11px; }
-.project-model-group-heading { padding: 8px 6px 3px; color: var(--vscode-descriptionForeground); font-size: 11px; font-weight: 600; }
+.project-model-submenu-heading { min-height: 28px; padding: 3px 6px; display: flex; align-items: center; border-bottom: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border)); color: var(--vscode-descriptionForeground); font-size: 12px; }
+.project-model-group-heading { padding: 8px 6px 3px; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 600; }
 .project-model-choice { grid-template-columns: minmax(0, 1fr) 14px; }
 .project-model-choice .codicon-blank { visibility: hidden; }
 .project-ai-model-control.is-disabled { opacity: .7; }
 .project-ai-model { margin-bottom: 14px; }
-.project-model-capabilities { display: block; margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 11px; line-height: 1.3; white-space: normal; }
+.project-model-capabilities { display: block; margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 12px; line-height: 1.3; white-space: normal; }
 .project-scan-progress {
   /* Status messages can contain text nodes and inline <code> elements. Keep
      the container block-level; flex belongs only to the progress-line below.
@@ -410,9 +410,9 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-initialization-error pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; white-space: pre-wrap; color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 8%, var(--vscode-editor-background)); border-radius: 4px; }
 .project-scan-progress-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .project-scan-progress-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-initialization-elapsed { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; }
+.project-initialization-elapsed { flex: 0 0 auto; color: var(--vscode-descriptionForeground); font-size: 12px; white-space: nowrap; }
 .project-scan-progress-meter { flex: 0 0 180px; width: 180px; height: 8px; accent-color: var(--vscode-focusBorder); }
-.project-scan-progress-percent { flex: 0 0 auto; min-width: 32px; color: var(--vscode-foreground); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.project-scan-progress-percent { flex: 0 0 auto; min-width: 32px; color: var(--vscode-foreground); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
 .project-initialization-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .project-initialization-actions .project-help { margin: 0; }
 @media (max-width: 700px) { .project-scan-progress-line { align-items: stretch; flex-direction: column; gap: 5px; } .project-scan-progress-meter { flex-basis: auto; width: 100%; } }
@@ -518,7 +518,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-markdown li { margin: 6px 0; }
 .project-markdown li > p { margin-bottom: 6px; }
 .project-markdown h1, .project-markdown h2 { font-size: 18px; margin: 28px 0 12px; line-height: 1.4; }
-.project-markdown h3, .project-markdown h4, .project-markdown h5, .project-markdown h6 { font-size: 15px; margin: 24px 0 10px; line-height: 1.4; }
+.project-markdown h3, .project-markdown h4, .project-markdown h5, .project-markdown h6 { font-size: 16px; margin: 24px 0 10px; line-height: 1.4; }
 .project-markdown code { font-size: 1em; padding: 2px 4px; background: var(--vscode-textCodeBlock-background, var(--vscode-input-background)); border-radius: 3px; overflow-wrap: anywhere; }
 .project-markdown pre { max-width: 100%; padding: 16px; overflow: auto; background: var(--vscode-textCodeBlock-background, var(--vscode-input-background)); }
 .project-markdown pre code { padding: 0; white-space: pre; }
@@ -573,7 +573,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-reader-inspector { position: relative; margin-top: 14px; padding: 12px 38px 12px 12px; border-left: 3px solid var(--vscode-focusBorder); background: var(--vscode-textBlockQuote-background); }
 .project-reader-inspector-close { position: absolute; top: 6px; right: 6px; padding: 0 6px; border: 0; background: transparent; color: var(--vscode-icon-foreground, var(--vscode-foreground)); font-size: 16px; line-height: 1.4; }
 .project-reader-inspector-close:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
-.project-reader-source pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.project-reader-source pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
 .project-reader-source button { display: block; margin: 4px 0; text-align: left; }
 .project-reader-step { padding: 10px 12px; margin: 6px 0; border-left: 3px solid var(--vscode-panel-border); }
 .project-reader-step button { background: transparent; text-align: left; font-weight: 600; padding: 0; }
@@ -629,7 +629,7 @@ html:has(body.project-reader-fullscreen) { scrollbar-gutter: auto; }
 .resource-api-flow-preview svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 .resource-api-flow[data-api-flow-state="error"] .resource-api-flow-status { color: var(--vscode-editorError-foreground, #d13438); }
 .resource-api-flow-issues { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--vscode-editorError-foreground, #d13438); background: var(--vscode-textBlockQuote-background); }
-.resource-api-flow-issues h3 { margin: 0 0 6px; font-size: 13px; }
+.resource-api-flow-issues h3 { margin: 0 0 6px; font-size: 14px; }
 .resource-api-flow-issues ul { margin: 0; padding-left: 20px; }
 .resource-api-flow-issues li { overflow-wrap: anywhere; }
 .resource-api-flow-source, .resource-api-flow-functions { margin-top: 10px; border-top: 1px solid var(--vscode-panel-border); }

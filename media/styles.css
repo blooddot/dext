@@ -1,7 +1,7 @@
 :root {
   color-scheme: light dark;
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
+  font-size: 14px;
   color: var(--vscode-foreground);
   background: var(--vscode-sideBar-background);
   --dext-plan-fill: #d4b52c;
@@ -154,7 +154,7 @@ button.primary.plan-build {
   padding: 0 7px;
   gap: 4px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   flex: 0 0 auto;
   white-space: nowrap;
   color: var(--plan-accent-foreground);
@@ -196,7 +196,7 @@ button.primary.plan-build.conflict:hover:not(:disabled) {
 .agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; color: inherit; font-size: inherit; overflow-wrap: anywhere; white-space: normal; }
 .agent-todo-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
 .agent-todo-text.markdown-body pre { overflow-x: auto; }
-.agent-todo-status { flex: 0 0 auto; font-size: 11px; color: var(--vscode-descriptionForeground); }
+.agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--vscode-descriptionForeground); }
 .agent-todo-item.active {
   --todo-accent: var(--vscode-progressBar-background, var(--vscode-focusBorder));
 }
@@ -293,7 +293,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   display: none;
   flex: 0 0 auto;
   color: var(--vscode-progressBar-background, var(--vscode-focusBorder));
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .conversation-tab.running .conversation-tab-activity {
@@ -510,7 +510,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
 
 .mcp-assistant-label {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: .04em;
@@ -762,13 +762,13 @@ main {
 .history-meta {
   margin-left: 4px;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
 .history-favorite {
   flex: 0 0 auto;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--vscode-charts-yellow, var(--vscode-notificationsWarningIcon-foreground, #cca700));
 }
 
@@ -956,7 +956,7 @@ main {
 
 .process-result-meta {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .process-result-text,
@@ -977,7 +977,7 @@ main {
 .agent-result-detail-meta {
   margin-right: 6px;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .process-result-detail {
@@ -1570,7 +1570,7 @@ body.image-page {
   border-radius: 50%;
   background: var(--vscode-editorWarning-foreground, #d7ba7d);
   color: #1e1e1e;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1;
 }
@@ -1582,7 +1582,7 @@ body.image-page {
   border-radius: 8px;
   background: var(--vscode-editorWarning-foreground, #d7ba7d);
   color: #1e1e1e;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 16px;
   text-align: center;
@@ -1647,7 +1647,7 @@ body.image-page {
   min-width: 0;
   overflow: hidden;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1693,7 +1693,7 @@ body.image-page {
   margin-bottom: 4px;
   content: "Branch " attr(data-branch);
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1901,7 +1901,7 @@ body.image-page {
 #mode-control > #mode-control-icon {
   flex: 0 0 auto;
   color: var(--vscode-descriptionForeground);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .input-section[data-mode="ask"] {
@@ -2145,14 +2145,14 @@ body.image-page {
 
 .composer-menu-category-value {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   text-align: right;
 }
 
 .composer-menu-empty {
   padding: 7px 8px;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
   white-space: normal;
 }
@@ -2187,13 +2187,13 @@ body.image-page {
   align-items: center;
   border-bottom: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border));
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .composer-model-group-heading {
   padding: 8px 6px 3px;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -2375,7 +2375,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.circu
 .result-meta,
 .count {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .problems-status {
@@ -2429,7 +2429,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.circu
   margin: 0;
   padding: 0 4px;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -2743,7 +2743,7 @@ button.primary.stopping {
 .output-turn-time {
   flex: 0 0 auto;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .output-turn-title {
@@ -2875,7 +2875,7 @@ button.primary.stopping {
 
 .turn-section > summary::-webkit-details-marker { display: none; }
 .turn-section > summary:hover { background: var(--vscode-list-hoverBackground); }
-.turn-section-meta { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.turn-section-meta { color: var(--vscode-descriptionForeground); font-size: 12px; }
 .turn-section .disclosure-chevron { flex: 0 0 12px; width: 12px; font-size: 12px; }
 .turn-section[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 
@@ -2921,7 +2921,7 @@ button.primary.stopping {
 
 .disclosure-meta {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .execution-disclosure-body {
@@ -2944,7 +2944,7 @@ button.primary.stopping {
   border-radius: 4px;
   color: var(--vscode-descriptionForeground);
   background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   height: 18px;
   box-sizing: border-box;
@@ -2979,7 +2979,7 @@ button.primary.stopping {
 /* Sent Input is prose too, not another instance of the input editor. */
 .output-turn-input > pre.dext-source,
 .markdown-body {
-  font: var(--vscode-font-size, 13px)/1.5 var(--vscode-font-family);
+  font: 14px/1.5 var(--vscode-font-family);
 }
 
 /* Code-mode submissions still need a monospace source display. */
@@ -3054,7 +3054,7 @@ button.primary.stopping {
   justify-content: space-between;
   padding: 0 4px;
   font-family: var(--vscode-font-family);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .markdown-body .markdown-code-block > pre {
@@ -3169,7 +3169,7 @@ pre {
   padding: 0 30px 0 0;
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
+  font-size: 14px;
   line-height: 1.55;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -3232,14 +3232,14 @@ pre {
 
 .agent-trace-glyph {
   flex: none;
-  font-size: 13px;
+  font-size: 14px;
   opacity: 0.8;
 }
 
 .agent-stream-item.agent-trace-tool > summary > .disclosure-chevron,
 .agent-trace-command > summary > .disclosure-chevron {
   flex: none;
-  font-size: 13px;
+  font-size: 14px;
   opacity: 0.75;
 }
 
@@ -3299,7 +3299,7 @@ pre {
 
 .agent-progress {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .agent-stream-item.agent-stream-reasoning summary {
@@ -3328,7 +3328,7 @@ pre {
 
 .agent-stream-result {
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size, 13px);
+  font-size: 14px;
 }
 
 .agent-result-heading {
@@ -3347,7 +3347,7 @@ pre {
 
 .agent-result-meta {
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .agent-result-content,
@@ -3418,7 +3418,7 @@ pre {
   padding: 5px 8px;
   color: var(--vscode-descriptionForeground);
   border-top: 1px solid var(--vscode-widget-border);
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -3461,7 +3461,7 @@ pre {
 
 .config-errors {
   color: var(--vscode-errorForeground);
-  font-size: 11px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -3517,12 +3517,12 @@ button.method-row:hover {
 
 .resource-category > summary::-webkit-details-marker { display: none; }
 .resource-category > summary:hover { background: var(--vscode-list-hoverBackground); }
-.resource-category-icon { color: var(--vscode-descriptionForeground); font-size: 13px; }
+.resource-category-icon { color: var(--vscode-descriptionForeground); font-size: 14px; }
 .resource-category-label { font-weight: 600; flex: 1; }
-.resource-category-count { color: var(--vscode-descriptionForeground); font-size: 11px; }
+.resource-category-count { color: var(--vscode-descriptionForeground); font-size: 12px; }
 .resource-category-body { padding: 2px 4px 5px; }
 .resource-row { min-height: 44px; padding: 5px 6px; grid-template-columns: minmax(0, 1fr); cursor: default; }
-.resource-empty { padding: 8px 10px 9px 25px; color: var(--vscode-descriptionForeground); font-size: 11px; }
+.resource-empty { padding: 8px 10px 9px 25px; color: var(--vscode-descriptionForeground); font-size: 12px; }
 
 .method-group {
   margin: 2px 0;
@@ -3563,7 +3563,7 @@ button.method-row:hover {
 .method-source {
   color: var(--vscode-descriptionForeground);
   font-family: var(--vscode-font-family);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -3622,7 +3622,7 @@ details[open] > summary > .disclosure-chevron {
   min-width: 0;
   color: var(--vscode-descriptionForeground);
   font-family: var(--vscode-editor-font-family);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -3633,7 +3633,7 @@ details[open] > summary > .disclosure-chevron {
   margin-left: 0;
   color: var(--vscode-descriptionForeground);
   font-family: var(--vscode-font-family);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -3697,10 +3697,10 @@ details[open] > summary > .disclosure-chevron {
 .agent-input-choice.selected { color: var(--vscode-foreground); background: var(--vscode-list-inactiveSelectionBackground); }
 .agent-input-choice.selected > .codicon { opacity: 1; color: var(--vscode-charts-green, var(--vscode-focusBorder)); }
 .agent-input-choice small { display: block; margin-top: 2px; color: var(--vscode-descriptionForeground); font-size: 12px; }
-.agent-input-choice small.agent-input-choice-source { margin: 0 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.agent-input-choice small.agent-input-choice-source { margin: 0 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .agent-input-disclosure-body .interaction-description { margin: 0; }
 .agent-input-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 10px; }
-.agent-input-status { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.agent-input-status { font-size: 12px; color: var(--vscode-descriptionForeground); }
 .agent-input-question { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
 .agent-input-question legend { padding: 0; margin-bottom: 8px; font-weight: 500; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-input-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px; margin: 4px 0; border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
@@ -3767,7 +3767,7 @@ details[open] > summary > .disclosure-chevron {
 /* The form scrolls, not the dialog, so the close button stays pinned to the corner. */
 .interaction-dialog .interaction-form { box-sizing: border-box; max-height: calc(100vh - 32px); padding: 18px 20px 16px; overflow: auto; }
 .interaction-dialog::backdrop { background: rgb(0 0 0 / 45%); }
-.interaction-close { position: absolute; top: 10px; right: 10px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 15px; line-height: 1; }
+.interaction-close { position: absolute; top: 10px; right: 10px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 16px; line-height: 1; }
 .interaction-close:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-foreground); }
 .interaction-select { display: flex; gap: 6px; }
 .interaction-select > button:first-child { min-width: 0; flex: 1; text-align: left; }
@@ -3780,7 +3780,7 @@ details[open] > summary > .disclosure-chevron {
 .resource-toolbar .plan-target-group { flex: 1; min-width: 100px; }
 .resource-toolbar .plan-status { white-space: normal; overflow-wrap: anywhere; }
 .resource-preview { background: transparent; color: var(--vscode-foreground); border: 1px solid var(--vscode-button-border, var(--vscode-widget-border)); border-radius: 4px; padding: 3px 8px; }
-.resource-directory { display: block; max-width: 300px; white-space: normal; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); font-size: 11px; margin-top: 3px; }
+.resource-directory { display: block; max-width: 300px; white-space: normal; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 3px; }
 
 /* Resource identity is separate from the read-only engine used to generate it. */
 [data-resource-type="api"] { --resource-accent: var(--resource-api-accent); }
@@ -3806,7 +3806,7 @@ button.primary.resource-save {
   height: 24px;
   padding: 0 8px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
   color: var(--composer-accent-foreground);
   background: var(--composer-accent-fill);
@@ -3878,7 +3878,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
   display: block;
   overflow: hidden;
   color: var(--vscode-descriptionForeground);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3908,7 +3908,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
   border-radius: 4px;
   background: transparent;
   color: var(--vscode-descriptionForeground);
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 .resource-source-toggle button.is-selected {

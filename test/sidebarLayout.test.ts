@@ -56,7 +56,7 @@ describe("sidebar panel layout", () => {
     expect(css).not.toContain("--dext-input-line-height");
     expect(await source('src/webview/codeEditor.ts')).toContain('lineHeight: 24');
     expect(css).toMatch(/\.attachment-chip \{[^}]*height: 24px;/);
-    expect(css).toMatch(/\.output-turn-input > pre\.dext-source,\s*\.markdown-body \{\s*font: var\(--vscode-font-size, 13px\)\/1.5 var\(--vscode-font-family\);/);
+    expect(css).toMatch(/\.output-turn-input > pre\.dext-source,\s*\.markdown-body \{\s*font: 14px\/1.5 var\(--vscode-font-family\);/);
     expect(css).toMatch(/\.output-turn-input \.attachment-chip \{\s*height: 20px;\s*margin-block: 2px;/);
     expect(css).toMatch(/\.output-turn-input \.attachment-open \{\s*height: 18px;\s*font: inherit;/);
   });
