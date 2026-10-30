@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, lstat, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, lstat, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
@@ -88,11 +88,18 @@ export class ProjectChangeEvidence {
     return { version: 1, id, workspaceKey: projectWorkspaceKey(this.root), capturedAt: Date.now(), files, git: inventory.git, initialStatus: inventory.status, diagnostics, complete: !diagnostics.length };
   }
 
-  async capture(): Promise<ProjectChangeBaseline> {
+  async capture(discard?: string): Promise<ProjectChangeBaseline> {
     const baseline = await this.snapshot();
     await mkdir(this.directory, { recursive: true });
     await writeFile(join(this.directory, `${baseline.id}.json`), JSON.stringify(baseline), { flag: "wx" });
+    if (discard) await this.remove(discard);
     return baseline;
+  }
+
+  /** One baseline per workspace: a finished run leaves no second copy of the source tree. */
+  async remove(evidenceId: string): Promise<void> {
+    if (!z.string().uuid().safeParse(evidenceId).success) return;
+    await rm(join(this.directory, `${evidenceId}.json`), { force: true });
   }
 
   async compare(evidenceId: string): Promise<ProjectChangeReport> {

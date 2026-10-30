@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { DextApplication } from "../src/app/application.js";
-import { ProjectStore } from "../src/features/project/host/persistence/projectStore.js";
+import { ProjectStore, projectContentHash } from "../src/features/project/host/persistence/projectStore.js";
 import { ProjectPlanService } from "../src/features/project/host/projectPlanService.js";
+import { ProjectPlanReconciler } from "../src/features/project/host/projectPlanReconcile.js";
 import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
 
 const fs = vi.hoisted(() => ({ files: new Map<string, string>(), write: vi.fn() }));
@@ -23,12 +24,15 @@ describe("Plan Project integration without migration", () => {
     const files = new Map([[".dext/project/model.json", JSON.stringify(model)], [".dext/project-intent.json", "obsolete invalid data"]]);
     const write = vi.fn(async () => {});
     const port = new ProjectPlanService(new ProjectStore({ readFile: async path => files.get(path), writeFile: write, listDirectory: async () => [] }), process.cwd());
-    const context = port.bindPlan(await port.readPlanContext({ workspaceKey: process.cwd(), input: "API" }), "native.plan.md", "1. [ ] Implement API", { assessment, reason: "Checked normative contract", refs: ["api"], coverage: "complete" });
+    const context = port.bindPlan(await port.readPlanContext({ workspaceKey: process.cwd(), input: "API" }), "native.plan.md", "1. [ ] Implement API norms: api", { assessment, reason: "Checked normative contract", refs: ["api"], coverage: "complete" });
     expect(context.assessment).toBe(assessment);
-    expect((await port.validatePlan(context, "1. [x] Implement API")).valid).toBe(true);
+    expect((await port.validatePlan(context, "1. [x] Implement API norms: api")).valid).toBe(true);
     model.nodes[0]!.body = { kind: "inline", text: "Changed interface during cancellation" };
     files.set(".dext/project/model.json", JSON.stringify(model));
-    expect((await port.validatePlan(context, "1. [ ] Implement API")).valid).toBe(false);
+    expect((await port.validatePlan(context, "1. [ ] Implement API norms: api")).valid).toBe(false);
+    // A finished run may have rewritten the norms it read; only the Plan body matters at the end.
+    expect((await port.validatePlan(context, "1. [ ] Implement API norms: api", { basis: false })).valid).toBe(true);
+    expect((await port.validatePlan(context, "1. [ ] Other work", { basis: false })).valid).toBe(false);
     expect(write).not.toHaveBeenCalled();
   });
   it("does not create a model for an empty workspace", async () => {
@@ -112,8 +116,45 @@ describe("Plan Project integration without migration", () => {
     const write = vi.fn(async () => {});
     const port = new ProjectPlanService(new ProjectStore({ readFile: async path => files.get(path), writeFile: write, listDirectory: async dir => dir === ".dext/objects" ? ["api.json"] : [] }), process.cwd());
     const read = await port.readPlanContext({ workspaceKey: process.cwd(), input: "Api" });
-    const context = port.bindPlan(read, "a.plan.md", "# Existing plan", { assessment, reason: "Checked API", refs: ["api"], coverage: "complete" });
+    const context = port.bindPlan(read, "a.plan.md", "# Existing plan\n1. [ ] Work norms: api", { assessment, reason: "Checked API", refs: ["api"], coverage: "complete" });
     expect(context.assessment).toBe(assessment); expect(write).not.toHaveBeenCalled();
     expect(files.has(".dext/project/model.json")).toBe(false);
+  });
+  it("applies a reviewed change unattended and keeps a guard failure pending", async () => {
+    const model = projectModelSchema.parse({ schemaVersion: 1, revision: 2, updatedAt: 0, nodes: [{ id: "api", kind: "contract", title: "API", canonicalName: "API", body: { kind: "inline", text: "old" } }], relations: [] });
+    const files = new Map([[".dext/project/model.json", JSON.stringify(model)]]);
+    const store = new ProjectStore({ readFile: async path => files.get(path), writeFile: async (path, value) => { files.set(path, value); }, listDirectory: async () => [] });
+    const basis = [
+      { locator: ".dext/project/model.json#/nodes/api", id: "api", hash: "h", kind: "object" as const },
+      { locator: "project:applicability", id: "{}", hash: "h", kind: "applicability" as const }
+    ];
+    const report = (evidence: string) => ({ assessment: "change", reason: "Contract text changed", refs: ["api"], coverage: "complete",
+      checks: [{ source: "agent_reported", description: "Compared the contract", status: "passed" }],
+      projectDelta: [{ op: "update", target: "node", id: "api", beforeHash: projectContentHash(JSON.stringify(model.nodes[0])), after: { body: { kind: "inline", text: "new" } }, evidence: [evidence] }] });
+    const app = Object.create(DextApplication.prototype) as DextApplication;
+    fs.files.clear(); fs.files.set("virtual/a.plan.md", "# Plan\n1. [ ] Work norms: api");
+    const remove = vi.fn(async () => {});
+    Object.assign(app, {
+      workspaceUri: { fsPath: "virtual" },
+      planUri: () => ({ fsPath: "virtual/a.plan.md" }),
+      projectReconciler: new ProjectPlanReconciler(store),
+      projectChangeEvidence: { compare: async () => ({ evidenceId: "e", complete: true, diagnostics: [], changes: [{ path: "src/a.ts", kind: "modified" }], renameCandidates: [] }), remove },
+      projectPlanPort: {
+        readPlanContext: async () => ({ availability: "ready", workspaceKey: "virtual", basis, grounding: "", diagnostics: [], omitted: [] }),
+        validatePlan: async () => ({ valid: true, diagnostics: [] })
+      },
+      runtime: { executeConversation: async () => ({ result: { kind: "ask", text: JSON.stringify(report(current)) } }) }
+    });
+    const context = { workspaceKey: "virtual", planPath: "a.plan.md", documentHash: "d", fileHash: "f", availability: "ready" as const, assessment: "change" as const, reason: "Anticipated", basis, reviewStatus: "pending" as const, evidenceId: "00000000-0000-4000-8000-000000000000" };
+    let current = "src/a.ts";
+    const applied = await app.finishPlanProject(context, "summary", new AbortController().signal);
+    expect(applied).toMatchObject({ reviewStatus: "reconciled", evidenceId: undefined });
+    expect(applied.receipts).toHaveLength(1);
+    expect(files.get(".dext/project/model.json")).toContain("new");
+    expect(remove).toHaveBeenCalledOnce();
+    current = "src/b.ts";
+    const pending = await app.finishPlanProject(context, "summary", new AbortController().signal);
+    expect(pending.reviewStatus).toBe("pending");
+    expect(pending.reason).toContain("src/b.ts");
   });
 });

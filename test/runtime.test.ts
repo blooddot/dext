@@ -77,6 +77,7 @@ describe("Project-aware Plan runtime", () => {
     });
     await runtime.executeConversation("plan", "Fix Api");
     expect(instruction).toContain("Custom headings"); expect(instruction).toContain("Preserve API");
+    expect(instruction).toContain("in the same change"); expect(instruction).toContain("dext_project_query");
     const foreignPath = join(process.cwd(), "other");
     const foreign = await runtime.execute(invoke("plan", [arg("input", "Fix Api"), arg("workspace", { kind: "dirRef", uri: pathToFileURL(foreignPath).href, path: foreignPath })]));
     expect(instruction).not.toContain("Preserve API");

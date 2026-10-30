@@ -563,7 +563,6 @@ function renderPlanToolbar(): void {
     activePlanPath: () => activePlanPath,
     planStatus: () => planStatus,
     projectContext: () => planProjectContext,
-    reviewProject: () => vscode.postMessage({ type: "reviewPlanProject" }),
     executing: () => executing,
     stopping: () => stopping,
     activeTurnId: () => activeTurnId,

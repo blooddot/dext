@@ -23,6 +23,18 @@ function maskCode(source: string): string {
   }).join("");
 }
 
+/** Norm ids named by a task line as `norms: a,b`; code samples cannot name a norm. */
+export function planTaskNorms(document: string): Set<string> {
+  const ids = new Set<string>();
+  for (const line of maskCode(document.replace(/\r\n/g, "\n")).split("\n")) {
+    if (!/^\d+\. \[[ xX]\]/.test(line)) continue;
+    for (const match of line.matchAll(/norms:\s*([\w.:/-]+(?:,[\w.:/-]+)*)/g)) {
+      for (const id of match[1]!.split(",")) ids.add(id.replace(/[.:;]+$/, ""));
+    }
+  }
+  return ids;
+}
+
 const marker = /<!--\s*dext-project-impact\s*:\s*([\s\S]*?)-->/g;
 
 export function parseProjectImpact(document: string): ProjectImpactParse {

@@ -19,5 +19,5 @@ export interface ProjectPlanRead {
 export interface ProjectPlanPort {
   readPlanContext(request: ProjectPlanRequest): Promise<ProjectPlanRead>;
   bindPlan(read: ProjectPlanRead, planPath: string, document: string, impact?: ProjectImpact): PlanProjectContext;
-  validatePlan(context: PlanProjectContext, document: string): Promise<{ valid: boolean; diagnostics: string[] }>;
+  validatePlan(context: PlanProjectContext, document: string, options?: { basis?: boolean }): Promise<{ valid: boolean; diagnostics: string[] }>;
 }

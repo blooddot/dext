@@ -11,7 +11,6 @@ import type { DextHistorySession, PlanStatus } from "./history.js";
  * conversation change never edits the host's whole message union. */
 
 const conversationSchemaList = [
-  z.object({ type: z.literal("reviewPlanProject") }),
   z.object({
     type: z.literal("executeInput"),
     mode: z.enum(["agent", "ask", "plan", "code"]),

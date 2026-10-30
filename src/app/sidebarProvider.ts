@@ -563,26 +563,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.showChat();
   }
 
-  async reviewPlanProject(): Promise<void> {
-    const session = this.activeSession;
-    if (this.conversation.coordinator.running(session.id) || session.resource) throw new Error("Stop the active work before reviewing Project updates.");
-    const context = session.projectContext;
-    if (!context?.report || context.reviewStatus !== "proposed") throw new Error("No Project updates are waiting for review.");
-    const document = await vscode.workspace.openTextDocument({ language: "json", content: JSON.stringify(context.report, null, 2) });
-    await vscode.window.showTextDocument(document, { preview: true });
-    const choice = await vscode.window.showWarningMessage("Review the displayed Project proposal before applying its updates.", { modal: true }, "Apply reviewed updates", "Reject proposal");
-    if (!choice) return;
-    if (this.activeSession.id !== session.id || this.conversation.coordinator.running(session.id) || session.projectContext !== context) throw new Error("Plan context changed while reviewing; reopen the proposal.");
-    const next = await this.application.reconcilePlanProject(context, choice === "Apply reviewed updates" ? "accept" : "reject", async next => {
-      await this.conversation.controller.savePlanContext(session.id, session.activePlanPath, session.planStatus ?? "active", next);
-    });
-    if (next.reviewStatus === "reconciled") {
-      session.planStatus = "running";
-      await this.conversation.plans.settle(session, { outcome: { status: "completed", reason: next.reason, rounds: 0 }, cancelled: false, failed: false });
-    }
-    await this.conversation.controller.postPlanContext();
-  }
-
   editTurnInput(sessionId: string, turnId: string): void {
     this.conversation.controller.hydrate();
     const execution = this.conversation.coordinator.active(sessionId);
@@ -824,9 +804,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case "newConversation":
           await this.newConversation();
-          break;
-        case "reviewPlanProject":
-          await this.reviewPlanProject();
           break;
         case "selectConversation": {
           const selected = this.sessionInMap(request.sessionId);

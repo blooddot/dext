@@ -19,6 +19,8 @@ export const PLAN_PROJECT_RULES = [
   "- If Project is absent, keep the ordinary Plan flow; do not initialize or migrate Project.",
   "- If Project is unavailable, state the diagnostic and that its norms were not checked. Do not invent a none assessment.",
   "- For ready Project context, read the relevant norms and assess responsibilities, public interfaces, business behavior, dependencies, invariants and design decisions; directory changes alone are insufficient.",
+  "- When the work touches a boundary, contract, invariant or design decision, read the norm that states it with `dext_project_query`; do not re-read unrelated norms for a local change.",
+  "- When the work changes a boundary, contract or decision, update that norm in the same change rather than leaving it for later.",
   "- In Context/Design record references, reasons and assessment: none, change, unknown or conflict. Missing matches, omitted context or contradictory evidence do not prove none.",
   "- For change, include the exact authorized Project updates in Files, Tasks and Verification. A repair conforming to an existing contract may need no norm change.",
   "- Include a final task comparing actual implementation changes with Project, even when anticipated impact is none. Unresolved impact or conflicts remain pending; keep the .plan.md file.",
@@ -55,7 +57,7 @@ export const PLAN_TASKS_RULES = [
   "- Every task is a top-level numbered checkbox such as `1. [ ] Do the thing.` One task per line, each small enough to verify on its own.",
   "- Do not use nested lists, tables, extra checklists, or `##` subheadings inside `## Tasks`. You may use `###` phase headings to group tasks; a heading is not a task.",
   "- Leave new tasks unchecked. When revising an existing plan, keep the order and wording of existing tasks and change only what the revision requires.",
-  "- Each task names the file or area it changes and ends with `verify: <command or check>`."
+  "- Each task names the file or area it changes and ends with `verify: <command or check>`. A task that updates Project norms also carries `norms: <id>,<id>` (comma separated, no spaces) before `verify:`."
 ].join("\n");
 
 /** Conservative Mermaid plus a prose fallback keeps a plan readable in editors

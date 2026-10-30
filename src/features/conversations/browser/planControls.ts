@@ -68,14 +68,6 @@ export function renderPlanToolbar(view: PlanToolbarView): void {
   // toolbar changes, so the action stays where the user left it.
   const conflict = context?.assessment === "conflict" && context.planPath === activePlanPath;
   elements.status.dataset.state = conflict ? "conflict" : "";
-  let review = elements.toolbar.querySelector<HTMLButtonElement>("[data-plan-project-review]");
-  if (!review && view.reviewProject) {
-    review = view.document.createElement("button");
-    review.type = "button"; review.dataset.planProjectReview = ""; review.textContent = "Review Project updates";
-    review.addEventListener("click", () => view.reviewProject?.());
-    elements.toolbar.append(review);
-  }
-  if (review) { review.hidden = context?.reviewStatus !== "proposed"; review.disabled = view.executing(); }
   elements.status.hidden = !activePlanPath;
   elements.build.hidden = !activePlanPath;
   // Keep the chooser in sync with Build so the host never receives a

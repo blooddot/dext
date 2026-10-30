@@ -10,6 +10,8 @@ All notable changes to Dext are documented in this file.
 
 ## Unreleased
 
+- Plan no longer stops for a human Project review: a `change` review that passes its checks writes the norms itself and keeps the receipts in the conversation, and a guard failure stays `pending` with its reason instead of failing the turn. Before writing, the host authorizes only the norms this run read, requires every delta to cite a path the run changed, and refuses more than 20 updates or 40,000 characters. Models that omit provenance fields keep the stored `review`/`freshness`/`origin`/`evidence`, norms citing a changed source become `needs_verification`, and each Build keeps exactly one execution baseline. The `dext.reviewPlanProject` command and the Plan toolbar's Review action are removed; a legacy `proposed` record stays readable. The final review's checks must be the Agent's own (`agent_reported`), and a `none` assessment now sees an index of every norm while a `change` names the norms it edits with `norms: <id>,<id>` on the task line.
+
 - `dext_fetch` reads a GitHub file URL (`raw.githubusercontent.com`, or a `github.com` `blob`/`raw` link) through `cdn.jsdelivr.net` and falls back to the original URL when that fails, so a repository file stays readable when GitHub itself is unreachable. Use a commit or tag rather than a branch name for a stable copy.
 
 - `mermaid` fenced blocks now render as diagrams in every Dext Markdown output surface: the turn's **Output**, finished **Process** messages, and **History** pages. A row that is still streaming keeps its source until the message completes, so a half-written fence is never rendered.

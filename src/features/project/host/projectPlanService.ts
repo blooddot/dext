@@ -1,11 +1,11 @@
 import { resolve, normalize } from "node:path";
 import type { PlanProjectContext, ProjectBasis, ProjectImpact } from "../../../shared/contracts/planProject.js";
 import type { ProjectPlanPort, ProjectPlanRead, ProjectPlanRequest } from "../contracts/projectPlan.js";
-import { parseProjectImpact, planSemanticContent } from "../knowledge/projectPlan.js";
+import { parseProjectImpact, planSemanticContent, planTaskNorms } from "../knowledge/projectPlan.js";
 import { projectReferenceOccurrences } from "../knowledge/projectReference.js";
 import { type ProjectStore, projectContentHash, type ProjectLegacySnapshot } from "./persistence/projectStore.js";
 
-interface Entry { id: string; locator: string; content: unknown; paths: string[]; names: string[]; global: boolean; links?: string[]; diagnostic?: string; writeTargets?: Array<{ target: string; id: string; beforeHash: string }> }
+interface Entry { id: string; kind: string; title: string; locator: string; content: unknown; paths: string[]; names: string[]; global: boolean; links?: string[]; diagnostic?: string; writeTargets?: Array<{ target: string; id: string; beforeHash: string }> }
 
 /** Relevant norms sent to Plan and to the final review. Relations and write hashes
  * ride along with each node, so a handful of large norms already needs this much. */
@@ -22,7 +22,8 @@ function entries(snapshot: ProjectLegacySnapshot): Entry[] {
     const file = snapshot.files.find(file => file.path === locator.split("#")[0]);
     const value = content as Record<string, unknown>;
     const links = ["relatedIds", "dependsOn", "relatedContextIds", "contextIds", "scope"].flatMap(key => Array.isArray(value[key]) ? (value[key] as unknown[]).filter((id): id is string => typeof id === "string") : []);
-    result.push({ id, locator, content, paths, names, global, links, ...(file ? { writeTargets: [{ target: file.path, id, beforeHash: file.hash }] } : {}) });
+    const title = ["title", "canonicalName", "name", "statement"].map(key => value[key]).find(text => typeof text === "string" && text.length > 0);
+    result.push({ id, kind: typeof value.kind === "string" ? value.kind : "object", title: typeof title === "string" ? title : id, locator, content, paths, names, global, links, ...(file ? { writeTargets: [{ target: file.path, id, beforeHash: file.hash }] } : {}) });
   };
   for (const object of snapshot.objects) {
     const file = snapshot.files.find(file => file.path.startsWith(".dext/objects/") && (JSON.parse(file.raw) as { id: string }).id === object.id)!;
@@ -69,7 +70,7 @@ export class ProjectPlanService implements ProjectPlanPort {
           if (text === undefined) throw new Error(`Knowledge document for '${node.id}' is missing.`);
           if (node.body.kind === "document" && projectContentHash(text) !== node.body.contentHash) throw new Error(`Knowledge document for '${node.id}' changed; review its content hash.`);
           const relations = model.relations.filter(edge => edge.from === node.id || edge.to === node.id);
-          all.push({ id: node.id, locator: `.dext/project/model.json#/nodes/${encodeURIComponent(node.id)}`, content: { ...node, text, relations }, paths: node.paths, names: [node.title, node.canonicalName], global: ["project", "constraint", "decision", "contract", "architecture"].includes(node.kind),
+          all.push({ id: node.id, kind: node.kind, title: node.title, locator: `.dext/project/model.json#/nodes/${encodeURIComponent(node.id)}`, content: { ...node, text, relations }, paths: node.paths, names: [node.title, node.canonicalName], global: ["project", "constraint", "decision", "contract", "architecture"].includes(node.kind),
             links: relations.flatMap(edge => [edge.from, edge.to]),
             ...(node.freshness !== "current" || node.review === "rejected" ? { diagnostic: `Norm '${node.id}' requires review (${node.review}/${node.freshness}).` } : {}),
             writeTargets: [{ target: "node", id: node.id, beforeHash: projectContentHash(JSON.stringify(node)) }, ...relations.map(edge => ({ target: "relation", id: edge.id, beforeHash: projectContentHash(JSON.stringify(edge)) }))]
@@ -95,15 +96,17 @@ export class ProjectPlanService implements ProjectPlanPort {
       // Include selection inputs and selectors, not unrelated object bodies.
       basis.push({ locator: "project:applicability", id: JSON.stringify({ input: request.input, paths: request.paths ?? [] }), kind: "applicability", hash: projectContentHash(JSON.stringify(all.map(({ id, locator, paths, names, global }) => ({ id, locator, paths, names, global })))) });
       const omitted: string[] = [];
-      const parts: string[] = [];
-      let length = 0;
-      for (const entry of selected) {
+      // A none assessment judges every norm, not only the ones this input matched.
+      const index = all.map(entry => `${entry.id}\t${entry.kind}\t${entry.title}`).join("\n");
+      let grounding = index.length > GROUNDING_BUDGET ? index.slice(0, GROUNDING_BUDGET) : index;
+      if (index.length > GROUNDING_BUDGET) diagnostics.push("The Project index exceeds the grounding budget; omitted norms require explicit reading before a none assessment.");
+      else for (const entry of selected) {
         const text = JSON.stringify({ id: entry.id, locator: entry.locator, value: entry.content, writeTargets: entry.writeTargets });
-        if (length + text.length + 1 > GROUNDING_BUDGET) { omitted.push(entry.locator); continue; }
-        parts.push(text); length += text.length + 1;
+        if (grounding.length + text.length + 1 > GROUNDING_BUDGET) { omitted.push(entry.locator); continue; }
+        grounding += `\n${text}`;
       }
       if (omitted.length) diagnostics.push("Grounding is truncated; omitted norms require explicit reading before a none assessment.");
-      return { ...empty, availability: "ready", basis, grounding: parts.join("\n"), omitted, diagnostics };
+      return { ...empty, availability: "ready", basis, grounding, omitted, diagnostics };
     } catch (error) {
       return { ...empty, availability: "unavailable", diagnostics: [error instanceof Error ? error.message : String(error)] };
     }
@@ -113,23 +116,29 @@ export class ProjectPlanService implements ProjectPlanPort {
     const parsed = parseProjectImpact(document);
     const candidate = impact ?? (parsed.status === "parsed" ? parsed.impact : undefined);
     const known = new Set(read.basis.filter(item => item.kind !== "applicability").map(item => item.id));
+    // A change must say which task carries which norm, or the write has no trail.
+    const tasks = planTaskNorms(document);
+    const unnamed = candidate?.assessment === "change" ? candidate.refs.filter(id => known.has(id) && !tasks.has(id)) : [];
     // Truncated or flagged grounding cannot prove 'none', but a change still names what it touches.
     const complete = !read.diagnostics.length && !read.omitted.length;
-    const valid = read.availability === "ready" && candidate && (complete || candidate.assessment !== "none") && candidate.refs.every(id => known.has(id));
+    const valid = read.availability === "ready" && candidate && (complete || candidate.assessment !== "none") && candidate.refs.every(id => known.has(id)) && !unnamed.length;
     return {
       workspaceKey: read.workspaceKey, planPath: normalize(planPath).replaceAll("\\", "/"),
       documentHash: projectContentHash(planSemanticContent(document)), fileHash: projectContentHash(document),
       availability: read.availability, assessment: valid ? candidate.assessment : "unknown",
-      reason: valid ? candidate.reason : [...read.diagnostics, parsed.status === "invalid" ? parsed.diagnostic : "Project impact has not been established."].join(" "),
+      reason: valid ? candidate.reason : [...read.diagnostics, unnamed.length ? `Tasks do not name these norms: ${unnamed.join(", ")}.` : "", parsed.status === "invalid" ? parsed.diagnostic : "Project impact has not been established."].filter(Boolean).join(" "),
       basis: read.basis, reviewStatus: valid && candidate.assessment === "none" ? "current" : "pending"
     };
   }
 
-  async validatePlan(context: PlanProjectContext, document: string): Promise<{ valid: boolean; diagnostics: string[] }> {
+  async validatePlan(context: PlanProjectContext, document: string, options: { basis?: boolean } = {}): Promise<{ valid: boolean; diagnostics: string[] }> {
     const diagnostics: string[] = [];
     if (context.workspaceKey !== this.workspaceKey) diagnostics.push("Plan belongs to another workspace.");
     if (projectContentHash(planSemanticContent(document)) !== context.documentHash) diagnostics.push("Plan document changed; review the design before resuming.");
     const selector = context.basis.find(item => item.kind === "applicability");
+    // The run itself may rewrite the norms it read, so only a check made before
+    // it starts can treat a changed basis as a reason to stop.
+    if (options.basis === false) return { valid: !diagnostics.length, diagnostics };
     if (context.availability === "ready" && !selector) diagnostics.push("Project applicability basis is missing.");
     if (selector) {
       try {

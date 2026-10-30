@@ -24,7 +24,7 @@ The model stores stable typed nodes and explicit relationships. A body has exact
 
 Native writes check revision and document hashes. Multi-document updates retain recovery journals and can resume the same request after interruption. Rollback requires backing up edits made after migration; restoring the old backup blindly would lose new norms. Reading a page, running Plan or querying never initializes or migrates Project.
 
-Build binds the semantic plan body and relevant normative content; execution evidence lives in extension storage under a workspace-isolated `plan-project/` directory. Final review uses content changes, not all changes against HEAD. Missing, non-text, concurrent or over-budget evidence stays unresolved. Pending proposals use expected hashes and per-operation receipts and can be accepted or rejected without rerunning coding tasks. Completion retains the plan and the reconciliation record.
+Build binds the semantic plan body and relevant normative content; execution evidence lives in extension storage under a workspace-isolated `plan-project/` directory. Each Build captures a fresh baseline and the finished run deletes it, so no copy of the source tree accumulates. Final review uses content changes, not all changes against HEAD. Missing, non-text, concurrent or over-budget evidence stays unresolved. A `change` review writes the norms itself: the host authorizes only the norms this run read, requires every delta to cite a path the run changed, and refuses more than 20 updates or 40,000 characters, leaving the proposal pending instead. A model that omits provenance fields keeps the stored review, freshness, origin and evidence. Norms citing a changed source become `needs_verification`, and each receipt is recorded per operation. Completion retains the plan and the reconciliation record.
 
 `project_query` reads only the persisted native model, with depth at most 8, at most 200 nodes and a bounded result body. Project settings can disable it. Pi receives the corresponding private current-turn host callback; arbitrary MCP and write tools remain disabled in read-only turns.
 
@@ -32,7 +32,7 @@ Build binds the semantic plan body and relevant normative content; execution evi
 
 Automated checks: `npm run check`, `npm run check:ui`, and `npm run check:ui:conversations` passed. `npm run test:host` passed in the installed VS Code; its clipboard assertions were skipped because focus and the OS clipboard baseline were unavailable. Real Codex calls in a temporary project passed the expected `none` and `change` Plan cases, and classified an unplanned return-type change as a conflict rather than `none`. Run the opt-in suite with `DEXT_TEST_PROJECT_CODEX` set to the installed executable: `npx vitest run test/planProjectLive.test.ts`.
 
-The full manual F5 sequence (Build, cancel/restart, and proposal acceptance in the user's desktop session) remains a separate acceptance check; browser message tests and real-model tests are not evidence that a human completed it. No live check initializes or migrates this repository's Project data.
+The full manual F5 sequence (Build and cancel/restart in the user's desktop session) remains a separate acceptance check; browser message tests and real-model tests are not evidence that a human completed it. No live check initializes or migrates this repository's Project data.
 
 ## Project files
 

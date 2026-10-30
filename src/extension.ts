@@ -350,7 +350,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (matches.length !== 1) throw new Error("Project reference is missing or ambiguous.");
       await sidebar.planFromProjectObject({ objectId: matches[0]!.id, canonicalName: matches[0]!.canonicalName });
     })),
-    vscode.commands.registerCommand("dext.reviewPlanProject", () => reportCommandError(() => sidebar.reviewPlanProject())),
     vscode.commands.registerCommand("dext.viewApis", () =>
       reportCommandError(() => editors.api?.showList() ?? Promise.resolve(undefined))
     ),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectImpactSchema, projectReviewReportSchema } from "../src/shared/contracts/planProject.js";
-import { parseProjectImpact, planSemanticContent } from "../src/features/project/knowledge/projectPlan.js";
+import { parseProjectImpact, planSemanticContent, planTaskNorms } from "../src/features/project/knowledge/projectPlan.js";
 
 const impact = { assessment: "none", reason: "Implementation follows the contract", refs: ["contract"], coverage: "complete" };
 const summary = `<!-- dext-project-impact: ${JSON.stringify(impact)} -->`;
@@ -34,6 +34,11 @@ describe("Project impact protocol", () => {
     expect(planSemanticContent(source.replace("1. [ ] Work", "1. [x] Work") + "\n" + summary)).toBe(planSemanticContent(source));
     expect(planSemanticContent(source.replace("Work;", "Other;"))).not.toBe(planSemanticContent(source));
     expect(planSemanticContent(source.replace("[x] Example", "[ ] Example"))).not.toBe(planSemanticContent(source));
+  });
+  it("reads norm ids from task lines only", () => {
+    const document = "# Plan\n1. [ ] Update the contract. norms: api,contract verify: npx vitest\n2. [ ] Prove\n```\n3. [ ] Example norms: fake\n```\n";
+    expect([...planTaskNorms(document)]).toEqual(["api", "contract"]);
+    expect(planTaskNorms("1. [ ] No suffix").size).toBe(0);
   });
   it("rejects a contradictory final report", () => {
     const report = { ...impact, checks: [{ source: "host_observed", description: "Content baseline", status: "passed" }], projectDelta: [] };

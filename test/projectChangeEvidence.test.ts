@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm, rename } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readdir, rm, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -11,8 +11,11 @@ async function fixture(git = true) {
   const directory = await mkdtemp(join(tmpdir(), "dext-plan-evidence-")); temporary.push(directory);
   const root = join(directory, "repo"); await mkdir(root);
   if (git) execFileSync("git", ["init", "--quiet", root]);
-  return { root, evidence: new ProjectChangeEvidence(root, join(directory, "storage")), git: (...args: string[]) => execFileSync("git", ["-c", "user.name=Dext Test", "-c", "user.email=dext@example.invalid", ...args], { cwd: root }) };
+  const storage = join(directory, "storage");
+  return { root, storage, evidence: new ProjectChangeEvidence(root, storage), git: (...args: string[]) => execFileSync("git", ["-c", "user.name=Dext Test", "-c", "user.email=dext@example.invalid", ...args], { cwd: root }) };
 }
+const baselines = async (storage: string): Promise<string[]> =>
+  (await readdir(storage, { recursive: true })).map(String).filter(name => name.endsWith(".json")).map(name => name.split(/[\\/]/).pop()!);
 describe("Plan content evidence", { timeout: 20_000 }, () => {
   it("excludes pre-existing dirty edits and observes changes even when committed during execution", async () => {
     const f = await fixture(); await writeFile(join(f.root, "a.ts"), "original"); f.git("add", "."); f.git("commit", "-qm", "initial");
@@ -38,6 +41,16 @@ describe("Plan content evidence", { timeout: 20_000 }, () => {
     expect(baseline.complete).toBe(false); expect(baseline.diagnostics.join(" ")).toMatch(/Git.*budget/i);
     await expect(f.evidence.compare("../escape")).rejects.toThrow("identity");
     await expect(f.evidence.compare("00000000-0000-4000-8000-000000000000")).rejects.toThrow();
+  });
+  it("keeps exactly one execution baseline", async () => {
+    const f = await fixture(); await writeFile(join(f.root, "a.ts"), "one");
+    const first = await f.evidence.capture();
+    const second = await f.evidence.capture(first.id);
+    expect(await baselines(f.storage)).toEqual([`${second.id}.json`]);
+    await f.evidence.remove(second.id);
+    expect(await baselines(f.storage)).toEqual([]);
+    await expect(f.evidence.compare(second.id)).rejects.toThrow();
+    await f.evidence.remove("../../escape");
   });
   it("does not let unchanged binary assets block text changes but diagnoses binary edits", async () => {
     const f = await fixture(); await writeFile(join(f.root, "logo.png"), Buffer.from([0, 1, 2]));

@@ -380,30 +380,14 @@ export class DextApplication {
 
   setProjectReconciler(reconciler: ProjectPlanReconciler): void { this.projectReconciler = reconciler; }
 
-  async reconcilePlanProject(context: PlanProjectContext, decision: "accept" | "reject", save: (context: PlanProjectContext) => Promise<void>): Promise<PlanProjectContext> {
-    if (!this.workspaceTrusted || !this.workspaceUri || !this.projectReconciler || !this.projectPlanPort) throw new Error("Project reconciliation requires a trusted workspace.");
-    if (!context.report || context.reviewStatus !== "proposed") throw new Error("No pending Project proposal.");
-    const read = await this.projectPlanPort.readPlanContext({ workspaceKey: context.workspaceKey, input: "" });
-    if (read.availability !== "ready") throw new Error("Project workspace is unavailable or does not match the proposal.");
-    if (decision === "accept" && (!context.report.projectDelta.some(delta => delta.op !== "none") || context.report.checks.some(check => check.status !== "passed"))) throw new Error("Project proposal requires complete checks and explicit updates before acceptance.");
-    const uri = this.planUri(context.planPath);
-    if (!uri) throw new Error("Plan is unavailable.");
-    const document = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-    if (createHash("sha256").update(planSemanticContent(document)).digest("hex") !== context.documentHash) throw new Error("Plan changed; review the proposal again.");
-    const receipts = await this.projectReconciler.reconcile({
-      deltas: context.report.projectDelta, authorizedTargets: context.report.projectDelta.map(delta => delta.target), decision,
-      receipts: context.receipts ?? [], saveReceipts: async receipts => { context = { ...context, receipts }; await save(context); }
-    });
-    const next: PlanProjectContext = { ...context, receipts, reviewStatus: decision === "accept" ? "reconciled" : "pending",
-      reason: decision === "accept" ? "Reviewed Project updates applied." : "Project proposal rejected; a revised assessment is required." };
-    await save(next);
-    return next;
-  }
-
   configureProjectEvidence(workspace: string, storage: string): void {
     this.projectChangeEvidence = new ProjectChangeEvidence(workspace, storage);
   }
 
+  /**
+   * Starts one Plan execution: re-validates the bound plan and captures the baseline
+   * that the final review compares against.
+   */
   async startPlanProject(context: PlanProjectContext): Promise<PlanProjectContext> {
     if (context.availability !== "ready") return context;
     const uri = this.planUri(context.planPath);
@@ -412,14 +396,15 @@ export class DextApplication {
     const validation = await this.projectPlanPort.validatePlan(context, document);
     if (!validation.valid) throw new Error(validation.diagnostics.join(" "));
     if (!this.projectChangeEvidence) throw new Error("Project change evidence storage is unavailable.");
-    if (context.evidenceId) {
-      await this.projectChangeEvidence.compare(context.evidenceId);
-      return context;
-    }
-    const baseline = await this.projectChangeEvidence.capture();
+    // Every Build starts a fresh baseline; a finished run leaves no copy behind.
+    const baseline = await this.projectChangeEvidence.capture(context.evidenceId);
     return { ...context, evidenceId: baseline.id, reviewStatus: "pending" };
   }
 
+  /**
+   * Final review, host write guards and the norm write in one turn. A proposal that
+   * fails any guard stays pending with its reason; the turn itself still succeeds.
+   */
   async finishPlanProject(context: PlanProjectContext, summary: string, signal: AbortSignal): Promise<PlanProjectContext> {
     if (context.availability !== "ready") return context;
     if (!context.evidenceId || !this.projectChangeEvidence || !this.projectPlanPort) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "Project change evidence is missing." };
@@ -427,27 +412,57 @@ export class DextApplication {
     const uri = this.planUri(context.planPath);
     if (!uri) throw new Error("Plan document is unavailable for final Project review.");
     const document = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-    const validation = await this.projectPlanPort.validatePlan(context, document);
-    if (!validation.valid) return { ...context, assessment: "conflict", reviewStatus: "stale", reason: validation.diagnostics.join(" ") };
-    if (!changes.complete || JSON.stringify(changes).length > 120_000) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: [...changes.diagnostics, "Actual change coverage is incomplete; manual review is required."].join(" ") };
+    const validation = await this.projectPlanPort.validatePlan(context, document, { basis: false });
+    // Every ending clears the baseline: code that changed during this run is now
+    // evidence that the norms citing it need a fresh look.
+    const settle = async (next: PlanProjectContext): Promise<PlanProjectContext> => {
+      // A failed stale mark matters less than the result already written.
+      if (this.projectReconciler) await this.projectReconciler.markStale(changes.changes.map(change => change.path)).catch(() => undefined);
+      await this.projectChangeEvidence!.remove(context.evidenceId!);
+      return { ...next, evidenceId: undefined };
+    };
+    if (!validation.valid) return settle({ ...context, assessment: "conflict", reviewStatus: "stale", reason: validation.diagnostics.join(" ") });
+    if (!changes.complete || JSON.stringify(changes).length > 120_000) return settle({ ...context, assessment: "unknown", reviewStatus: "pending", reason: [...changes.diagnostics, "Actual change coverage is incomplete; Project updates were not applied."].join(" ") });
     const read = await this.projectPlanPort.readPlanContext({ workspaceKey: context.workspaceKey, input: document, paths: changes.changes.map(change => change.path) });
     const prompt = [
       "Review actual implementation changes against Project norms, read-only. Do not modify any file.",
-      "Check responsibilities, interfaces, behavior, dependencies, invariants and decisions even if the plan anticipated none. Changes are host-observed content differences; they do not prove authorship. Concurrent/unexplained edits require unknown or manual review.",
+      "Check responsibilities, interfaces, behavior, dependencies, invariants and decisions even if the plan anticipated none. Changes are host-observed content differences; they do not prove authorship. Concurrent or unexplained edits require unknown or conflict.",
       "Return JSON matching this schema. Checks you perform use agent_reported, never host_observed. Deltas are proposals, not authorization. Do not declare completion for unresolved work.",
-      "Use supplied writeTargets for target/id/beforeHash. Legacy targets replace one complete JSON document. Native targets are node or relation; body changes replace the owning node. Never invent hashes or directly write Project during this review.",
+      "Use supplied writeTargets for target/id/beforeHash. Legacy targets replace one complete JSON document. Native targets are node or relation; body changes replace the owning node and may omit unchanged fields. Never invent hashes or directly write Project during this review.",
       JSON.stringify(z.toJSONSchema(projectReviewReportSchema)), JSON.stringify({ plan: document, project: read, changes, agentSummary: summary.slice(0, 24_000) })
     ].join("\n\n");
     const answer = await this.runtime.executeConversation("ask", prompt, { signal });
     if (answer.result.kind !== "ask") throw new Error("Project review returned an unexpected result.");
     const report = parseAnswer(projectReviewReportSchema, answer.result.text);
-    if (!report) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "The final Project review returned no usable JSON report; manual review is required." };
-    if (report.checks.some(check => check.source === "host_observed" || (check.source === "manual" && check.status === "passed"))) throw new Error("The Agent cannot certify host-observed or manual checks.");
+    if (!report) return settle({ ...context, assessment: "unknown", reviewStatus: "pending", reason: "The final Project review returned no usable JSON report; Project updates were not applied." });
+    if (report.checks.some(check => check.source !== "agent_reported")) throw new Error("The Agent may only report its own checks.");
     const known = new Set(read.basis.map(item => item.id));
-    if (report.refs.some(id => !known.has(id)) || read.diagnostics.length) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "Final review references are missing or context coverage is incomplete." };
+    if (report.refs.some(id => !known.has(id)) || read.diagnostics.length) return settle({ ...context, assessment: "unknown", reviewStatus: "pending", reason: "Final review references are missing or context coverage is incomplete." });
     report.checks.unshift({ source: "host_observed", description: `Compared ${changes.changes.length} content changes against the saved execution baseline.`, status: "passed" });
-    return { ...context, assessment: report.assessment, reason: report.reason, report,
-      reviewStatus: report.assessment === "none" && report.checks.every(check => check.status === "passed") ? "reconciled" : report.assessment === "change" ? "proposed" : "pending" };
+    const base: PlanProjectContext = { ...context, assessment: report.assessment, reason: report.reason, report };
+    if (report.assessment === "none") return settle({ ...base, reviewStatus: report.checks.every(check => check.status === "passed") ? "reconciled" : "pending" });
+    if (report.assessment !== "change") return settle({ ...base, reviewStatus: "pending" });
+    if (report.checks.some(check => check.status === "failed")) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} A reported check failed.` });
+    const deltas = report.projectDelta.filter(delta => delta.op !== "none");
+    if (!deltas.length) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} A change assessment names no Project update.` });
+    const observed = new Set(changes.changes.map(change => change.path));
+    const unbound = [...new Set(deltas.flatMap(delta => delta.evidence).filter(path => !observed.has(path)))];
+    if (unbound.length) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} Delta evidence is outside this plan's changes: ${unbound.join(", ")}.` });
+    const body = deltas.reduce((sum, delta) => sum + JSON.stringify(delta.after ?? null).length, 0);
+    if (deltas.length > 20 || body > 40_000) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} The proposal is too large to apply unattended (${deltas.length} updates, ${body} characters).` });
+    if (!this.projectReconciler) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} Project reconciliation is unavailable.` });
+    // Only norms this run actually read are writable; evidence comes from the basis,
+    // never from the proposal that is being authorized.
+    const basis = context.basis.filter(item => item.kind === "object");
+    const authorizedIds = basis.map(item => item.id);
+    const authorizedTargets = [...new Set(basis.map(item => item.locator.split("#")[0]!).filter(target => target.startsWith(".dext/")))];
+    let receipts = [...(context.receipts ?? [])];
+    try {
+      receipts = await this.projectReconciler.reconcile({ deltas: report.projectDelta, authorizedIds, authorizedTargets, decision: "accept", receipts, saveReceipts: next => { receipts = next; return Promise.resolve(); } });
+    } catch (error) {
+      return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} Project updates were not applied: ${error instanceof Error ? error.message : String(error)}` });
+    }
+    return settle({ ...base, reviewStatus: "reconciled", receipts });
   }
 
   async preparePlanBuild(path: string, document: string, previous?: PlanProjectContext): Promise<PlanProjectContext | undefined> {

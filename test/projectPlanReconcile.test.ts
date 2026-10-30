@@ -13,13 +13,52 @@ function fixture() {
   let receipts: ProjectReconcileReceipt[] = [];
   return { files, path, delta, reconciler: new ProjectPlanReconciler(store), request: () => ({ decision: "accept" as const, deltas: [delta], authorizedTargets: [path], receipts, saveReceipts: async (next: ProjectReconcileReceipt[]) => { receipts = next; } }) };
 }
+function nativeFixture() {
+  const model = projectModelSchema.parse({ schemaVersion: 1, revision: 3, updatedAt: 0, nodes: [{
+    id: "a", kind: "contract", title: "API", canonicalName: "Api", body: { kind: "inline", text: "before" },
+    review: "accepted", origin: "declared", freshness: "current", evidence: [{ path: "src/api.ts" }], paths: ["src/api.ts"]
+  }], relations: [] });
+  const files = new Map([[".dext/project/model.json", JSON.stringify(model)]]);
+  const store = new ProjectStore({ readFile: async path => files.get(path), writeFile: async (path, value) => { files.set(path, value); }, listDirectory: async () => [] });
+  let receipts: ProjectReconcileReceipt[] = [];
+  return { files, store, model, reconciler: new ProjectPlanReconciler(store),
+    request: { decision: "accept" as const, authorizedTargets: [], receipts, saveReceipts: async (next: ProjectReconcileReceipt[]) => { receipts = next; } } };
+}
+
 describe("Project reconciliation", () => {
+  it("keeps provenance the proposal omits and writes only authorized nodes", async () => {
+    const n = nativeFixture();
+    const delta: ProjectDelta = { op: "update", target: "node", id: "a", beforeHash: projectContentHash(JSON.stringify(n.model.nodes[0])), after: { body: { kind: "inline", text: "after" } }, evidence: ["src/api.ts"] };
+    await expect(n.reconciler.reconcile({ ...n.request, deltas: [delta] })).rejects.toThrow("not authorized");
+    await n.reconciler.reconcile({ ...n.request, deltas: [delta], authorizedIds: ["a"] });
+    expect((await n.store.readModel())?.nodes[0]).toMatchObject({ review: "accepted", origin: "declared", freshness: "current", evidence: [{ path: "src/api.ts" }], body: { text: "after" } });
+  });
+  it("requires both relation endpoints to be authorized", async () => {
+    const n = nativeFixture();
+    const relation = { id: "r", from: "a", to: "b", kind: "related_to" as const };
+    const other = { id: "b", kind: "module" as const, title: "B", canonicalName: "B", body: { kind: "inline" as const, text: "b" } };
+    n.files.set(".dext/project/model.json", JSON.stringify(projectModelSchema.parse({ ...n.model, nodes: [...n.model.nodes, other], relations: [relation] })));
+    const model = await n.store.readModel();
+    const delta: ProjectDelta = { op: "update", target: "relation", id: "r", beforeHash: projectContentHash(JSON.stringify(model!.relations[0])), after: { description: "calls" }, evidence: ["src/api.ts"] };
+    await expect(n.reconciler.reconcile({ ...n.request, deltas: [delta], authorizedIds: ["a"] })).rejects.toThrow("not authorized");
+    await n.reconciler.reconcile({ ...n.request, deltas: [delta], authorizedIds: ["a", "b"] });
+    expect((await n.store.readModel())?.relations[0]?.description).toBe("calls");
+  });
+  it("marks the norms citing a changed source as needing verification", async () => {
+    const n = nativeFixture();
+    await n.reconciler.markStale(["src/other.ts"]);
+    expect((await n.store.readModel())?.nodes[0]?.freshness).toBe("current");
+    await n.reconciler.markStale(["src/api.ts"]);
+    const model = await n.store.readModel();
+    expect(model?.nodes[0]?.freshness).toBe("needs_verification");
+    expect(model?.revision).toBeGreaterThan(3);
+  });
   it("reconciles native node bodies with revision guards and resumes lost receipts", async () => {
     const f = fixture();
     const model = projectModelSchema.parse({ schemaVersion: 1, revision: 0, updatedAt: 0, nodes: [{ id: "a", title: "API", canonicalName: "Api", kind: "contract", body: { kind: "inline", text: "before" } }], relations: [] });
     f.files.set(".dext/project/model.json", JSON.stringify(model));
     const delta: ProjectDelta = { op: "update", target: "node", id: "a", beforeHash: projectContentHash(JSON.stringify(model.nodes[0])), after: { ...model.nodes[0], body: { kind: "inline", text: "after" } }, evidence: ["src/api.ts"] };
-    const request = { ...f.request(), deltas: [delta], authorizedTargets: ["node"] };
+    const request = { ...f.request(), deltas: [delta], authorizedTargets: ["node"], authorizedIds: ["a"] };
     await expect(f.reconciler.reconcile({ ...request, saveReceipts: async () => { throw new Error("receipt offline"); } })).rejects.toThrow("offline");
     const raw = f.files.get(".dext/project/model.json");
     expect(raw).toContain("after"); expect(await f.reconciler.reconcile(request)).toHaveLength(1);

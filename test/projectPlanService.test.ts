@@ -40,8 +40,7 @@ describe("legacy Project Plan service", () => {
     const f = fixture(); f.files.set(path, JSON.stringify(object));
     const context = f.service.bindPlan(await f.read(), ".dext/plans/a.plan.md", "1. [ ] Work", impact);
     expect(context.assessment).toBe("none");
-    expect((await f.service.validatePlan(context, "1. [x] Work")).valid).toBe(true);
-    f.files.set(path, JSON.stringify({ ...object, description: "Changed public API" }));
+    expect((await f.service.validatePlan(context, "1. [x] Work")).valid).toBe(true);    f.files.set(path, JSON.stringify({ ...object, description: "Changed public API" }));
     expect((await f.service.validatePlan(context, "1. [ ] Work")).valid).toBe(false);
   });
   it("checks applicability additions but ignores unrelated content edits", async () => {
@@ -69,8 +68,17 @@ describe("legacy Project Plan service", () => {
     expect(read.omitted).toEqual([path]);
     expect(f.service.bindPlan(read, "a", "Work", impact).assessment).toBe("unknown");
     // A 'none' claim needs complete grounding; a change is still an actionable statement.
-    expect(f.service.bindPlan(read, "a", "Work", { ...impact, assessment: "change" }).assessment).toBe("change");
+    expect(f.service.bindPlan(read, "a", "1. [ ] Work norms: app", { ...impact, assessment: "change" }).assessment).toBe("change");
     expect((await f.service.readPlanContext({ input: "App", workspaceKey: process.cwd() + "/other" })).availability).toBe("unavailable");
+  });
+  it("indexes every norm and requires a task to name each changed norm", async () => {
+    const f = fixture(); f.files.set(path, JSON.stringify(object));
+    const read = await f.read();
+    expect(read.grounding.split("\n")[0]).toBe("app\tmodule\tApp");
+    const missing = f.service.bindPlan(read, "a", "1. [ ] Work", { ...impact, assessment: "change" });
+    expect(missing.assessment).toBe("unknown");
+    expect(missing.reason).toContain("app");
+    expect(f.service.bindPlan(read, "a", "1. [ ] Work norms: app", { ...impact, assessment: "change" }).assessment).toBe("change");
   });
   it("checks dangling references and protects externally changed writes", async () => {
     const f = fixture(); const raw = JSON.stringify(object); f.files.set(path, raw);

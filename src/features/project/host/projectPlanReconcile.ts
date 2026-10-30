@@ -2,7 +2,7 @@ import { projectDeltaSchema, type ProjectDelta } from "../../../shared/contracts
 import { projectIntentSchema } from "../contracts/projectIntent.js";
 import { normalizeProjectObject } from "../contracts/projectKnowledge.js";
 import { ProjectStore, projectArchitectureSchema, projectContentHash } from "./persistence/projectStore.js";
-import { projectModelNodeSchema, projectModelRelationSchema, type ProjectModel } from "../contracts/projectModel.js";
+import { projectModelNodeSchema, projectModelRelationSchema, type ProjectModel, type ProjectModelNode, type ProjectModelRelation } from "../contracts/projectModel.js";
 import { parseProjectModel } from "../knowledge/projectModel.js";
 
 export interface ProjectReconcileReceipt { id: string; status: "applied" | "rejected"; afterHash: string | null }
@@ -10,6 +10,8 @@ export interface ProjectReconcileRequest {
   deltas: ProjectDelta[];
   /** Supplied only by the host after explicit plan authorization or proposal acceptance. */
   authorizedTargets: readonly string[];
+  /** Native node ids the host authorized; absent means none, so silence grants nothing. */
+  authorizedIds?: readonly string[];
   decision: "accept" | "reject" | "none";
   receipts: readonly ProjectReconcileReceipt[];
   saveReceipts(receipts: ProjectReconcileReceipt[]): Promise<void>;
@@ -93,14 +95,23 @@ export class ProjectPlanReconciler {
 
   private async applyNative(model: ProjectModel, request: ProjectReconcileRequest): Promise<ProjectReconcileReceipt[]> {
     const next = structuredClone(model); const receipts = [...request.receipts]; const touched = new Set<string>();
+    const authorized = new Set(request.authorizedIds ?? []);
     for (const delta of request.deltas) {
       if (delta.op === "none") continue;
-      if (!request.authorizedTargets.includes(delta.target)) throw new Error(`Project update is not authorized: ${delta.target}`);
       if (delta.target !== "node" && delta.target !== "relation") throw new Error("Native deltas use node or relation targets; body edits replace their owning node.");
       const key = `${delta.target}:${delta.id}`;
       if (touched.has(key)) throw new Error(`Duplicate update target: ${key}`); touched.add(key);
       const collection = delta.target === "node" ? next.nodes : next.relations;
       const current = collection.find(item => item.id === delta.id);
+      // A missing field keeps its stored value, so a proposal cannot reset provenance by silence.
+      const after = delta.op === "delete" ? undefined : delta.target === "node"
+        ? projectModelNodeSchema.parse({ ...(current ?? {}), ...(delta.after as object) })
+        : projectModelRelationSchema.parse({ ...(current ?? {}), ...(delta.after as object) });
+      if (after && after.id !== delta.id) throw new Error("Project identity cannot change during update.");
+      // Only norms this run actually read may be written; a create has no stored node to overwrite.
+      const edge = delta.target === "relation" ? (after as ProjectModelRelation | undefined) ?? current as ProjectModelRelation | undefined : undefined;
+      const owned = delta.target === "node" ? [delta.id] : [edge?.from, edge?.to];
+      if (delta.op !== "create" && (owned.includes(undefined) || owned.some(id => !authorized.has(id!)))) throw new Error(`Project update is not authorized: ${key}`);
       const before = current ? projectContentHash(JSON.stringify(current)) : null;
       const id = projectContentHash(JSON.stringify(delta));
       const existing = receipts.find(receipt => receipt.id === id);
@@ -109,16 +120,34 @@ export class ProjectPlanReconciler {
         continue;
       }
       if (request.decision === "reject") { receipts.push({ id, status: "rejected", afterHash: before }); continue; }
-      const after = delta.op === "delete" ? undefined : delta.target === "node" ? projectModelNodeSchema.parse(delta.after) : projectModelRelationSchema.parse(delta.after);
-      if (after && after.id !== delta.id) throw new Error("Project identity cannot change during update.");
       const afterHash = after ? projectContentHash(JSON.stringify(after)) : null;
       if (before !== delta.beforeHash && before !== afterHash) throw new Error(`Project update conflict: ${key}`);
-      if (delta.target === "node") next.nodes = [...next.nodes.filter(node => node.id !== delta.id), ...(after ? [projectModelNodeSchema.parse(after)] : [])];
-      else next.relations = [...next.relations.filter(edge => edge.id !== delta.id), ...(after ? [projectModelRelationSchema.parse(after)] : [])];
+      if (delta.target === "node") {
+        const node = after as ProjectModelNode | undefined;
+        next.nodes = [...next.nodes.filter(item => item.id !== delta.id), ...(node ? [node] : [])];
+      } else {
+        const relation = after as ProjectModelRelation | undefined;
+        next.relations = [...next.relations.filter(item => item.id !== delta.id), ...(relation ? [relation] : [])];
+      }
       receipts.push({ id, status: "applied", afterHash });
     }
     if (request.decision === "accept" && JSON.stringify(next) !== JSON.stringify(model)) await this.store.updateProject(parseProjectModel(next), model.revision);
     await request.saveReceipts(receipts);
     return receipts;
+  }
+
+  /** Changed sources make the norms that cite them unverified, without asking a model. */
+  async markStale(paths: readonly string[]): Promise<void> {
+    const model = await this.store.readModel();
+    if (!model || !paths.length) return;
+    const changed = new Set(paths);
+    let touched = false;
+    const nodes = model.nodes.map(node => {
+      if (node.freshness === "needs_verification") return node;
+      if (!node.paths.some(path => changed.has(path)) && !node.evidence.some(item => changed.has(item.path))) return node;
+      touched = true;
+      return { ...node, freshness: "needs_verification" as const };
+    });
+    if (touched) await this.store.updateProject(parseProjectModel({ ...model, nodes }), model.revision);
   }
 }
