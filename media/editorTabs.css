@@ -589,22 +589,23 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 @media (max-width: 650px) {
   .project-reader { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .project-reader-directory { position: static; max-height: none; border: 0; padding: 0; }
-  .project-reader-heading h2 { font-size: 19px; }
+  .project-reader-heading h2 { font-size: 20px; }
   .project-reader-figure { padding: 10px; }
 }
 .project-reader-archify { display: block; width: 100%; height: 520px; border: 0; background: var(--vscode-editor-background); }
 .project-reader-canvas:has(.project-reader-archify) { padding: 0; max-height: none; margin: 12px 0; }
-/* A wide editor spends its second column on the diagram instead of a reading rail: the explanation
-   keeps a readable measure on the left and the diagram stays in view while it scrolls. The pane is
-   one cell beside the whole article, so no row is stretched to match the diagram; narrow editors
-   leave the pane empty and keep the diagram between the explanation and the steps. */
-@media (min-width: 1360px) {
-  .project-reader-main:has(> .project-reader-diagram-pane > .project-reader-figure) { display: grid; grid-template-columns: minmax(0, min(88ch, 52%)) minmax(360px, 1fr); column-gap: 40px; align-items: start; }
-  .project-reader-main > .project-reader-progress { grid-column: 1 / -1; grid-row: 1; }
-  .project-reader-main > [data-reader-article] { grid-column: 1; grid-row: 2; }
-  .project-reader-main > .project-reader-diagram-pane { grid-column: 2; grid-row: 2; align-self: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
-  .project-reader-diagram-pane .project-reader-archify { height: clamp(440px, 58vh, 680px); }
-}
+/* A reader with room for both spends its second column on the diagram: the explanation keeps its
+   measure on the left, the diagram takes the smaller share and stays in view while the text scrolls.
+   Room means about 1,180px of reading surface — 661px of prose beside a 479px diagram; the prose never
+   drops below its full measure (88ch, about 617px) and the diagram never grows wider than the prose.
+   Below that a docked diagram squeezes the prose and shrinks itself to unreadable labels, so the width
+   goes to the text and the diagram follows it in the article. projectReader.ts measures the reading
+   surface, not the window: the directory takes a share of the window that changes with it. */
+.project-reader-main.is-split { display: grid; grid-template-columns: minmax(0, min(820px, 56%)) minmax(min(479px, 44%), 1fr); column-gap: 40px; align-items: start; }
+.project-reader-main.is-split > .project-reader-progress { grid-column: 1 / -1; grid-row: 1; }
+.project-reader-main.is-split > [data-reader-article] { grid-column: 1; grid-row: 2; }
+.project-reader-main.is-split > .project-reader-diagram-pane { grid-column: 2; grid-row: 2; align-self: start; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+.project-reader-diagram-pane .project-reader-archify { height: clamp(440px, 58vh, 680px); }
 .project-reader-figure.is-expanded .project-reader-archify { height: calc(100vh - 185px); }
 html:has(body.project-reader-fullscreen), body.project-reader-fullscreen { overflow: hidden; }
 html:has(body.project-reader-fullscreen) { scrollbar-gutter: auto; }

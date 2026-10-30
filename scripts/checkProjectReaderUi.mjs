@@ -290,17 +290,20 @@ try {
         const prose = document.querySelector('.project-reader-prose');
         const art = document.querySelector('[data-reader-article]').getBoundingClientRect(), left = prose.getBoundingClientRect(), right = figure.getBoundingClientRect();
         const docked = !!figure.closest('.project-reader-diagram-pane');
-        return { grid: getComputedStyle(main).display === 'grid', docked, position: getComputedStyle(docked ? figure.parentElement : figure).position, beside: right.left >= left.right - 1, below: right.top >= left.bottom - 1, figure: Math.round(right.width), main: Math.round(main.getBoundingClientRect().width), article: Math.round(art.width) };
+        return { grid: getComputedStyle(main).display === 'grid', docked, position: getComputedStyle(docked ? figure.parentElement : figure).position, beside: right.left >= left.right - 1, below: right.top >= left.bottom - 1, figure: Math.round(right.width), prose: Math.round(left.width), main: Math.round(main.getBoundingClientRect().width), article: Math.round(art.width) };
       })()`);
-      if (width >= 1360) {
-        assert.equal(layout.grid, true, 'a wide editor sets the diagram beside the explanation');
+      // The split is decided by the reading surface's width, not the window: the directory takes a
+      // share of the window, so the same window leaves different room for the prose.
+      if (layout.main >= 1180) {
+        assert.equal(layout.grid, true, 'a reading surface with room sets the diagram beside the explanation');
         assert.equal(layout.docked, true, 'the diagram is docked beside the article');
         assert.equal(layout.beside, true, `the diagram sits right of the explanation: ${JSON.stringify(layout)}`);
         assert.equal(layout.position, 'sticky', 'the diagram stays in view while the explanation scrolls');
-        assert.ok(layout.figure >= 360, `the diagram column keeps a usable width: ${JSON.stringify(layout)}`);
-        assert.ok(layout.figure < layout.main * .6, `the diagram does not take the whole reader: ${JSON.stringify(layout)}`);
+        assert.ok(layout.prose >= 617, `the docked prose keeps its full measure: ${JSON.stringify(layout)}`);
+        assert.ok(layout.figure >= 470, `the diagram column keeps a usable width: ${JSON.stringify(layout)}`);
+        assert.ok(layout.figure < layout.prose, `the diagram never grows wider than the prose: ${JSON.stringify(layout)}`);
       } else {
-        assert.equal(layout.grid, false, 'a narrow editor stacks the explanation and its diagram');
+        assert.equal(layout.grid, false, 'a reading surface without room stacks the explanation and its diagram');
         assert.equal(layout.docked, false, 'a narrow editor keeps the diagram between the explanation and the steps');
         assert.equal(layout.below, true, `the diagram follows the explanation in one column: ${JSON.stringify(layout)}`);
         assert.ok(Math.abs(layout.figure - layout.article) <= 2, `the stacked diagram uses the article width: ${JSON.stringify(layout)}`);
@@ -340,7 +343,8 @@ try {
       assert.deepEqual(await evaluate('violations'), [], 'reader respects CSP');
     }
   }
-  // The split waits for a wide editor: at a normal half-screen editor the diagram stays in the reading column.
+  // The split waits for a reading surface with room for both columns: at a normal editor the width
+  // goes to the text instead of squeezing the prose and shrinking the diagram to unreadable labels.
   await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 950, deviceScaleFactor: 1, mobile: false });
   await load('vscode-dark');
   await ready();
@@ -349,6 +353,28 @@ try {
   assert.equal(await evaluate(`(()=>{const f=document.querySelector('.project-reader-figure').getBoundingClientRect();const a=document.querySelector('[data-reader-article]').getBoundingClientRect();return Math.abs(f.width-a.width)<=2&&f.top>document.querySelector('.project-reader-prose').getBoundingClientRect().bottom-1})()`), true, 'the stacked diagram uses the article width below the explanation');
   assert.equal(await evaluate(`document.querySelector('.project-reader-main').getBoundingClientRect().right >= document.querySelector('.project-reader').getBoundingClientRect().right - 2`), true, 'the article fills the reader width without a rail');
   await writeFile(join(artifacts, 'reader-1100.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+  // A quarter-screen editor keeps the diagram in the reading column as well: the window is wider than
+  // the split threshold, but the directory leaves the reading surface below it.
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 950, deviceScaleFactor: 1, mobile: false });
+  await new Promise(done => setTimeout(done, 250));
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-reader-main')).display`), 'block', 'the split follows the reading surface, not the window');
+  assert.equal(await evaluate(`document.querySelector('.project-reader-main').getBoundingClientRect().width >= 1180`), false, 'the reading surface is what stays below the split');
+  await writeFile(join(artifacts, 'reader-1440.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+  // A wide editor spends the room left past the prose measure on the diagram, which never grows wider
+  // than the text it explains.
+  await send('Emulation.setDeviceMetricsOverride', { width: 1700, height: 950, deviceScaleFactor: 1, mobile: false });
+  await load('vscode-dark');
+  await ready();
+  const docked = await evaluate(`(() => {
+    const figure = document.querySelector('.project-reader-figure').getBoundingClientRect();
+    const prose = document.querySelector('.project-reader-prose').getBoundingClientRect();
+    return { figure: Math.round(figure.width), prose: Math.round(prose.width), main: Math.round(document.querySelector('.project-reader-main').getBoundingClientRect().width), docked: !!document.querySelector('.project-reader-diagram-pane > .project-reader-figure') };
+  })()`);
+  assert.equal(docked.docked, true, `a wide reading surface docks the diagram: ${JSON.stringify(docked)}`);
+  assert.ok(docked.prose >= 617, `the docked prose keeps its full measure: ${JSON.stringify(docked)}`);
+  assert.ok(docked.figure >= 470, `the docked diagram keeps a usable width: ${JSON.stringify(docked)}`);
+  assert.ok(docked.figure < docked.prose, `the diagram never grows wider than the prose: ${JSON.stringify(docked)}`);
+  await writeFile(join(artifacts, 'reader-1700.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
   // A fullscreen editor spends every pixel past the prose measure on the diagram.
   await send('Emulation.setDeviceMetricsOverride', { width: 2400, height: 1400, deviceScaleFactor: 1, mobile: false });
   await load('vscode-dark');
@@ -362,8 +388,8 @@ try {
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-reader-main')).display`), 'grid', 'a fullscreen editor keeps the diagram beside the explanation');
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-reader-diagram-pane')).position`), 'sticky', 'the docked diagram stays in view');
   assert.ok(wide.panel <= 1904 && wide.article <= wide.panel, `the reader stops at its reading cap: ${JSON.stringify(wide)}`);
-  assert.ok(wide.prose >= wide.article * .3 && wide.prose <= 720, `the prose keeps its measure while the diagram grows: ${JSON.stringify(wide)}`);
-  assert.ok(wide.figure > wide.prose, `the diagram takes the width past the prose: ${JSON.stringify(wide)}`);
+  assert.ok(wide.prose >= 617 && wide.prose <= 820, `the prose keeps its measure while the diagram grows: ${JSON.stringify(wide)}`);
+  assert.ok(wide.figure >= 470 && wide.figure < wide.prose, `the diagram takes the width past the prose without overtaking it: ${JSON.stringify(wide)}`);
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'the wide reader does not overflow');
   assert.equal(await evaluate(`(()=>{const h=document.querySelector('.project-workspace-header').getBoundingClientRect();const r=document.querySelector('.project-reader').getBoundingClientRect();return Math.abs(h.left-r.left)<2&&Math.abs(h.right-r.right)<2})()`), true, 'the reader and its workspace header share one frame');
   await writeFile(join(artifacts, 'reader-2400.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
@@ -372,7 +398,7 @@ try {
   await new Promise(done => setTimeout(done, 250));
   assert.equal(await evaluate(`!!document.querySelector('[data-reader-article] > .project-reader-figure')`), true, 'narrowing the editor returns the diagram to the article');
   assert.equal(await evaluate(`document.querySelectorAll('.project-reader-figure').length`), 1, 'undocking keeps a single diagram');
-  await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 950, deviceScaleFactor: 1, mobile: false });
+  await send('Emulation.setDeviceMetricsOverride', { width: 1700, height: 950, deviceScaleFactor: 1, mobile: false });
   await new Promise(done => setTimeout(done, 250));
   assert.equal(await evaluate(`!!document.querySelector('.project-reader-diagram-pane > .project-reader-figure')`), true, 'widening the editor docks the diagram again');
   assert.equal(await evaluate(`document.querySelectorAll('.project-reader-figure').length`), 1, 're-docking keeps a single diagram');

@@ -89,7 +89,7 @@ Project, API, Global Resources, and History open as editor tabs and share one la
 - `editorTabSerializer` registers a `WebviewPanelSerializer`-compatible restore path with a claim
   guard, so a serializer restore and a proactive restore never double-open the same tab.
 
-The Project tab exposes **Overview** and **Knowledge**; saved diagrams live in the reader's secondary directory. The old `architecture` page key opens that gallery inside the reader, and the retired `specs` key restores the reader, preserving restored tabs. Each module article folds in its own norm and relationships, so authored text and its maintenance controls never sit on two pages. Hooks and single-run metadata remain outside Project.
+The Project tab exposes **Overview** and **Knowledge**; saved diagrams live in the reader's secondary directory. The old `architecture` page key opens that gallery inside the reader, and the retired `specs` key restores the reader, preserving restored tabs. The reader never writes: it renders the saved article and sources, the introduction lists a dependency-first **Start here** (a module others depend on comes before the modules that build on it) and one line of source freshness for the whole page. Norms are confirmed or rewritten from Resources · Project. Hooks and single-run metadata remain outside Project.
 
 ## Exploring topics
 

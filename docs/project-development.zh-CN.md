@@ -75,7 +75,7 @@ Review 预设已移除，新建配置及原本不含 `preset` 的配置保存时
 - `editorTabManager` 对每个键最多创建一个面板，支持 reveal/close，并使用注入的宿主机，便于脱离 VS Code 测试。
 - `editorTabSerializer` 提供与 `WebviewPanelSerializer` 兼容的恢复路径，并带占用守卫，因此序列化恢复与主动恢复不会重复打开同一标签。
 
-项目标签只有 **Overview** 和 **Knowledge** 两个主入口。独立保存的图位于阅读目录的次级入口；旧的 `architecture` 页面键会打开同一阅读器中的图库，已退役的 `specs` 键会回到阅读器，以兼容标签恢复。每个模块文章内折叠着它自己的规范与关系，作者的正文与维护控件不再分处两个页面。
+项目标签只有 **Overview** 和 **Knowledge** 两个主入口。独立保存的图位于阅读目录的次级入口；旧的 `architecture` 页面键会打开同一阅读器中的图库，已退役的 `specs` 键会回到阅读器，以兼容标签恢复。阅读器不写模型：它渲染保存的正文和来源，介绍页给出按依赖排序的 **Start here**（被其他模块依赖的模块排在依赖它的模块之前）和一行整页来源新鲜度。规范的确认与改写在 Resources · Project 中完成。
 
 ## 按主题理解项目
 

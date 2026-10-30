@@ -13,6 +13,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
   let data = JSON.parse(template.content.textContent ?? "{}") as ProjectReaderData;
   const article = root.querySelector<HTMLElement>("[data-reader-article]")!;
   const pane = root.querySelector<HTMLElement>("[data-reader-diagram-pane]")!;
+  const main = pane.parentElement ?? article;
   const progress = root.querySelector<HTMLElement>("[data-reader-progress]")!;
   let topic: ProjectTopic | undefined;
   let diagram: ProjectDiagram | undefined;
@@ -46,22 +47,26 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     root.querySelectorAll<HTMLButtonElement>("[data-reader-zoom], [data-reader-export]").forEach((button) => { button.disabled = !enabled; });
   };
   /**
-   * A wide editor docks the diagram beside the explanation, where it stays in view while the prose
-   * scrolls; an editor without room keeps it in the article between the explanation and the steps.
-   * Docking moves the one rendered figure, so the renderer, its controls and its state are never
-   * duplicated, and the article keeps a single reading column.
+   * A reader with room for both docks the diagram beside the explanation, where it stays in view while
+   * the prose scrolls; a reader without room gives the width to the text and keeps the diagram in the
+   * article between the explanation and the steps. The room is measured on the reading surface rather
+   * than on the window: the directory takes a share of the window that changes with it, so the same
+   * window leaves different widths for the prose. Docking moves the one rendered figure, so the
+   * renderer, its controls and its state are never duplicated, and the article keeps one reading column.
    */
-  /** Must stay in step with the wide-reader media query in media/editorTabs.css. */
-  const wideReader = matchMedia("(min-width: 1360px)");
+  /** Kept in step with the .is-split columns in media/editorTabs.css: 661px of prose, 40px, 479px. */
+  const splitWidth = 1180;
   const dockDiagram = () => {
     if (fullscreenFigure) return;
     const figure = root.querySelector<HTMLElement>(".project-reader-figure");
     const tail = article.querySelector<HTMLElement>(".project-reader-tail");
+    const split = Boolean(figure && tail) && main.getBoundingClientRect().width >= splitWidth;
+    main.classList.toggle("is-split", split);
     if (!figure || !tail) return;
-    if (wideReader.matches) { if (figure.parentElement !== pane) pane.append(figure); }
+    if (split) { if (figure.parentElement !== pane) pane.append(figure); }
     else if (figure.parentElement === pane) tail.before(figure);
   };
-  wideReader.addEventListener("change", dockDiagram);
+  new ResizeObserver(dockDiagram).observe(main);
   const renderArticle = (html: string) => { pane.replaceChildren(); article.innerHTML = html; dockDiagram(); };
   const exitFullscreen = (restoreFocus = true) => {
     const figure = fullscreenFigure;
