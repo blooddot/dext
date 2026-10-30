@@ -226,6 +226,41 @@ function sanitizeDraft(model: ProjectModel): string[] {
 /** One stage's prose: the id, files and edges already exist, only the explanation is missing. */
 const proseSchema = z.object({ title: z.string().trim().min(1).max(200), body: z.string().trim().min(1) }).strict();
 
+/**
+ * A prose stage answers JSON, but a model that replies with the Markdown body alone has still done
+ * the work; failing the whole run over a missing envelope throws away every finished stage.
+ */
+function readProse(text: string, fallbackTitle: string): z.infer<typeof proseSchema> {
+  try { return proseSchema.parse(parseJsonObject(text)); } catch { /* A body-only answer. */ }
+  const body = text.replace(/^\s*```(?:json|markdown|md)?[^\n]*\n([\s\S]*?)\n?```\s*$/, "$1").trim();
+  if (!body) throw new Error("Project AI returned an empty module explanation; nothing was saved.");
+  return { title: fallbackTitle, body };
+}
+
+/** The module stage's files are exactly the sources it was given, so their hashes identify the stage. */
+const stageEvidence = (stage: BootstrapStage) => [...stage.sources].map(([path, text]) => ({ path, contentHash: projectContentHash(text) }));
+
+/**
+ * Zero change: a saved module is reused while every file it was written from is still in the stage and
+ * unchanged. A file added to or removed from the module changes the stage, so the prose is re-drafted.
+ */
+function reusableModule(previous: ProjectModel | undefined, stage: BootstrapStage): ProjectModelNode | undefined {
+  if (!previous || !stage.module) return undefined;
+  const node = previous.nodes.find((candidate) => candidate.id === stage.module!.id && candidate.body.kind === "inline");
+  if (!node?.evidence.length || node.evidence.length !== stage.sources.size) return undefined;
+  return node.evidence.every((entry) => stage.sources.has(entry.path) && projectContentHash(stage.sources.get(entry.path)!) === entry.contentHash) ? node : undefined;
+}
+
+/** The grouping is unchanged while the saved areas cover exactly these modules under the same titles. */
+function reusableAreas(previous: ProjectModel | undefined, candidate: ProjectModel): ProjectModelNode[] | undefined {
+  if (!previous) return undefined;
+  const areas = previous.nodes.filter((node) => node.kind === "capability");
+  const covered = new Set(areas.flatMap((node) => (node.properties.moduleIds as string[] | undefined) ?? []));
+  const modules = candidate.nodes.filter((node) => node.kind === "module");
+  if (!areas.length || covered.size !== modules.length) return undefined;
+  return modules.every((module) => covered.has(module.id) && previous.nodes.some((node) => node.id === module.id && node.title === module.title)) ? areas : undefined;
+}
+
 /** Functional areas: navigation over modules whose ids and ownership the index already decided. */
 const areaSchema = z.object({ areas: z.array(z.object({
   title: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500),
@@ -316,8 +351,22 @@ export async function bootstrapProject(options: {
       const provider = options.provider;
       candidate = { schemaVersion: 1, revision: 0, updatedAt: 0, nodes: [], relations: [] };
       // A resumed run continues after its last checkpointed stage instead of starting over.
+      let reused = 0;
       for (let index = completed; index < stages.length; index += 1) {
         const stage = stages[index]!;
+        // Zero change is not re-drafted: a module whose files still hash the same keeps its prose and its
+        // review state, and an unchanged grouping keeps its areas. Only what changed reaches the provider.
+        const saved = reusableModule(model, stage);
+        const savedAreas = stage.areas ? reusableAreas(model, candidate) : undefined;
+        if (saved || savedAreas) {
+          if (saved) candidate.nodes.push(saved);
+          for (const node of savedAreas ?? []) candidate.nodes.push(node);
+          reused += 1;
+          progress({ phase: "generating", completed: index, total: stages.length, message: saved ? `Reusing ${saved.title} — its sources are unchanged…` : "Reusing the saved functional areas — the modules are unchanged…" });
+          completed = index + 1;
+          await writeCheckpoint(candidate, completed);
+          continue;
+        }
         const label = stage.module ? `Drafting ${stage.module.id}…` : stage.areas ? "Grouping modules into functional areas…" : index === 0 ? "Drafting goals and architecture…" : `Drafting responsibility batch ${index} of ${stages.length - 1}…`;
         progress({ phase: "generating", completed: index, total: stages.length, message: label });
         // Every drafted id, so a later batch cannot re-invent a responsibility one character off.
@@ -366,11 +415,16 @@ export async function bootstrapProject(options: {
             body: { kind: "inline", text: area.description }, properties: { moduleIds: area.moduleIds }
           }));
         } else if (stage.module) {
-          const prose = proseSchema.parse(parseJsonObject(response.text));
+          // The previous run already accepted a name for this module, so it beats a file name.
+          const savedTitle = model?.nodes.find(node => node.id === stage.module!.id || node.paths.some(path => stage.module!.paths.includes(path)))?.title;
+          const prose = readProse(response.text, savedTitle ?? stage.module.paths[0]!.split("/").pop()!.replace(/\.[^/.]+$/, ""));
           // The index cap split one responsibility across groups, not the design: the same title is one node.
           const existing = candidate.nodes.find(node => node.kind === "module" && node.title.toLowerCase() === prose.title.toLowerCase());
-          if (existing) existing.paths = [...new Set([...existing.paths, ...stage.module.paths])];
-          else candidate.nodes.push(projectModelNodeSchema.parse({ id: stage.module.id, kind: "module", title: prose.title, canonicalName: prose.title, body: { kind: "inline", text: prose.body }, paths: stage.module.paths }));
+          if (existing) {
+            existing.paths = [...new Set([...existing.paths, ...stage.module.paths])];
+            // One responsibility split by the index cap still reads from every one of its files.
+            existing.evidence = [...new Map([...existing.evidence, ...stageEvidence(stage)].map((entry) => [entry.path, entry])).values()];
+          } else candidate.nodes.push(projectModelNodeSchema.parse({ id: stage.module.id, kind: "module", title: prose.title, canonicalName: prose.title, body: { kind: "inline", text: prose.body }, paths: stage.module.paths, evidence: stageEvidence(stage) }));
         } else {
           const part: ProjectModel = { ...candidate, ...draftModelSchema.parse(normalizeBodies(parseJsonObject(response.text), sources)) };
           // With an index, this stage only contributes the root: module identity belongs to the index.
@@ -394,7 +448,7 @@ export async function bootstrapProject(options: {
           }
         }
       }
-      progress({ phase: "generating", completed: stages.length, total: stages.length, message: `Drafted ${candidate.nodes.length} nodes in ${stages.length} stages.${ungrouped ? ` Modules stay ungrouped: ${ungrouped}` : ""}` });
+      progress({ phase: "generating", completed: stages.length, total: stages.length, message: `Drafted ${candidate.nodes.length} nodes in ${stages.length} stages${reused ? `, reusing ${reused} unchanged stage(s)` : ""}.${ungrouped ? ` Modules stay ungrouped: ${ungrouped}` : ""}` });
     }
     if (!resumed) await writeCheckpoint(candidate, completed);
   }

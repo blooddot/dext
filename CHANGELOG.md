@@ -14,6 +14,8 @@ All notable changes to Dext are documented in this file.
 
 - `dext_fetch` reads a GitHub file URL (`raw.githubusercontent.com`, or a `github.com` `blob`/`raw` link) through `cdn.jsdelivr.net` and falls back to the original URL when that fails, so a repository file stays readable when GitHub itself is unreachable. Use a commit or tag rather than a branch name for a stable copy.
 
+- **Update project model** now re-drafts only the modules whose files changed: each module stage saves the content hashes it read, and an unchanged module keeps its saved prose and review state. The root stage still runs once per update, and a model saved before these hashes existed re-drafts every module on its first update.
+
 - `mermaid` fenced blocks now render as diagrams in every Dext Markdown output surface: the turn's **Output**, finished **Process** messages, and **History** pages. A row that is still streaming keeps its source until the message completes, so a half-written fence is never rendered.
 
 - A tool call that never reports a result now stops the turn after thirty minutes instead of waiting forever: idle detection pauses while a tool runs, so nothing else bounded it. Each continuous tool phase gets the full ceiling; sequential tools start a fresh one, and `dext.agent.timeoutMs` still wins when it is shorter.

@@ -103,6 +103,49 @@ describe("native Project bootstrap", () => {
     expect(initialized.model?.relations.map(edge => edge.id)).toEqual(["alpha--contains--beta"]);
     expect(reports.some(report => report.message?.includes("dropped"))).toBe(true);
   });
+  it("keeps a module whose stage answered with the Markdown body only", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/ui/b.ts", "export const b = 2"]]);
+    const member = (path: string) => ({ path, hash: "h-" + path, language: "typescript", lines: 1, symbols: [], dependencies: [] });
+    const module = (id: string, path: string) => ({ id, path: `src/${id}`, package: id, languages: ["typescript"], files: 1, entryPoints: [], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: "h-" + id, members: [member(path)] });
+    const structure = () => Promise.resolve<StructureSummary>({ version: 2, hash: "index", files: 2, parsed: 2, cached: 0, failed: 0, unsupported: 0, issues: [], modules: [module("core", "src/core/a.ts"), module("ui", "src/ui/b.ts")] });
+    let bodyOnly = false;
+    const generate = vi.fn(async (request: ProjectAiRequest) => {
+      if (request.prompt.includes("graph root only")) return { text: JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [
+        { id: "project", kind: "project", title: "Demo", canonicalName: "Demo", body: { kind: "inline", text: "Goal" } }] }) };
+      if (request.prompt.includes("functional areas")) return { text: JSON.stringify({ areas: [{ title: "Core runtime", description: "核心", moduleIds: ["module:src-core-a-ts", "module:src-ui-b-ts"] }] }) };
+      // A provider without a schema channel answered with the body alone: the run used to fail here.
+      if (bodyOnly) return { text: "```markdown\n## Responsibility\n\nOwns a.\n```" };
+      return { text: JSON.stringify({ title: "Core Unit", body: "## Responsibility\n\nOwns a." }) };
+    });
+    const run = () => bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure });
+    await run();
+    bodyOnly = true;
+    f.files.set("src/core/a.ts", "export const a = 2");
+    const updated = await run();
+    // The envelope is missing but the prose is not, so the module keeps the name the first run accepted.
+    expect(updated.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ title: "Core Unit", body: { kind: "inline", text: "## Responsibility\n\nOwns a." } });
+  });
+  it("treats a grouping answered in prose as rejected instead of failing the run", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/ui/b.ts", "export const b = 2"]]);
+    const member = (path: string) => ({ path, hash: "h-" + path, language: "typescript", lines: 1, symbols: [], dependencies: [] });
+    const structure = () => Promise.resolve<StructureSummary>({ version: 2, hash: "index", files: 2, parsed: 2, cached: 0, failed: 0, unsupported: 0, issues: [], modules: [
+      { id: "core", path: "src/core", package: "core", languages: ["typescript"], files: 1, entryPoints: [], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: "h1", members: [member("src/core/a.ts")] },
+      { id: "ui", path: "src/ui", package: "ui", languages: ["typescript"], files: 1, entryPoints: [], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: "h2", members: [member("src/ui/b.ts")] }
+    ] });
+    const prompts: string[] = [];
+    const generate = vi.fn(async (request: ProjectAiRequest) => {
+      prompts.push(request.prompt);
+      if (request.prompt.includes("graph root only")) return { text: JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [
+        { id: "project", kind: "project", title: "Demo", canonicalName: "Demo", body: { kind: "inline", text: "Goal" } }] }) };
+      if (request.prompt.includes("functional areas")) return { text: "I would group these modules under Core runtime and UI." };
+      return { text: JSON.stringify({ title: request.prompt.includes("src/core/a.ts") ? "Core Unit" : "UI Unit", body: "## Responsibility\n\nOwns a." }) };
+    });
+    const reports: Array<{ message?: string }> = [];
+    const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure, progress: report => reports.push(report) });
+    expect(prompts.filter(prompt => prompt.includes("functional areas"))).toHaveLength(2);
+    expect(initialized.model?.nodes.some(node => node.kind === "capability")).toBe(false);
+    expect(reports.some(report => report.message?.includes("did not contain a JSON object"))).toBe(true);
+  });
   it("takes modules and edges from the import index and lets the AI write only prose", async () => {
     const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/ui/b.ts", "export const b = 2"]]);
     const member = (path: string, dependencies: Array<{ specifier: string; to?: string }> = []) => ({ path, hash: "h-" + path, language: "typescript", lines: 1, symbols: [], dependencies });
@@ -256,6 +299,38 @@ describe("native Project bootstrap", () => {
     ]);
     // A dependency inside the merged responsibility is not an edge.
     expect(initialized.model?.relations.map(edge => edge.id)).toEqual(["project--contains--module:src-core-a-ts"]);
+  });
+  it("reuses unchanged modules and re-drafts only the module whose file changed", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/ui/b.ts", "export const b = 2"]]);
+    const member = (path: string) => ({ path, hash: "h-" + path, language: "typescript", lines: 1, symbols: [], dependencies: [] });
+    const module = (id: string, path: string) => ({ id, path: `src/${id}`, package: id, languages: ["typescript"], files: 1, entryPoints: [], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: "h-" + id, members: [member(path)] });
+    const structure = () => Promise.resolve<StructureSummary>({ version: 2, hash: "index", files: 2, parsed: 2, cached: 0, failed: 0, unsupported: 0, issues: [], modules: [module("core", "src/core/a.ts"), module("ui", "src/ui/b.ts")] });
+    const prompts: string[] = [];
+    const generate = vi.fn(async (request: ProjectAiRequest) => {
+      prompts.push(request.prompt);
+      if (request.prompt.includes("graph root only")) return { text: JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [
+        { id: "project", kind: "project", title: "Demo", canonicalName: "Demo", body: { kind: "inline", text: "Goal" } }] }) };
+      if (request.prompt.includes("functional areas")) return { text: JSON.stringify({ areas: [{ title: "Core runtime", description: "核心", moduleIds: ["module:src-core-a-ts", "module:src-ui-b-ts"] }] }) };
+      return { text: JSON.stringify({ title: request.prompt.includes("src/core/a.ts") ? "Core Unit" : "UI Unit", body: "## Responsibility\n\nOwns a." }) };
+    });
+    const prose = () => prompts.filter(prompt => prompt.includes("Explain one responsibility"));
+    const run = () => bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure });
+    await run();
+    expect(prose()).toHaveLength(2);
+    const first = (await f.store.readModel())!;
+    await f.store.updateProject({ ...first, nodes: first.nodes.map(node => node.id === "module:src-core-a-ts" ? { ...node, review: "accepted", freshness: "current" } : node) }, first.revision);
+    prompts.length = 0;
+    const unchanged = await run();
+    // Zero change: the root stage still drafts, but no module and no grouping reaches the provider.
+    expect(prompts).toHaveLength(1);
+    expect(unchanged.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ title: "Core Unit", review: "accepted", freshness: "current",
+      body: { kind: "inline", text: "## Responsibility\n\nOwns a." }, evidence: [{ path: "src/core/a.ts", contentHash: projectContentHash("export const a = 1") }] });
+    expect(unchanged.model?.nodes.find(node => node.id === "module:src-ui-b-ts")?.body).toEqual({ kind: "inline", text: "## Responsibility\n\nOwns a." });
+    f.files.set("src/ui/b.ts", "export const b = 3");
+    prompts.length = 0;
+    await run();
+    expect(prose()).toHaveLength(1);
+    expect(prose()[0]).toContain("src/ui/b.ts");
   });
   it("re-drafts an existing model on update and keeps reviewed bodies", async () => {
     const f = fixture([["src/app.ts", "export const a = 1"]]);
