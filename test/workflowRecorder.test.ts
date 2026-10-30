@@ -45,7 +45,7 @@ describe("recording a conversation as a TypeScript API", () => {
     expect(recorded.fileName).toBe("add_a_health_endpoint.ts");
     expect(recorded.apiId).toBe("add_a_health_endpoint");
     expect(recorded.source).toContain('import { agent, ask, ui, type AskResult } from "dext";');
-    expect(recorded.source).toContain("export async function main(): Promise<AskResult> {");
+    expect(recorded.source).toContain(`export async function ${recorded.apiId}(): Promise<AskResult> {`);
     expect(recorded.source).toContain('const step_1 = await agent({ input: "Add a health endpoint", apply: false });');
     expect(recorded.source).toContain('const step_2 = await ask({ input: "Explain what changed" });');
     // The declared return type follows the last step's real result kind.
@@ -59,14 +59,14 @@ describe("recording a conversation as a TypeScript API", () => {
     assertErasable(recorded.source);
   });
 
-  it("lifts a prompt reused across turns into a main() parameter", () => {
+  it("lifts a prompt reused across turns into an entry parameter", () => {
     const turns: RecordedTurn[] = [
       { input: "Run the migration", mode: "agent", response: response("agent", "agent") },
       { input: "Something else entirely", mode: "ask", response: response("ask", "ask") },
       { input: "Run the migration", mode: "agent", response: response("agent", "agent") }
     ];
     const recorded = recordWorkflow(turns);
-    expect(recorded.source).toContain("export async function main(prompt: string): Promise<AgentResult> {");
+    expect(recorded.source).toContain(`export async function ${recorded.apiId}(prompt: string): Promise<AgentResult> {`);
     expect(recorded.source).toContain("const step_1 = await agent({ input: prompt, apply: false });");
     expect(recorded.source).toContain("const step_3 = await agent({ input: prompt, apply: false });");
     // The one-off turn keeps its literal, because parameterizing it would invent
@@ -103,7 +103,7 @@ describe("recording a conversation as a TypeScript API", () => {
     const recorded = recordWorkflow([
       { input: 'answer = ask(input="hi")\nconsole.log(answer)', mode: "code", response: response("ask", "ask") }
     ]);
-    expect(recorded.source).toContain("export async function main(): Promise<void> {");
+    expect(recorded.source).toContain(`export async function ${recorded.apiId}(): Promise<void> {`);
     expect(recorded.source).toContain('console.log("Fill in the steps above.");');
     expect(recorded.source).not.toContain("return step_");
     assertErasable(recorded.source);
