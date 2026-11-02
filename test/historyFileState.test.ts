@@ -62,6 +62,20 @@ describe("file history storage", () => {
     expect(reopened.list()[0]?.turns.map((turn) => turn.input)).toEqual(["original input", "new input"]);
   });
 
+  it("keeps a turn another window committed after this window loaded", async () => {
+    const path = await directory();
+    const first = await openFileHistoryStore(path, new Memento());
+    await first.addSuccess("one", [], { kind: "workflow", executions: [] }, "shared");
+    // The second window loads two-turn history before the first window commits again.
+    const second = await openFileHistoryStore(path, new Memento());
+    await first.addSuccess("two", [], { kind: "workflow", executions: [] }, "shared");
+    // Renaming in the older window must not write its shorter copy back.
+    expect(await second.renameTurn("shared", second.list()[0]!.turns[0]!.id, "renamed")).toBe(true);
+    const reopened = await openFileHistoryStore(path, new Memento());
+    expect(reopened.list()[0]!.turns.map((turn) => turn.input)).toEqual(["one", "two"]);
+    expect(reopened.list()[0]!.turns[0]!.title).toBe("renamed");
+  });
+
   it("recovers unindexed session keys from an interrupted old migration and prefers their newer state", async () => {
     const legacy = new Memento();
     legacy.values.set("dext.history", [session("same"), session("second")]);

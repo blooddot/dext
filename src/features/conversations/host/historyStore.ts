@@ -77,6 +77,10 @@ function storedProcess(process: readonly AgentStreamEvent[], limit: number, spil
   });
 }
 
+/** `refresh` re-reads what another window committed since this store loaded.
+ * A Memento without it keeps the older whole-value behavior. */
+type HistoryState = Pick<vscode.Memento, "get" | "update"> & { refresh?(keys: readonly string[]): Promise<void> };
+
 function isSession(value: DextHistoryRecord | DextHistorySession): value is DextHistorySession {
   return Array.isArray((value as DextHistorySession).turns);
 }
@@ -118,7 +122,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
   /** Limits are read per write rather than captured once, so changing the
    * setting takes effect on the next turn instead of the next window. */
   constructor(
-    private readonly state: Pick<vscode.Memento, "get" | "update">,
+    private readonly state: HistoryState,
     private readonly readLimits: () => DextHistoryLimits = () => DEFAULT_HISTORY_LIMITS,
     /** Writes the removed text and returns where it went. */
     private readonly writeSpill?: (parts: readonly string[]) => Promise<string | undefined>
@@ -160,6 +164,18 @@ export class DextHistoryStore implements ConversationHistoryStore {
     return Array.isArray(stored) ? stored : [];
   }
 
+  /** Two windows write the same files. Re-read the order and every conversation
+   * this write may replace, so an older in-memory copy cannot drop a turn the
+   * other window committed meanwhile. */
+  private async load(extra: readonly string[] = []): Promise<DextHistorySession[]> {
+    // Called on the state, not on a destructured copy: refresh needs its own `this`.
+    if (this.state.refresh) {
+      await this.state.refresh([ORDER_KEY]);
+      await this.state.refresh([...new Set([...this.order(), ...extra])].map((id) => `${SESSION_KEY_PREFIX}${id}`));
+    }
+    return this.all();
+  }
+
   /** Writes only touched/trimmed conversations and a changed order. The legacy
    * value path also supports callers that supply an unmigrated state adapter. */
   private async persist(sessions: readonly DextHistorySession[], touched: readonly string[] = []): Promise<void> {
@@ -189,7 +205,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
 
   async setArchived(sessionId: string, archived: boolean): Promise<boolean> {
     return this.mutate(async () => {
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return false;
       if (archived) session.archivedAt ??= Date.now();
@@ -201,13 +217,13 @@ export class DextHistoryStore implements ConversationHistoryStore {
 
   async remove(sessionId: string): Promise<void> {
     await this.mutate(async () => {
-      await this.persist(this.all().filter((session) => session.id !== sessionId));
+      await this.persist((await this.load()).filter((session) => session.id !== sessionId));
     });
   }
 
   async renameTurn(sessionId: string, turnId: string, title: string): Promise<boolean> {
     return this.mutate(async () => {
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       const turn = sessions.find((session) => session.id === sessionId)?.turns.find((item) => item.id === turnId);
       if (!turn) return false;
       const name = title.trim().replace(/[\r\n]+/g, " ").slice(0, 140);
@@ -220,7 +236,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
 
   async updateResourceContext(sessionId: string, resource: ResourceSession): Promise<void> {
     await this.mutate(async () => {
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       let session = sessions.find((item) => item.id === sessionId);
       if (!session) {
         session = { id: sessionId, createdAt: Date.now(), updatedAt: Date.now(), turns: [] };
@@ -233,7 +249,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
 
   async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus, projectContext?: PlanProjectContext): Promise<void> {
     await this.mutate(async () => {
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return;
       if (activePlanPath) session.activePlanPath = activePlanPath;
@@ -248,7 +264,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
 
   async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string): Promise<void> {
     await this.mutate(async () => {
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       let session = sessions.find((item) => item.id === sessionId);
       if (!session) {
         session = { id: sessionId, createdAt: Date.now(), updatedAt: Date.now(), turns: [], activePlanPath: path, planStatus: "running" };
@@ -263,7 +279,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
    * conversation if it owns provider bindings so reload can still resume it. */
   async removeTurn(sessionId: string, turnId: string, providerSessions?: Readonly<Record<string, string>>): Promise<boolean> {
     return this.mutate(async () => {
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return false;
       const index = session.turns.findIndex((turn) => turn.id === turnId);
@@ -305,14 +321,14 @@ export class DextHistoryStore implements ConversationHistoryStore {
           ? { forkProviderSessions: { ...providerSessions } }
           : {})
       };
-      await this.persist([...this.all(), session], [session.id]);
+      await this.persist([...(await this.load()), session], [session.id]);
       return session;
     });
   }
 
   async setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void> {
     await this.mutate(async () => {
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       const session = sessions.find((item) => item.id === sessionId);
       if (!session) return;
       session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
@@ -385,7 +401,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       const spillPath = spill.length ? await this.writeSpill?.(spill) : undefined;
       if (spillPath) turn.spillPath = spillPath;
       const sessionId = requestedSessionId ?? `single-${turn.id}`;
-      const sessions = this.all();
+      const sessions = await this.load([sessionId]);
       const existing = sessions.find((session) => session.id === sessionId);
       if (existing) {
         existing.turns.push(turn);

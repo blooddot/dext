@@ -93,6 +93,25 @@ export class HistoryFileState {
     return (this.values.has(key) ? this.values.get(key) : fallback) as T;
   }
 
+  /** Re-read what another window may have committed since this one loaded. A
+   * key whose file is gone is dropped, so a conversation deleted elsewhere is
+   * not written back. */
+  async refresh(keys: readonly string[]): Promise<void> {
+    for (const key of keys) {
+      let body: string;
+      try { body = await readFile(valuePath(this.directory, key), "utf8"); }
+      catch (error) {
+        // A missing file means another window deleted it.
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") this.values.delete(key);
+        continue;
+      }
+      try {
+        const entry = JSON.parse(body) as { key: unknown; value: unknown };
+        if (entry.key === key) this.values.set(key, entry.value);
+      } catch { /* a damaged file keeps the value this window already has */ }
+    }
+  }
+
   async update(key: string, value: unknown): Promise<void> {
     const path = valuePath(this.directory, key);
     if (value === undefined) {
