@@ -195,4 +195,16 @@ describe("McpImageCache lifecycle", () => {
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/^[0-9a-f-]{36}\.png$/);
   });
+
+  it("does not let this session's own files bypass the total budget", async () => {
+    const root = await tempRoot();
+    const now = Date.now();
+    const cache = await cacheAt(root, { now: () => now, maxAgeMs: 30 * 24 * 60 * 60 * 1000, maxTotalBytes: 6 });
+    for (let index = 0; index < 3; index += 1) {
+      await cache.store([{ data: Buffer.from("img").toString("base64"), mimeType: "image/png" }], "test");
+    }
+    // Three 3-byte images against a 6-byte budget: only the newest half stays
+    // protected, so the excess is reclaimed in this session instead of the next.
+    expect(await cacheFiles(root)).toHaveLength(2);
+  });
 });

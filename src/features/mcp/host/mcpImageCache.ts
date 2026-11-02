@@ -50,7 +50,8 @@ const MIME_EXTENSION = new Map([
  * sessions.
  */
 export class McpImageCache {
-  private readonly written = new Set<string>();
+  /** Name to byte length, in write order, for the files this session wrote. */
+  private readonly written = new Map<string, number>();
   private readonly now: () => number;
   private readonly maxTotalBytes: number;
   private readonly maxAgeMs: number;
@@ -99,7 +100,7 @@ export class McpImageCache {
     const name = `${randomUUID()}${extension}`;
     const filePath = join(this.options.directory, name);
     await writeFile(filePath, bytes, { flag: "wx", mode: 0o600 });
-    this.written.add(name);
+    this.written.set(name, bytes.byteLength);
     let url: string | undefined;
     try {
       url = this.options.toUrl(filePath);
@@ -114,8 +115,22 @@ export class McpImageCache {
     return { mimeType, url, byteLength: bytes.byteLength };
   }
 
-  /** Reclaim files from earlier sessions, oldest first. Current-session files
-   * are protected so a long-running confirmation cannot lose its image. */
+  /** Session files are protected newest first, but only up to half the total
+   * budget: otherwise one long session could grow the cache without limit. */
+  private protectedNames(): Set<string> {
+    const budget = Math.floor(this.maxTotalBytes / 2);
+    const names = new Set<string>();
+    let total = 0;
+    for (const [name, size] of [...this.written].reverse()) {
+      if (names.size && total + size > budget) break;
+      names.add(name);
+      total += size;
+    }
+    return names;
+  }
+
+  /** Reclaim files from earlier sessions, oldest first. Recent current-session
+   * files are protected so a long-running confirmation cannot lose its image. */
   private async prune(): Promise<void> {
     let names: string[];
     try {
@@ -135,7 +150,8 @@ export class McpImageCache {
         // A file removed between readdir and stat is already gone.
       }
     }
-    const removable = files.filter((file) => !this.written.has(file.name));
+    const protectedNames = this.protectedNames();
+    const removable = files.filter((file) => !protectedNames.has(file.name));
     const expired = removable.filter((file) => now - file.mtimeMs > this.maxAgeMs);
     for (const file of expired) await rm(file.path, { force: true });
     const kept = files.filter((file) => !expired.includes(file));
