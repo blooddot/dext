@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { cliCompletion } from "../src/features/agents/domain/cliCompletion.js";
-import { CliAgentRunner, runProcess } from "../src/features/agents/host/agentRunner.js";
+import { CliAgentRunner, boundedTail, runProcess } from "../src/features/agents/host/agentRunner.js";
+
+describe("boundedTail", () => {
+  it("concatenates below the limit and keeps only the tail above it", () => {
+    expect(boundedTail("ab", "cd", 8)).toBe("abcd");
+    expect(boundedTail("abcd", "efgh", 8)).toBe("abcdefgh");
+    expect(boundedTail("abcd", "efghij", 8)).toBe("cdefghij");
+    expect(boundedTail("abc", "defghij", 4)).toBe("ghij");
+    expect(boundedTail("zzzz", "abcd", 4)).toBe("abcd");
+  });
+});
 
 describe("CLI protocol completion", () => {
   it("recognizes fragmented terminal events without requiring a final newline", () => {

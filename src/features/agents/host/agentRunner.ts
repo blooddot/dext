@@ -189,6 +189,15 @@ export function displayValue(value: unknown): unknown {
   return value;
 }
 
+const MAX_PROCESS_OUTPUT_CHARS = 8 * 1024 * 1024;
+
+/** Cap an accumulated CLI stream: one long turn must not grow the extension host without bound.
+ * shortcut: only the tail is kept, switch to head+tail if an early frame field becomes required. */
+export function boundedTail(current: string, chunk: string, limit = MAX_PROCESS_OUTPUT_CHARS): string {
+  const next = current + chunk;
+  return next.length > limit ? next.slice(-limit) : next;
+}
+
 type JsonSchema = Record<string, unknown>;
 
 function nullableSchema(schema: JsonSchema): JsonSchema {
@@ -943,7 +952,8 @@ export async function runClaudeConversation(request: AgentConversationRequest, o
 
   child.stdout.on("data", (chunk: string) => {
     if (finished) return;
-    stdout += chunk;
+    // stdout here only feeds failure diagnostics, so it matches the truncated stderr.
+    stdout = boundedTail(stdout, chunk, 16000);
     buffer += chunk;
     const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() ?? "";
@@ -951,7 +961,7 @@ export async function runClaudeConversation(request: AgentConversationRequest, o
   });
   child.stderr.on("data", (chunk: string) => {
     if (chunk.length) timeout.activity();
-    stderr = (stderr + chunk).slice(-16000);
+    stderr = boundedTail(stderr, chunk, 16000);
   });
   child.on("error", (error) => fail(new Error(`Unable to start '${options.command}': ${error.message}`)));
   child.on("close", (code) => {
@@ -1110,7 +1120,7 @@ export function runProcess(
     child.stdout.on("data", (chunk: string) => {
       if (settled || aborting) return;
       if (chunk.length) onActivity?.();
-      stdout += chunk;
+      stdout = boundedTail(stdout, chunk);
       onStdout?.(chunk);
       if (completionCode === undefined) {
         completionCode = completion?.consume(chunk);
@@ -1120,7 +1130,7 @@ export function runProcess(
     child.stderr.on("data", (chunk: string) => {
       if (settled || aborting) return;
       if (chunk.length) onActivity?.();
-      stderr += chunk;
+      stderr = boundedTail(stderr, chunk);
     });
     child.on("error", (error) => {
       if (!aborting) finish(() => reject(new Error(`Unable to start '${command}': ${error.message}`)));
