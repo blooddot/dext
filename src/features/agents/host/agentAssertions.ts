@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PatchChange, Range } from "../../../shared/contracts/types.js";
+import { isRecord } from "../../../shared/lib/record.js";
 
 /**
  * The workspace facts the result assertions need. The core module stays
@@ -32,10 +33,6 @@ export interface AgentAssertionResult {
 /** Soft threshold for a single file. Copying an entire file to change one line
  * reports a diff far larger than this; the suggestion asks for a minimal edit. */
 export const MAX_SOFT_DIFF_LINES = 200;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function patchChanges(result: unknown): PatchChange[] {
   if (!isRecord(result) || !isRecord(result.patch)) return [];

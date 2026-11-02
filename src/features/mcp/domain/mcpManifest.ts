@@ -5,12 +5,9 @@ import { parse, type ParseError } from "jsonc-parser/lib/esm/main.js";
 import type { CallableDefinition, FieldDefinition } from "../../../shared/contracts/types.js";
 import type { McpServerConfig, McpToolConfig } from "../contracts/mcp.js";
 import { httpUrlDiagnostic } from "./mcpConfig.js";
+import { isRecord } from "../../../shared/lib/record.js";
 
 const IDENTIFIER = /^[A-Za-z0-9_.-]+$/;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function schemaFields(schema: Record<string, unknown>, label: string, diagnostics: string[]): FieldDefinition[] | undefined {
   if (schema.type !== "object") {

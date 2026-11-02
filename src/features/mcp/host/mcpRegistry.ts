@@ -9,6 +9,7 @@ import type {
   StdioMcpServerConfig
 } from "../contracts/mcp.js";
 import { httpUrlDiagnostic } from "../domain/mcpConfig.js";
+import { isRecord } from "../../../shared/lib/record.js";
 import type { McpProcessEvent, McpRawResult } from "../../../shared/contracts/types.js";
 import type { McpImageCache, McpImageContent } from "./mcpImageCache.js";
 
@@ -126,10 +127,6 @@ export interface McpTransport {
 export type McpAccessTokenProvider = (server: McpServerConfig) => Promise<string | undefined>;
 
 export type McpFetch = (url: string, init?: RequestInit) => Promise<Response>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function timeoutFor(server: McpServerConfig): number {
   return server.timeoutMs ?? DEFAULT_TIMEOUT_MS;

@@ -7,6 +7,7 @@ import type {
   ApiReferenceModule,
   ApiReferenceParam
 } from "../contracts/apiReference.js";
+import { isRecord } from "../../../shared/lib/record.js";
 
 export type {
   ApiReferenceCatalog,
@@ -29,10 +30,6 @@ export type {
 
 /** The catalog format this reader understands; a newer build is not parsed. */
 export const API_REFERENCE_VERSION = 1;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 const KINDS = new Set<string>([
   "function", "method", "class", "constructor", "interface", "type", "enum", "namespace", "variable"

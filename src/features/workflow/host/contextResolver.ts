@@ -10,6 +10,7 @@ import type {
 } from "../../../shared/contracts/types.js";
 import type { ContextHost, TextSnapshot } from "../../../shared/contracts/context.js";
 import { toCodeRef } from "../../../platform/node/codeRef.js";
+import { isRecord as isRecordValue } from "../../../shared/lib/record.js";
 
 function isContextReference(value: InvocationValue): value is ContextReference {
   return typeof value === "object"
@@ -35,7 +36,7 @@ function isDirRef(value: InvocationValue): value is DirRef {
 }
 
 function isRecord(value: InvocationValue): value is { [key: string]: InvocationValue } {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return isRecordValue(value);
 }
 
 export class ContextResolver {
