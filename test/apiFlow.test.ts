@@ -134,11 +134,11 @@ describe("API flow entry statements", () => {
       ["entry", "demo L1"],
       ["step", "prepare L2"],
       ["decision", "!a"],
-      ["end", "结束"],
+      ["end", "end"],
       ["step", "run L4"],
       ["loop", "true"],
       ["decision", "await again()"],
-      ["end", "结束"]
+      ["end", "end"]
     ]);
     // A branch's `return` closes where it stands: one shared end node at the bottom
     // would draw a rail down the whole diagram for every guard clause.
@@ -181,8 +181,8 @@ export async function demo() { await askForPlan(); }`, undefined, "demo")).entry
     expect(mermaid.startsWith("flowchart TB")).toBe(true);
     expect(mermaid).toContain('n0(["demo L1 · entry"])');
     expect(mermaid).toContain('n2{"!a"}');
-    expect(mermaid).toContain('n3(["结束"])');
-    expect(mermaid).toContain('n7(["结束"])');
+    expect(mermaid).toContain('n3(["end"])');
+    expect(mermaid).toContain('n7(["end"])');
     expect(mermaid).toContain("n0 --> n1");
     expect(mermaid).toContain("n2 -->|yes| n3");
     expect(mermaid).toContain("n6 -->|no| n5");

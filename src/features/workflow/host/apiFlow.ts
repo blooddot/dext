@@ -19,7 +19,7 @@ const FUNCTION_TYPES = new Set(["function_declaration", "function_signature", "f
 const CLASS_TYPES = new Set(["class_declaration", "class", "abstract_class_declaration", "class_expression"]);
 const LOOP_TYPES = new Set(["while_statement", "do_statement", "for_statement", "for_in_statement"]);
 /** The one end node every `return` in the entry function lands on. */
-const END_LABEL = "结束";
+const END_LABEL = "end";
 /** Longer conditions are cut in the diagram only; the Function list keeps the lines. */
 const LABEL_MAX = 44;
 const WRAPPER_EXAMPLES: Record<ApiFlowTag, string> = {
