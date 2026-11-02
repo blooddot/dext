@@ -60,10 +60,24 @@ export function stripPlanTodoProgress(text: string, streaming = false): string {
   return clean;
 }
 
+/** The raw tail that may still grow into a progress comment: an unterminated
+ * marker, or the fragment of one at the very end. */
+function pendingMarker(text: string): string {
+  let consumed = 0;
+  for (const match of text.matchAll(/<!-- dext-todo:[\s\S]*?-->/g)) consumed = match.index + match[0].length;
+  const rest = text.slice(consumed);
+  const open = rest.indexOf(MARKER);
+  if (open >= 0) return rest.slice(open);
+  for (let length = Math.min(rest.length, MARKER.length - 1); length > 0; length--) {
+    if (rest.endsWith(MARKER.slice(0, length))) return rest.slice(-length);
+  }
+  return "";
+}
+
 /** Scoped to one execution. The document supplies the initial list; only
  * explicit, validated status reports can change it. */
 export class PlanTodoProgress {
-  private readonly messages = new Map<string, { raw: string; visible: string; processed: Set<string> }>();
+  private readonly messages = new Map<string, { visible: string; hold: string; processed: Set<string>; length: number }>();
   private readonly items: AgentTodoItem[];
   private readonly blocked = new Map<string, string>();
   private verifying = false;
@@ -85,13 +99,18 @@ export class PlanTodoProgress {
     if (event.phase === "todo") return [];
     if (event.phase !== "message") return [event];
     const id = event.id ?? "plan-progress";
-    const previous = this.messages.get(id) ?? { raw: "", visible: "", processed: new Set<string>() };
-    previous.raw = event.replace ? event.text : previous.raw + event.text;
+    const state = this.messages.get(id) ?? { visible: "", hold: "", processed: new Set<string>(), length: 0 };
+    // Only the unstripped tail of the previous chunk is rescanned, so the cost per
+    // chunk follows the chunk rather than the whole message.
+    const base = event.replace ? { visible: "", hold: "", length: 0 } : state;
+    const buffer = base.hold + event.text;
+    const hold = event.done ? "" : pendingMarker(buffer);
+    const fresh = buffer.slice(0, buffer.length - hold.length);
     let changed = false;
-    for (const match of previous.raw.matchAll(/<!-- dext-todo:([\s\S]*?)-->/g)) {
-      const key = `${match.index}:${match[1]}`;
-      if (previous.processed.has(key)) continue;
-      previous.processed.add(key);
+    for (const match of fresh.matchAll(/<!-- dext-todo:([\s\S]*?)-->/g)) {
+      const key = `${base.length + match.index}:${match[1]}`;
+      if (state.processed.has(key)) continue;
+      state.processed.add(key);
       let parsed: unknown;
       try { parsed = JSON.parse(match[1]!); } catch { continue; }
       if (typeof parsed !== "object" || parsed === null) continue;
@@ -120,11 +139,10 @@ export class PlanTodoProgress {
         if (update.status === "completed") this.blocked.delete(update.item.id);
       }
     }
-    const visible = stripPlanTodoProgress(previous.raw, !event.done);
+    const visible = base.visible + stripPlanTodoProgress(fresh);
     const output: AgentStreamEvent[] = changed ? [this.initial()] : [];
-    if (visible !== previous.visible) output.push({ ...event, id, text: visible, replace: true });
-    previous.visible = visible;
-    this.messages.set(id, previous);
+    if (visible !== state.visible) output.push({ ...event, id, text: visible, replace: true });
+    this.messages.set(id, { visible, hold, processed: state.processed, length: base.length + fresh.length });
     return output;
   }
 }

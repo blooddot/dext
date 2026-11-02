@@ -95,6 +95,19 @@ describe("plan task progress without native task tools", () => {
     expect(new PlanTodoProgress(planTodoItems(document)).initial().todos?.[0]?.status).toBe("pending");
   });
 
+  it("produces the same visible text incrementally as stripping the whole message at once", () => {
+    const whole = ["Start.", marker("plan-1", "in_progress"), "Reading files <!-- keep -->", marker("plan-2", "completed"), "Nearly done.", "<!-- dext-todo: {"].join("\n");
+    // Chunk boundaries fall inside the marker opener, its payload and the closer.
+    const chunks = [...whole.matchAll(/[\s\S]{1,7}/g)].map((match) => match[0]);
+    const tracker = new PlanTodoProgress(planTodoItems(document));
+    const output: AgentStreamEvent[] = [];
+    chunks.forEach((text, index) => output.push(...tracker.consume({ id: "message", phase: "message", text, ...(index === chunks.length - 1 ? { done: true } : {}) })));
+    const messages = output.filter((event) => event.phase === "message");
+    expect(messages.at(-1)?.text).toBe(stripPlanTodoProgress(whole));
+    expect(messages.at(-1)?.text).toContain("<!-- keep -->");
+    expect(tracker.initial().todos?.map((item) => item.status)).toEqual(["in_progress", "completed", "pending"]);
+  });
+
   it("strips progress comments from the final output while retaining unrelated HTML comments", () => {
     expect(stripPlanTodoProgress(`Done ${marker("plan-1", "completed")}<!-- keep -->`)).toBe("Done <!-- keep -->");
     expect(stripPlanTodoProgress("Paused <!-- dext-todo: {" )).toBe("Paused ");
