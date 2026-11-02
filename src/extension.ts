@@ -85,8 +85,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Memento updates serialize the extension's entire state across renderer IPC.
   // Keep history in workspace storage files, and retire old keys only after a
   // backed-up, resumable import has committed to disk.
+  const historyDirectory = vscode.Uri.joinPath(
+    context.storageUri ?? context.globalStorageUri, "conversation-history"
+  ).fsPath;
+  const skippedHistory: string[] = [];
   const history = await openFileHistoryStore(
-    vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "conversation-history").fsPath,
+    historyDirectory,
     context.workspaceState,
     () => {
       const configuration = vscode.workspace.getConfiguration("dext");
@@ -97,8 +101,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           DEFAULT_HISTORY_LIMITS.maxOutputLength
         )
       };
-    }
+    },
+    (names) => skippedHistory.push(...names)
   );
+  // A skipped conversation is absent from History, so say why instead of letting
+  // the user conclude they lost it; the files stay where they are.
+  if (skippedHistory.length) {
+    const listed = skippedHistory.slice(0, 3).join(", ");
+    void vscode.window.showWarningMessage(
+      `Dext ignored ${skippedHistory.length} unreadable conversation history file(s): ${listed}${skippedHistory.length > 3 ? ", …" : ""}. They are unchanged in ${historyDirectory}.`
+    );
+  }
   const preferences = new DextConversationPreferences(context.workspaceState);
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);

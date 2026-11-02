@@ -51,17 +51,28 @@ export class HistoryFileState {
 
   private constructor(private readonly directory: string) {}
 
-  static async open(directory: string): Promise<HistoryFileState> {
+  /** Skipped files stay on disk; the callback lets activation tell the user
+   * which conversations the History page cannot show. */
+  static async open(directory: string, onSkipped?: (names: readonly string[]) => void): Promise<HistoryFileState> {
     await mkdir(directory, { recursive: true });
     const state = new HistoryFileState(directory);
+    const skipped: string[] = [];
     for (const name of await readdir(directory)) {
       if (!/^[a-f0-9]{64}\.json$/.test(name)) continue;
-      const entry = JSON.parse(await readFile(join(directory, name), "utf8")) as { key: string; value: unknown };
-      if (typeof entry.key !== "string" || valuePath(directory, entry.key) !== join(directory, name)) {
-        throw new Error(`Invalid conversation history file: ${name}`);
+      try {
+        const entry = JSON.parse(await readFile(join(directory, name), "utf8")) as { key: string; value: unknown };
+        if (typeof entry.key !== "string" || valuePath(directory, entry.key) !== join(directory, name)) {
+          throw new Error("the file name does not match the key inside it");
+        }
+        state.values.set(entry.key, entry.value);
+      } catch (error) {
+        // One damaged file must not fail activation: skip it, keep every other
+        // conversation, and leave the file on disk for the user to inspect.
+        skipped.push(name);
+        console.warn(`Dext ignored an unreadable conversation history file: ${name}`, error);
       }
-      state.values.set(entry.key, entry.value);
     }
+    if (skipped.length) onSkipped?.(skipped);
     // A process may exit after a new session file commits but before the order
     // file does. Recover it rather than hiding a successfully written turn.
     const storedOrder = state.get<unknown>(ORDER_KEY, []);
@@ -156,9 +167,10 @@ async function writeSpill(directory: string, parts: readonly string[]): Promise<
  * even when its order key was never written. */
 export async function openFileHistoryStore(
   directory: string, legacy: vscode.Memento,
-  readLimits: () => DextHistoryLimits = () => DEFAULT_HISTORY_LIMITS
+  readLimits: () => DextHistoryLimits = () => DEFAULT_HISTORY_LIMITS,
+  onSkipped?: (names: readonly string[]) => void
 ): Promise<DextHistoryStore> {
-  const state = await HistoryFileState.open(directory);
+  const state = await HistoryFileState.open(directory, onSkipped);
   const keys = legacy.keys().filter(historyKey);
   const imported = state.get<boolean>(IMPORTED_KEY, false);
   if (keys.length && !imported) {

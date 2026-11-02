@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HistoryFileState, openFileHistoryStore } from "../src/features/conversations/host/historyFileState.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
@@ -146,7 +146,30 @@ describe("file history storage", () => {
     expect(legacy.keys()).toEqual([]);
   });
 
-  it("keeps the source intact when disk storage cannot open, and surfaces corrupt files", async () => {
+  it("skips an unreadable or mismatched history file instead of failing activation", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const path = await directory();
+      const disk = await HistoryFileState.open(path);
+      await disk.update("dext.history.session:kept", session("kept"));
+      await disk.update("dext.history.order", ["kept", "other"]);
+      // Neither a damaged body nor a name that does not match its key may take
+      // the whole History down: the user would lose the entry to delete it.
+      await writeFile(join(path, `${"a".repeat(64)}.json`), JSON.stringify({ key: "dext.history.session:other", value: session("other") }));
+      await writeFile(join(path, `${"b".repeat(64)}.json`), "corrupt");
+      const skipped: string[] = [];
+      const reopened = await HistoryFileState.open(path, (names) => skipped.push(...names));
+      expect(reopened.get("dext.history.session:kept", undefined)).toMatchObject({ id: "kept" });
+      expect(reopened.get("dext.history.session:other", undefined)).toBeUndefined();
+      // Both broken files are named for the activation warning, and logged too.
+      expect([...skipped].sort()).toEqual(["a".repeat(64) + ".json", "b".repeat(64) + ".json"]);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps the source intact when disk storage cannot open, and survives corrupt files", async () => {
     const legacy = new Memento();
     legacy.values.set("dext.history", [session("old")]);
     const path = await directory();
@@ -158,7 +181,12 @@ describe("file history storage", () => {
     await disk.update("dext.history.order", ["old"]);
     const name = (await readdir(path)).find((name) => name.endsWith(".json"))!;
     await writeFile(join(path, name), "corrupt");
-    await expect(openFileHistoryStore(path, legacy)).rejects.toThrow();
-    expect(legacy.writes).toEqual([]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // The damaged file is skipped, so activation still succeeds and imports.
+      expect((await openFileHistoryStore(path, legacy)).list().map((value) => value.id)).toEqual(["old"]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
