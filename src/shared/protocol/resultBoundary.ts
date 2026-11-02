@@ -18,29 +18,31 @@ interface TextCandidate {
   source: AgentResultCandidate["source"];
 }
 
+/** One forward pass with a stack of open braces. Rescanning from every `{` was
+ * quadratic on text with many unclosed braces (code samples, truncated output),
+ * which froze the extension host on a long Agent answer. */
 function balancedObjects(text: string): string[] {
-  const candidates: string[] = [];
-  for (let start = text.indexOf("{"); start >= 0; start = text.indexOf("{", start + 1)) {
-    let depth = 0;
-    let quoted = false;
-    let escaped = false;
-    for (let index = start; index < text.length; index += 1) {
-      const character = text[index]!;
-      if (quoted) {
-        if (escaped) escaped = false;
-        else if (character === "\\") escaped = true;
-        else if (character === '"') quoted = false;
-        continue;
-      }
-      if (character === '"') { quoted = true; continue; }
-      if (character === "{") depth += 1;
-      else if (character === "}" && --depth === 0) {
-        candidates.push(text.slice(start, index + 1));
-        break;
-      }
+  const found: { start: number; text: string }[] = [];
+  const open: number[] = [];
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"' && open.length) { quoted = true; continue; }
+    if (character === "{") open.push(index);
+    else if (character === "}" && open.length) {
+      const start = open.pop()!;
+      found.push({ start, text: text.slice(start, index + 1) });
     }
   }
-  return candidates;
+  // Candidates stay in opening order: the last one wins, so order is contract.
+  return found.sort((left, right) => left.start - right.start).map((entry) => entry.text);
 }
 
 function textCandidates(text: string): TextCandidate[] {

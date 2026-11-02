@@ -19,6 +19,23 @@ describe("jsonCandidates", () => {
     expect(candidates).toContain(raw.trim());
   });
 
+  it("scans long text with many unclosed braces in one pass", () => {
+    // Quadratic scanning spent seconds here and froze the extension host on a
+    // long Agent answer full of code samples.
+    const found = '{"kind":"agent","text":"found"}';
+    const raw = `${'{'.repeat(100_000)} ${found}`;
+    const started = performance.now();
+    const candidates = jsonCandidates(raw);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(candidates).toContain(found);
+  });
+
+  it("keeps candidates in opening-brace order so the last one still wins", () => {
+    const braces = jsonCandidates('first {"a":1} second {"b":2}')
+      .filter((candidate) => candidate.startsWith('{"a"') || candidate.startsWith('{"b"'));
+    expect(braces).toEqual(['{"a":1}', '{"b":2}']);
+  });
+
   it("starts a balanced-object scan at every opening brace, not just the first", () => {
     const raw = '{"nested":{"value":1}} and later {"kind":"agent","text":"second"}';
     const candidates = jsonCandidates(raw);
