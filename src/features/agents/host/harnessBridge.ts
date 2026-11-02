@@ -10,7 +10,7 @@ import { parseHarnessResultRequest, type HarnessResultOutcome, type HarnessResul
 export const HARNESS_BRIDGE_ENV = "DEXT_HARNESS_BRIDGE";
 /** First line the Harness must present, so only this process may ask. */
 export const HARNESS_BRIDGE_TOKEN_ENV = "DEXT_HARNESS_BRIDGE_TOKEN";
-const MAX_BUFFER = 1024 * 1024;
+const MAX_BUFFER = 16 * 1024 * 1024;
 /** How long Dext waits for the plugin to register a published result tool.
  * A turn keeps its prompt-carried fallback when the ack never arrives, so this
  * only costs the delay it bounds. */
@@ -78,9 +78,10 @@ export class HarnessBridge {
     const peer = this.peers.get(socket);
     if (!peer || this.disposed) return;
     peer.buffer += chunk;
-    if (peer.buffer.length > MAX_BUFFER) { socket.destroy(); return; }
     const lines = peer.buffer.split("\n");
     peer.buffer = lines.pop() ?? "";
+    // Judge the unterminated remainder: a complete frame of any size has already left the buffer.
+    if (peer.buffer.length > MAX_BUFFER) { socket.destroy(); return; }
     for (const line of lines) {
       if (!line.trim()) continue;
       let parsed: unknown;

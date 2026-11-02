@@ -7,6 +7,8 @@ import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
 import { piObject, type PiBridgeConfig, type PiBridgeRequest } from "../contracts/pi.js";
 
+const MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
 const question = z.object({ id: z.string().min(1).max(128), header: z.string().max(2000).default(""), question: z.string().min(1).max(20000),
   options: z.array(z.object({ label: z.string().min(1).max(2000), description: z.string().max(20000).default("") })).max(200).default([]),
   multiSelect: z.boolean().optional(), isSecret: z.boolean().optional(), detail: z.string().max(20000).optional() });
@@ -56,8 +58,9 @@ export class PiBridge {
     socket.on("close", () => { this.sockets.delete(socket); if (this.peer === socket) this.peer = undefined; });
     socket.on("data", (chunk: Buffer) => {
       buffer += decoder.write(chunk);
-      if (buffer.length > 1024 * 1024) { socket.destroy(); return; }
       const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
+      // Judge the unterminated remainder: a complete frame of any size has already left the buffer.
+      if (buffer.length > MAX_FRAME_BYTES) { socket.destroy(); return; }
       for (const line of lines) {
         let frame: Record<string, unknown>;
         try { frame = piObject(JSON.parse(line)); } catch { socket.destroy(); return; }

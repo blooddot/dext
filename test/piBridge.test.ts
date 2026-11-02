@@ -31,4 +31,12 @@ describe("Pi private bridge", () => {
     const controller = new AbortController(); const waiting = bridge.ready(controller.signal); controller.abort(new Error("stopped"));
     await expect(waiting).rejects.toThrow("stopped");
   });
+  it("accepts a multi-megabyte result frame instead of dropping the connection", async () => {
+    const bridge = new PiBridge({ permission: "read-only", tools: [], mcpServers: [] }, async () => ({ status: "accepted" })); bridges.push(bridge);
+    const client = peer(bridge); await vi.waitFor(() => expect(client.frames[0]?.type).toBe("config"));
+    client.send({ type: "ready" }); await bridge.ready();
+    client.send({ id: "big", kind: "submit_result", args: { patch: "x".repeat(2 * 1024 * 1024) } });
+    await vi.waitFor(() => expect(client.frames.at(-1)).toMatchObject({ id: "big", status: "accepted" }));
+    expect(client.socket.destroyed).toBe(false);
+  });
 });

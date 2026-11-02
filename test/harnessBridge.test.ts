@@ -145,6 +145,22 @@ describe("Harness private bridge", () => {
     } finally { client.socket.destroy(); bridge.dispose(); }
   });
 
+  it("accepts a multi-megabyte submission frame instead of dropping the connection", async () => {
+    const seen: unknown[] = [];
+    const bridge = new HarnessBridge(
+      async (): Promise<HarnessQuestionOutcome> => ({ status: "cancelled" }),
+      async (request): Promise<HarnessResultOutcome> => { seen.push(request.args); return { status: "accepted" }; }
+    );
+    const client = peer(bridge);
+    try {
+      await authenticate(bridge, client);
+      client.write({ id: "big", kind: "submit", args: { patch: "x".repeat(2 * 1024 * 1024) } });
+      expect(await client.settle(2)).toEqual([{ id: "probe", status: "cancelled" }, { id: "big", status: "accepted" }]);
+      expect(seen).toHaveLength(1);
+      expect(client.socket.destroyed).toBe(false);
+    } finally { client.socket.destroy(); bridge.dispose(); }
+  });
+
   it("publishes the turn's result tool and waits for the plugin to register it", async () => {
     const bridge = new HarnessBridge(async (): Promise<HarnessQuestionOutcome> => ({ status: "cancelled" }));
     const client = peer(bridge);
