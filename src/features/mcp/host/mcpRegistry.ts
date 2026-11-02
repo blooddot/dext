@@ -314,10 +314,13 @@ class StdioJsonRpcClient {
   async close(): Promise<void> {
     this.process.stdin.end();
     if (!this.process.killed) this.process.kill();
-    await Promise.race([
-      this.exited,
-      new Promise<void>((resolve) => setTimeout(resolve, 250))
+    const exited = await Promise.race([
+      this.exited.then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250))
     ]);
+    // A server that handles SIGTERM itself, or closes slowly, would otherwise
+    // stay resident and keep its own children alive.
+    if (!exited) forceKill(this.process);
     this.flushStderr();
   }
 
@@ -426,6 +429,22 @@ class StdioJsonRpcClient {
   }
 }
 
+/** SIGKILL the server and the processes it started. The stdio server is spawned
+ * detached on POSIX so it leads its own group; Windows kills the tree instead. */
+function forceKill(child: ChildProcessWithoutNullStreams): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === "win32") {
+    spawn("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
 /** Standard JSON-RPC stdio lifecycle for one MCP tool call. */
 export class StdioMcpTransport implements McpTransport {
   private spawn(server: StdioMcpServerConfig, accessToken?: string): ChildProcessWithoutNullStreams {
@@ -438,6 +457,8 @@ export class StdioMcpTransport implements McpTransport {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
+      // Own process group on POSIX so `forceKill` can reach grandchildren.
+      detached: process.platform !== "win32",
       env
     });
   }

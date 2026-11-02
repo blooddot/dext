@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { name, version, dext } from "../package.json";
 import { HttpMcpTransport, McpToolRegistry, StdioMcpTransport, authDiagnostic, mcpCredentialKind, mcpRequestUrl, redactedMcpUrl, redactedUrlQuery, type McpFetch, type McpTransport } from "../src/features/mcp/host/mcpRegistry.js";
 
@@ -367,6 +370,38 @@ describe("McpToolRegistry", () => {
       await expect(transport.listTools(server)).resolves.toEqual([]);
     } else {
       await expect(transport.verify(server)).resolves.toBeUndefined();
+    }
+  });
+
+  it("force-kills a stdio server that ignores SIGTERM", { timeout: 20_000 }, async () => {
+    const root = await mkdtemp(join(tmpdir(), "dext-mcp-kill-"));
+    const pidFile = join(root, "pid");
+    const script = [
+      "const { writeFileSync } = require('node:fs');",
+      "writeFileSync(process.argv[1], String(process.pid));",
+      "process.on('SIGTERM', () => {});",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => {",
+      "  input += chunk;",
+      "  let newline = input.indexOf('\\n');",
+      "  while (newline >= 0) {",
+      "    const message = JSON.parse(input.slice(0, newline));",
+      "    input = input.slice(newline + 1);",
+      "    if (message.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }) + '\\n');",
+      "    newline = input.indexOf('\\n');",
+      "  }",
+      "});"
+    ].join("\n");
+    try {
+      await new StdioMcpTransport().verify({ name: "stubborn", transport: "stdio", command: process.execPath, args: ["-e", script, pidFile] });
+      const pid = Number(await readFile(pidFile, "utf8"));
+      const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+      for (let attempt = 0; attempt < 60 && alive(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      // Without the SIGKILL escalation this server outlives every call that used it.
+      expect(alive()).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     }
   });
 
