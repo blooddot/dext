@@ -50,6 +50,22 @@ describe("image annotation coordinates", () => {
   });
 });
 
+/** 60x40 white page with four 24x16 grey cards. The margin rings the cards, so
+ * its own pixels are 36% of the page while its box is the whole picture. */
+function ringingBackgroundPixels(): ImagePixels {
+  const width = 60, height = 40;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const at = (y * width + x) * 4;
+      const card = (x >= 4 && x <= 27 || x >= 32 && x <= 55) && (y >= 4 && y <= 19 || y >= 22 && y <= 37);
+      const shade = card ? 208 : 255;
+      data[at] = shade; data[at + 1] = shade; data[at + 2] = shade; data[at + 3] = 255;
+    }
+  }
+  return { width, height, data };
+}
+
 describe("detectBlocks", () => {
   it("keeps the button and the panel but drops the oversized background", () => {
     expect(detectBlocks(syntheticPixels())).toEqual([
@@ -63,6 +79,19 @@ describe("detectBlocks", () => {
     expect(pickBlock(blocks, { x: 30, y: 10 })).toEqual({ x: 28, y: 9, width: 6, height: 6 });
     expect(pickBlock(blocks, { x: 25, y: 2 })).toEqual({ x: 24, y: 0, width: 16, height: 20 });
     expect(pickBlock(blocks, { x: 10, y: 10 })).toBeUndefined();
+  });
+
+  it("drops a background that rings the content instead of boxing the whole picture", () => {
+    const blocks = detectBlocks(ringingBackgroundPixels());
+    expect(blocks).toEqual([
+      { x: 4, y: 4, width: 24, height: 16 },
+      { x: 32, y: 4, width: 24, height: 16 },
+      { x: 4, y: 22, width: 24, height: 16 },
+      { x: 32, y: 22, width: 24, height: 16 }
+    ]);
+    // A gap between the cards hovers nothing, not the whole screenshot.
+    expect(pickBlock(blocks, { x: 29, y: 10 })).toBeUndefined();
+    expect(pickBlock(blocks, { x: 10, y: 10 })).toEqual({ x: 4, y: 4, width: 24, height: 16 });
   });
 
   it("returns nothing for mismatched pixel data", () => {

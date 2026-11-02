@@ -74,7 +74,8 @@ export function keepAnchor(
 const COLOR_TOLERANCE = 18;
 const MIN_BLOCK_RATIO = 0.002;
 /** The page background is one huge flat region, and hovering it should select
- * nothing rather than the whole screenshot. */
+ * nothing rather than the whole screenshot. It usually wraps the content, so its
+ * pixel count stays small while its box is the whole picture: measure the box. */
 const MAX_BLOCK_RATIO = 0.55;
 const MAX_BLOCKS = 1500;
 
@@ -148,7 +149,8 @@ export function detectBlocks(pixels: ImagePixels): ImageBox[] {
       if (y > 0 && !visited[index - width] && same(index - width)) { visited[index - width] = 1; stack[top++] = index - width; }
       if (y + 1 < height && !visited[index + width] && same(index + width)) { visited[index + width] = 1; stack[top++] = index + width; }
     }
-    if (count < minArea || count > maxArea) continue;
+    const boxArea = (maxX - minX + 1) * (maxY - minY + 1);
+    if (count < minArea || boxArea > maxArea) continue;
     blocks.push({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 });
     if (blocks.length >= MAX_BLOCKS) break;
   }
