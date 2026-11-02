@@ -37,7 +37,7 @@ describe("local multilingual structure index (real WASM parsers)", () => {
   it("extracts all supported languages and resolves only supported static dependencies", async () => {
     const index = await buildStructureIndex(inputs(fixture));
     expect(index.summary.parsed).toBe(8);
-    expect(index.cache.version).toBe(4);
+    expect(index.cache.version).toBe(5);
     expect(index.summary.version).toBe(2);
     expect(index.summary.failed).toBe(0);
     expect(new Set(index.cache.files.map(file => file.language))).toEqual(new Set(["typescript", "tsx", "javascript", "rust", "python"]));

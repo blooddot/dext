@@ -9,7 +9,8 @@ import { parserFor } from "../../../../platform/node/syntaxParser.js";
 import { buildStructureGraph, rankStructureFiles, type StructureGraph } from "./projectStructureGraph.js";
 
 // Bump when extraction, grouping or resolution changes. Cached facts never contain source bodies.
-export const PROJECT_STRUCTURE_VERSION = 4;
+// 5 added the required `members[].lines`; an older cache fails its schema and is rebuilt, not migrated.
+export const PROJECT_STRUCTURE_VERSION = 5;
 const visibilitySchema = z.enum(["public", "protected", "package", "private"]);
 const symbolSchema = z.object({
   id: z.string().min(1),
