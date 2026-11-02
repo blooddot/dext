@@ -446,6 +446,10 @@ describe("resource documents", () => {
     const prompt = resourcePrompt({ type: "api", scope: "global" }, "Create an API");
     expect(prompt).toContain("exactly one responsibility");
     expect(prompt).toContain("only that one top-level API call");
+    expect(prompt).toContain("take an already-built input, return the result");
+    expect(prompt).toContain("Compare booleans");
+    expect(prompt).toContain("if (round.approved)");
+    expect(prompt).toContain("confirmPlan");
     expect(prompt).toContain("Entry functions only compose named wrappers and ordinary helpers");
     expect(prompt).toContain("askForPlan");
     expect(prompt).toContain("runAgent");
