@@ -110,6 +110,18 @@ export function defaultProjectDefinition(now = Date.now()): ProjectDefinition {
   return { schemaVersion: 1, version: 0, knowledge: { enabled: false, initialized: false }, ai: {}, updatedAt: now };
 }
 
+/** A corrupt or future-schema settings file must not block development; it reads
+ * as defaults, and the writer compares the raw text it saw with the file again. */
+function definitionOf(raw: string | undefined): ProjectDefinition {
+  if (!raw) return defaultProjectDefinition();
+  try { return projectDefinitionSchema.parse(JSON.parse(raw)); } catch { return defaultProjectDefinition(); }
+}
+
+function architectureOf(raw: string | undefined): ProjectArchitectureDocument {
+  if (!raw) return { schemaVersion: 1, version: 0, decisions: [], rules: [], updatedAt: 0 };
+  try { return projectArchitectureSchema.parse(JSON.parse(raw)); } catch { return { schemaVersion: 1, version: 0, decisions: [], rules: [], updatedAt: 0 }; }
+}
+
 /** Minimal file host so the store works with VS Code, a worker, or an in-memory test double. */
 export interface ProjectFileHost {
   readFile(relativePath: string): Promise<string | undefined>;
@@ -236,20 +248,17 @@ export class ProjectStore {
   }
 
   async readDefinition(): Promise<ProjectDefinition> {
-    const raw = await this.host.readFile(PROJECT_DEFINITION_PATH);
-    if (!raw) return defaultProjectDefinition();
-    try {
-      return projectDefinitionSchema.parse(JSON.parse(raw));
-    } catch {
-      // A corrupt or future-schema file must not block development; fall back to defaults.
-      return defaultProjectDefinition();
-    }
+    return definitionOf(await this.host.readFile(PROJECT_DEFINITION_PATH));
   }
 
   async writeDefinition(next: ProjectDefinition, expectedVersion: number, options: ProjectSaveOptions = {}): Promise<ProjectSaveResult<ProjectDefinition>> {
-    const current = await this.readDefinition();
+    const raw = await this.host.readFile(PROJECT_DEFINITION_PATH);
+    const current = definitionOf(raw);
     if (current.version !== expectedVersion) return { status: "conflict", current };
     const value = projectDefinitionSchema.parse({ ...next, version: current.version + 1, updatedAt: options.now ?? Date.now() });
+    // Another window can save between the read and this write; the raw text is the
+    // cheapest proof that nobody did.
+    if (await this.host.readFile(PROJECT_DEFINITION_PATH) !== raw) return { status: "conflict", current: await this.readDefinition() };
     await this.host.writeFile(PROJECT_DEFINITION_PATH, `${JSON.stringify(value, null, 2)}\n`);
     return { status: "applied", value };
   }
@@ -377,9 +386,11 @@ export class ProjectStore {
 
   async writeArchitecture(next: ProjectArchitectureDocument, expectedVersion: number, options: ProjectSaveOptions = {}): Promise<ProjectSaveResult<ProjectArchitectureDocument>> {
     if (await this.readModel()) throw new Error("Native Project is authoritative; edit its nodes and relationships instead.");
-    const current = await this.readArchitecture();
+    const raw = await this.host.readFile(PROJECT_ARCHITECTURE_PATH);
+    const current = architectureOf(raw);
     if (current.version !== expectedVersion) return { status: "conflict", current };
     const value = projectArchitectureSchema.parse({ ...next, version: current.version + 1, updatedAt: options.now ?? Date.now() });
+    if (await this.host.readFile(PROJECT_ARCHITECTURE_PATH) !== raw) return { status: "conflict", current: await this.readArchitecture() };
     await this.host.writeFile(PROJECT_ARCHITECTURE_PATH, `${JSON.stringify(value, null, 2)}\n`);
     return { status: "applied", value };
   }

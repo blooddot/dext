@@ -68,6 +68,25 @@ describe("project store", () => {
     expect((await store.readDefinition()).ai.cli).toBe("claude");
   });
 
+  it("refuses a definition write when another window saved after the read", async () => {
+    const memory = new MemoryHost();
+    const first = await new ProjectStore(memory).readDefinition();
+    expect((await new ProjectStore(memory).writeDefinition({ ...first, ai: { cli: "claude" } }, first.version)).status).toBe("applied");
+    const stored = memory.files.get(".dext/project.json")!;
+    const foreign = `${JSON.stringify({ ...JSON.parse(stored), version: 2, ai: { cli: "codex" } }, null, 2)}\n`;
+    // The version both windows see still matches; only the second read reveals the race.
+    let reads = 0;
+    const host: ProjectFileHost = {
+      readFile: (path) => path === ".dext/project.json" && ++reads > 1 ? Promise.resolve(foreign) : memory.readFile(path),
+      writeFile: (path, content) => memory.writeFile(path, content),
+      listDirectory: (dir) => memory.listDirectory(dir)
+    };
+    const stale = await new ProjectStore(host).writeDefinition({ ...(await new ProjectStore(memory).readDefinition()), ai: { cli: "pi" } }, 1);
+    expect(stale.status).toBe("conflict");
+    if (stale.status === "conflict") expect(stale.current.ai.cli).toBe("codex");
+    expect(memory.files.get(".dext/project.json")).toBe(stored);
+  });
+
   it("persists Pi as the Project AI CLI", async () => {
     const store = new ProjectStore(new MemoryHost());
     const initial = await store.readDefinition();
