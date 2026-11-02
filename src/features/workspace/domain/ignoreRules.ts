@@ -4,7 +4,6 @@
  * character classes are treated literally rather than half-implemented. */
 export interface IgnoreRule {
   negated: boolean;
-  directoryOnly: boolean;
   pattern: RegExp;
 }
 
@@ -55,7 +54,7 @@ export function parseIgnoreRules(content: string): IgnoreRule[] {
     const directoryOnly = withoutNegation.endsWith("/");
     const pattern = directoryOnly ? withoutNegation.slice(0, -1) : withoutNegation;
     if (!pattern) continue;
-    rules.push({ negated, directoryOnly, pattern: toRegExp(pattern) });
+    rules.push({ negated, pattern: toRegExp(pattern) });
   }
   return rules;
 }
