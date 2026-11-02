@@ -3,6 +3,7 @@ import type { TurnSectionPresentation } from "./turnPresentation.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
 import { formatJsonOutput } from "../../../shared/lib/jsonOutput.js";
+import { escapeHtml as escapeTurnHtml } from "../../../shared/lib/html.js";
 
 /** Only the output medium differs: text is escaped by HTML and appended as text by DOM. */
 export interface TurnRenderAdapter<E> {
@@ -146,9 +147,7 @@ export function renderTurnMessage<E>(adapter: TurnMessageAdapter<E>, message: Ag
   ])];
 }
 
-export function escapeTurnHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-}
+export { escapeTurnHtml };
 
 export const turnHtmlAdapter: TurnRenderAdapter<TurnHtml> = {
   element: (tag, attributes, children) => ({

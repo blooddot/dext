@@ -1,10 +1,5 @@
 import type { ApiFlow, ApiFlowEntry, ApiFlowFunction, ApiFlowIssue, ApiFlowStep } from "../../workflow/contracts/apiFlow.js";
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&><"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
-  })[character] ?? character);
-}
+import { escapeHtml } from "../../../shared/lib/html.js";
 
 /** Entity-escape a Mermaid label so user text cannot become markup. A double quote
  * becomes an apostrophe: Mermaid's strict mode renders `#quot;` back as the literal

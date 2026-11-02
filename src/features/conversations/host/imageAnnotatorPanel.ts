@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import * as vscode from "vscode";
 import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
 import { attachmentImageDataUrl } from "./attachmentImage.js";
+import { escapeHtml as escapeAttribute } from "../../../shared/lib/html.js";
 
 export interface ImageAnnotatorPanelOptions {
   extensionUri: vscode.Uri;
@@ -13,9 +14,6 @@ export interface ImageAnnotatorPanelOptions {
    * instead of stacking a second copy in the Input. */
   onInsert(text: string, previous?: string): void;
 }
-
-const escapeAttribute = (value: string): string => value.replace(/[&<>"']/g, (character) =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
 
 /** One editor tab per attachment image: the page itself is the annotation
  * editor, so opening the tab is the whole interaction. */

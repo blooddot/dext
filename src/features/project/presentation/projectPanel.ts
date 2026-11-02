@@ -9,16 +9,11 @@ import type { ProjectToolSettings, ProjectWorkspaceSettings } from "../contracts
 import type { ProjectTopic, ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import { projectSettingsScript, renderProjectSettings } from "./projectSettingsView.js";
 import { renderProjectQuality, renderProjectTopics } from "./projectTopicsView.js";
+import { escapeHtml } from "../../../shared/lib/html.js";
 
 export type ProjectPanelPage = "overview" | "knowledge" | "architecture";
 
 export const PROJECT_PANEL_PAGES: readonly ProjectPanelPage[] = ["overview", "knowledge", "architecture"];
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&><"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
-  })[character] ?? character);
-}
 
 export interface ProjectOverviewData {
   nativeBootstrap?: boolean;

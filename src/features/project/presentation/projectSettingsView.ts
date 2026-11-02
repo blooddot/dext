@@ -1,7 +1,6 @@
 import { PROJECT_EVIDENCE_DEPTHS, type ProjectEvidenceSettings } from "../contracts/projectEvidenceSettings.js";
 import type { ProjectSettings, ProjectToolSettings, ProjectWorkspaceSettings } from "../contracts/projectSettings.js";
-
-const escape = (value: string): string => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
+import { escapeHtml as escape } from "../../../shared/lib/html.js";
 
 const DEFAULT_RESOURCE_DIRECTORIES = {
   apiDirs: ".dext/api",

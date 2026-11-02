@@ -1,7 +1,6 @@
 import type { ArchitectureViewInput, ProjectArchitectureDecision } from "../contracts/projectArchitectureTypes.js";
 import type { ArchitectureViolation } from "../knowledge/projectArchitecture.js";
-
-const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+import { escapeHtml } from "../../../shared/lib/html.js";
 
 export function renderRules(input: ArchitectureViewInput): string {
   const rules = input.rules ?? [];

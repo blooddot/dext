@@ -4,6 +4,7 @@ import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, R
 import { RESOURCE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
 import { renderApiFlow } from "./apiFlowDiagram.js";
 import { resourceIcon } from "./resourceIcons.js";
+import { escapeHtml as escapeResourceHtml } from "../../../shared/lib/html.js";
 
 
 export function resourceEntryId(entry: Pick<ResourceEntry, "kind" | "scope" | "path">): string {
@@ -91,12 +92,7 @@ export function buildResourceDefinition(entry: ResourceEntry, content: string): 
 }
 
 
-export function escapeResourceHtml(value: string): string {
-  return value.replace(/[&><"']/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
-  })[character] ?? character);
-}
-
+export { escapeResourceHtml };
 
 export function renderResourceNavigation(options: ResourcePanelOptions): string {
   const navigation = options.navigation;

@@ -1,7 +1,5 @@
 import { randomBytes } from "node:crypto";
-
-const escapeAttribute = (value: string): string => value.replace(/[&<>"']/g, (character) =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
+import { escapeHtml as escapeAttribute } from "../../shared/lib/html.js";
 
 export interface EditorTabHtmlOptions {
   /**

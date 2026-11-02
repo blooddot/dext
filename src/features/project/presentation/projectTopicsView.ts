@@ -4,8 +4,9 @@ import type { ArchitectureViewInput } from "../contracts/projectArchitectureType
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import { readingOrder, topicFingerprint, type ProjectTopic, type ProjectTopicCheck } from "../knowledge/projectTopics.js";
 import { renderDecisions, renderRules } from "./projectArchitectureNotes.js";
+import { escapeHtml as escapeProjectHtml } from "../../../shared/lib/html.js";
 
-export const escapeProjectHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
+export { escapeProjectHtml };
 const esc = escapeProjectHtml;
 export interface ProjectReaderData {
   topics: readonly ProjectTopic[];
