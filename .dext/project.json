@@ -8,7 +8,10 @@
   "evidence": {
     "depth": "whole",
     "include": [
-      "src/**"
+      "src/**",
+      "README.md",
+      "package.json",
+      "esbuild.mjs"
     ]
   },
   "tool": {
