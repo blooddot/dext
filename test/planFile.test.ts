@@ -32,6 +32,12 @@ describe("plan documents", () => {
       .toBe("20260821-090503-add-a-cache.plan.md");
   });
 
+  it("numbers a second plan saved in the same second", () => {
+    const now = new Date(2026, 7, 21, 9, 5, 3);
+    expect(planFileName("Add a cache", now, 2)).toBe("20260821-090503-add-a-cache-2.plan.md");
+    expect(planFileName("Add a cache", now, 1)).toBe("20260821-090503-add-a-cache.plan.md");
+  });
+
   it("accepts workspace-relative plan paths and rejects escapes", () => {
     expect(planPathSegments(DEFAULT_PLAN_DIRECTORY)).toEqual([".dext", "plans"]);
     expect(planPathSegments(".\\.dext\\plans\\20260821-090503-x.plan.md"))

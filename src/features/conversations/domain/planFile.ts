@@ -22,8 +22,11 @@ export function planTimestamp(now: Date): string {
   return `${date}-${time}`;
 }
 
-export function planFileName(input: string, now: Date): string {
-  return `${planTimestamp(now)}-${planSlug(input)}.plan.md`;
+/** `sequence` disambiguates two plans saved in the same second: the caller
+ * probes the directory and passes the first free number above one. */
+export function planFileName(input: string, now: Date, sequence = 1): string {
+  const suffix = sequence > 1 ? `-${sequence}` : "";
+  return `${planTimestamp(now)}-${planSlug(input)}${suffix}.plan.md`;
 }
 
 /** Splits a workspace-relative directory or file path into segments, rejecting

@@ -2032,7 +2032,23 @@ export class DextApplication {
     const directory = workspaceStorage
       ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)
       : this.storage.directory("plans");
-    const name = existingPath ? undefined : planFileName(input, new Date());
+    let name: string | undefined;
+    if (!existingPath) {
+      const now = new Date();
+      // Two sessions can save in the same second, and a non-ASCII goal always
+      // slugs to "plan", so the timestamp alone does not identify the file.
+      // shortcut: stat and writeFile are not atomic, so two windows can still
+      // collide; use exclusive create when .dext/plans is shared between windows.
+      for (let sequence = 1; sequence <= 100 && !name; sequence++) {
+        const candidate = planFileName(input, now, sequence);
+        try { await vscode.workspace.fs.stat(vscode.Uri.joinPath(directory, candidate)); }
+        catch (error) {
+          if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) throw error;
+          name = candidate;
+        }
+      }
+      if (!name) throw new Error("One hundred plans already share this name; choose a different goal or directory.");
+    }
     const target = existingPath
       ? this.planUri(existingPath) ?? vscode.Uri.joinPath(directory, ...planPathSegments(existingPath))
       : vscode.Uri.joinPath(directory, name!);
