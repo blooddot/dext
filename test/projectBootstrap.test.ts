@@ -397,9 +397,54 @@ describe("native Project bootstrap", () => {
     f.host.writeFile = save;
     await bootstrapProject({ ...f.options, provider: { id: "fixture", generate } });
     // Both stages were checkpointed, so the resumed run calls no AI at all.
-    expect(generate).toHaveBeenCalledTimes(2); expect(await readBootstrapCheckpoint(f.host)).toBeUndefined();
+    expect(generate).toHaveBeenCalledTimes(3); expect(await readBootstrapCheckpoint(f.host)).toBeUndefined();
     const drift = fixture([["src/app.ts", "before"]]);
     await expect(bootstrapProject({ ...drift.options, provider: { id: "fixture", generate: async () => { drift.files.set("src/app.ts", "during generation"); return { text: JSON.stringify(candidate) }; } } })).rejects.toThrow("source changed");
     expect(drift.files.has(".dext/project/model.json")).toBe(false);
+  });
+  it("leaves one owner per file when a regrouped index strands a module the earlier run drafted", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/core/b.ts", "export const b = 2"]]);
+    const member = (path: string) => ({ path, hash: "h-" + path, language: "typescript", lines: 1, symbols: [], dependencies: [] });
+    const module = (id: string, members: Array<ReturnType<typeof member>>) => ({ id, path: `src/${id}`, package: id, languages: ["typescript"], files: members.length, entryPoints: [], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: "h-" + id, members });
+    const summary = (modules: Array<ReturnType<typeof module>>) => () => Promise.resolve<StructureSummary>({ version: 2, hash: "index", files: 2, parsed: 2, cached: 0, failed: 0, unsupported: 0, issues: [], modules });
+    const generate = vi.fn(async (request: ProjectAiRequest) => request.prompt.includes("graph root only")
+      ? { text: JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [{ id: "project", kind: "project", title: "Demo", canonicalName: "Demo", body: { kind: "inline", text: "Goal" } }] }) }
+      : { text: JSON.stringify({ title: "Core Unit", body: "## Responsibility\n\nOwns a." }) });
+    const run = (structure: () => Promise<StructureSummary>) => bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure });
+    // One run names both groups the same responsibility, so they merge into the node of the earlier group.
+    await run(summary([module("core", [member("src/core/a.ts")]), module("common", [member("src/core/b.ts")])]));
+    expect((await f.store.readModel())?.nodes.filter(node => node.kind === "module").map(node => [node.id, node.paths])).toEqual([["module:src-core-b-ts", ["src/core/b.ts", "src/core/a.ts"]]]);
+    // The next index regroups them, so the id the merged node used to have no longer exists in the draft.
+    const regrown = await run(summary([module("core", [member("src/core/a.ts"), member("src/core/b.ts")])]));
+    const owners = new Map<string, string[]>();
+    for (const node of regrown.model?.nodes ?? []) if (node.kind === "module") for (const path of node.paths) owners.set(path, [...(owners.get(path) ?? []), node.id]);
+    expect([...owners.values()].every(ids => ids.length === 1)).toBe(true);
+    expect(owners.size).toBe(2);
+    // The node that lost its only file is gone, not kept as an empty module.
+    expect(regrown.model?.nodes.filter(node => node.kind === "module").map(node => node.id)).toEqual(["module:src-core-a-ts"]);
+    expect(regrown.model?.relations.every(edge => edge.from !== "module:src-core-b-ts" && edge.to !== "module:src-core-b-ts")).toBe(true);
+  });
+  it("replaces the previous functional grouping when the run authors a new one", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/ui/b.ts", "export const b = 2"]]);
+    const member = (path: string) => ({ path, hash: "h-" + path, language: "typescript", lines: 1, symbols: [], dependencies: [] });
+    const module = (id: string, path: string) => ({ id, path: `src/${id}`, package: id, languages: ["typescript"], files: 1, entryPoints: [], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: "h-" + id, members: [member(path)] });
+    const summary = (extra: boolean) => () => Promise.resolve<StructureSummary>({ version: 2, hash: extra ? "index-2" : "index", files: 2, parsed: 2, cached: 0, failed: 0, unsupported: 0, issues: [], modules: [
+      module("core", "src/core/a.ts"), module("ui", "src/ui/b.ts"), ...(extra ? [module("more", "src/ui/c.ts")] : [])] });
+    const area = (title: string, ids: string[]) => ({ text: JSON.stringify({ areas: [{ title, description: "区域", moduleIds: ids }] }) });
+    const all = ["module:src-core-a-ts", "module:src-ui-b-ts"];
+    let groupings = 0;
+    const generate = vi.fn(async (request: ProjectAiRequest) => request.prompt.includes("graph root only")
+      ? { text: JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [{ id: "project", kind: "project", title: "Demo", canonicalName: "Demo", body: { kind: "inline", text: "Goal" } }] }) }
+      : request.prompt.includes("functional areas") ? (groupings++ === 0 ? area("Core runtime", all) : area("Runtime and extras", [...all, "module:src-ui-c-ts"]))
+        : { text: JSON.stringify({ title: request.prompt.includes("src/ui/b.ts") ? "UI Unit" : "Core Unit", body: "## Responsibility\n\nOwns a." }) });
+    const run = (structure: () => Promise<StructureSummary>) => bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure });
+    await run(summary(false));
+    expect((await f.store.readModel())?.nodes.filter(node => node.kind === "capability").map(node => node.id)).toEqual(["area:core-runtime"]);
+    // A new module makes the saved grouping unusable, so this run authors one and the old taxonomy leaves.
+    f.files.set("src/ui/c.ts", "export const c = 3");
+    f.options.paths = ["src/core/a.ts", "src/ui/b.ts", "src/ui/c.ts"];
+    const regrown = await run(summary(true));
+    expect(regrown.model?.nodes.filter(node => node.kind === "capability").map(node => node.id)).toEqual(["area:runtime-and-extras"]);
+    expect(regrown.model?.relations.some(edge => edge.from === "area:core-runtime" || edge.to === "area:core-runtime")).toBe(false);
   });
 });

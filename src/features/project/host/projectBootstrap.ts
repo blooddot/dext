@@ -552,12 +552,30 @@ export async function bootstrapProject(options: {
     const current = await (host.readFileStrict ? host.readFileStrict(path) : host.readFile(path));
     if (current !== text) throw new Error(`Project source changed during initialization: ${path}`);
   }
-  progress({ phase: "saving", fraction: 0, message: dropped.length ? `Validating the Project model and its baseline… dropped ${dropped.length} unresolved entry(ies) from the draft.` : "Validating the Project model and its baseline…" });
   const merged = reconcileNativeProject(candidate, model);
-  // Review signals are derived from the committed graph every run; earlier decisions travel as reviews.
-  // shortcut: only a run with a fresh structure index re-derives them, so a Knowledge-only edit keeps the last set.
+  // The fresh index decides file ownership first; a node only the older model still knows loses its files to it.
+  const owners = new Set<string>(), stale = new Set<string>();
+  for (const node of new Map([...candidate.nodes, ...merged.nodes].filter(item => item.kind === "module").map(item => [item.id, item] as const)).values()) {
+    const owned = node.paths.filter(path => !owners.has(path));
+    for (const path of owned) owners.add(path);
+    if (owned.length !== node.paths.length) dropped.push(node.id);
+    if (node.paths.length && !owned.length) stale.add(node.id);
+    node.paths = owned;
+  }
+  // A grouping is navigation the run re-authors, so areas this run did not draft leave with their edges.
+  const authored = new Set(candidate.nodes.map(node => node.id));
+  if (!ungrouped) for (const node of merged.nodes) if (node.kind === "capability" && !authored.has(node.id) && node.review === "draft") stale.add(node.id);
+  // A module that lost every file, or an area the run re-authored, has nothing left to explain.
+  if (stale.size) {
+    merged.nodes = merged.nodes.filter(node => !stale.has(node.id));
+    merged.relations = merged.relations.filter(edge => !stale.has(edge.from) && !stale.has(edge.to));
+    for (const node of merged.nodes) if (node.kind === "capability")
+      node.properties = { ...node.properties, moduleIds: ((node.properties.moduleIds as string[] | undefined) ?? []).filter(id => !stale.has(id)) };
+    dropped.push(...stale);
+  }
+  progress({ phase: "saving", fraction: 0, message: dropped.length ? `Validating the Project model and its baseline… dropped ${dropped.length} unresolved entry(ies) from the draft.` : "Validating the Project model and its baseline…" });
   const qualityView = projectModelIntent(merged, sources);
-  const quality = projectModelQuality(qualityView, structure?.modules.flatMap(module => module.members) ?? [], qualityView.qualityIssues ?? []);
+  const quality = projectModelQuality(qualityView, structure?.modules.flatMap(module => module.members) ?? []);
   const next = await store.updateProject(withProjectQuality(merged, quality), model?.revision ?? null);
   await host.writeFile(PROJECT_BOOTSTRAP_CHECKPOINT_PATH, JSON.stringify({ version: 1, route, fingerprint, stage: "committed", completed, candidate: next }));
   return { model: next, intent: projectModelIntent(next, sources) };
