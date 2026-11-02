@@ -186,6 +186,23 @@ describe("TurnExecutionCoordinator", () => {
     expect(stopped.coordinator.takeContinuation("session", stopped.history.list()[0]!.turns[0]!.id)).toBeUndefined();
   });
 
+  it("keeps the replay logs of failed Code turns bounded", async () => {
+    const executeInput = async (_source: string, _metadata: unknown, run: { onCallLog?: (entries: never) => void }): Promise<InputExecutionResponse> => {
+      run.onCallLog?.([{ method: "ask", args: {} }] as never);
+      throw new Error("step failed");
+    };
+    const h = createConversationHarness({ executeInput });
+    h.seed([conversation("session")]);
+    const session = () => h.controller.session("session")!;
+    h.controller.activate(session());
+    for (let attempt = 0; attempt < 9; attempt++) await h.coordinator.execute(session(), "code", "ask()");
+    const turns = h.history.list()[0]!.turns;
+    expect(turns).toHaveLength(9);
+    // The cap keeps the newest failures; an evicted turn falls back to a full rerun.
+    expect(h.coordinator.takeContinuation("session", turns[0]!.id)).toBeUndefined();
+    expect(h.coordinator.takeContinuation("session", turns[8]!.id)).toBeDefined();
+  });
+
   it("resolves a command once, executes the expanded task, and stores the raw source", async () => {
     const seen: Readonly<ExecutionMetadata>[] = [];
     const resolveSkillCommand = vi.fn(() => ({

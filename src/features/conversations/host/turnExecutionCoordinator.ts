@@ -33,6 +33,11 @@ import type { PlanController, PlanRunContext } from "./planController.js";
 import { planTodoInstruction, stripPlanTodoProgress } from "../domain/planTodoProgress.js";
 import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
 
+/** Failed Code turns keep their replay log until the user continues them or the
+ * log is evicted; each log can hold several large responses. */
+// shortcut: a global count cap, per-session cleanup needs a delete hook.
+const MAX_CODE_CONTINUATIONS = 8;
+
 /** Turns copied into a fork are only UI history until they are sent to a new
  * provider task. Keep a readable, bounded transcript that can bootstrap that
  * task without exposing Dext's internal JSON envelope as the conversation. */
@@ -387,6 +392,9 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       // failure to continue from: the user asked for it to end.
       if (mode === "code" && !controller.signal.aborted && codeCallLog?.length) {
         this.codeContinuations.set(`${sessionId}:${turnId}`, codeCallLog);
+        while (this.codeContinuations.size > MAX_CODE_CONTINUATIONS) {
+          this.codeContinuations.delete(this.codeContinuations.keys().next().value!);
+        }
       }
       await this.options.sessions.saveProviderSessions(session);
       this.options.sessions.recordTurn(sessionId, turn);
