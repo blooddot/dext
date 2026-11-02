@@ -1,4 +1,5 @@
 import type { AgentStreamEvent } from "../../../shared/contracts/types.js";
+import { truncateMiddle } from "./truncation.js";
 
 export function agentEventKey(event: AgentStreamEvent): string | undefined {
   if (event.phase === "status" || event.phase === "todo") return event.phase;
@@ -23,8 +24,10 @@ export function appendAgentEvent(
       : event.phase === "todo" ? event
         : { ...previous, ...event, text: event.replace ? event.text : previous.text + event.text, replace: true };
   }
+  // Both ends, like the stored history: an event cut here must keep the end a
+  // terminal command reported, or the tail is lost before it is ever stored.
   if (update.text.length > maxTextLength) {
-    update = { ...update, text: `${update.text.slice(0, maxTextLength)}\n... output truncated ...`, replace: true };
+    update = { ...update, text: truncateMiddle(update.text, maxTextLength), replace: true };
   }
   if (position !== undefined) events[position] = update;
   else {

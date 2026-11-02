@@ -15,6 +15,7 @@ import {
   type TurnRecordContext
 } from "../contracts/history.js";
 import { planProjectContextSchema, type PlanProjectContext } from "../../../shared/contracts/planProject.js";
+import { truncateMiddle } from "../domain/truncation.js";
 
 /** Whole-history key from before conversations had keys of their own. Only
  * read to migrate it; new writes never produce it. */
@@ -22,15 +23,12 @@ const HISTORY_KEY = "dext.history";
 const SESSION_KEY_PREFIX = "dext.history.session:";
 const ORDER_KEY = "dext.history.order";
 
-const TRUNCATION_MARKER = "\n... output truncated ...\n";
-
 /** Keep both ends: a command's conclusion matters as much as its start. Every
  * oversized value also lands in `spill`, which becomes the turn's overflow file. */
 function bounded(value: string, maxOutputLength: number, spill: string[] = []): string {
   if (value.length <= maxOutputLength) return value;
   spill.push(value);
-  const head = Math.ceil(maxOutputLength / 2);
-  return `${value.slice(0, head)}${TRUNCATION_MARKER}${value.slice(head - maxOutputLength)}`;
+  return truncateMiddle(value, maxOutputLength);
 }
 
 /** The input is re-sent by retry/continue, so it is clipped without the marker
@@ -38,8 +36,7 @@ function bounded(value: string, maxOutputLength: number, spill: string[] = []): 
 function clipped(value: string, maxOutputLength: number, spill: string[]): string {
   if (value.length <= maxOutputLength) return value;
   spill.push(value);
-  const head = Math.ceil(maxOutputLength / 2);
-  return `${value.slice(0, head)}${value.slice(head - maxOutputLength)}`;
+  return truncateMiddle(value, maxOutputLength, "");
 }
 
 function serializeResponse(response: InputExecutionResponse, maxOutputLength: number, spill: string[]): string {

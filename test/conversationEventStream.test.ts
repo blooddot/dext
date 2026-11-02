@@ -118,7 +118,7 @@ describe("AgentEventStream", () => {
     const boundedLog: AgentStreamEvent[] = [];
     bounded.append("session", boundedLog, { phase: "tool", id: "t", text: "a".repeat(100) });
     bounded.append("session", boundedLog, { phase: "tool", id: "t", text: "b".repeat(100) });
-    expect(boundedLog[0]?.text).toBe(`${"a".repeat(12)}\n... output truncated ...`);
+    expect(boundedLog[0]?.text).toBe(`${"a".repeat(6)}\n... output truncated ...\n${"b".repeat(6)}`);
   });
 
   it("cancels its timer and drops buffered events on dispose", () => {

@@ -239,6 +239,26 @@ describe("DextHistoryStore", () => {
     expect(store.spillPath("session-1", "missing")).toBeUndefined();
   });
 
+  it("bounds a value that already carries the truncation marker like any other", async () => {
+    const spilled: string[][] = [];
+    const store = new DextHistoryStore(
+      new MemoryState() as never,
+      () => ({ maxTurns: 10, maxOutputLength: 12 }),
+      async (parts) => { spilled.push([...parts]); return "/tmp/overflow.txt"; }
+    );
+    // The event log bounds with the same limit, so a long line reaching the store
+    // usually already bears the marker; that must not exempt it from the limit.
+    const text = `head\n... output truncated ...\n${"middle".repeat(20)}tail`;
+    await store.addSuccess("input", [{ phase: "status", text }], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-2");
+    const turn = store.list()[0]!.turns[0]!;
+    expect(turn.process[0]?.text.length).toBeLessThan(text.length);
+    expect(turn.process[0]?.text.startsWith("head\n.")).toBe(true);
+    expect(turn.process[0]?.text).toContain("\n... output truncated ...\n");
+    expect(turn.process[0]?.text.endsWith("tail")).toBe(true);
+    expect(spilled[0]).toContain(text);
+    expect(turn.spillPath).toBe("/tmp/overflow.txt");
+  });
+
   it("falls back to the built-in limits when a setting is nonsense", async () => {
     const store = new DextHistoryStore(
       new MemoryState() as never,
