@@ -31,6 +31,7 @@ import { DextCodeEditor } from "./codeEditor.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
 import { findImageItem, ImageAttachments } from "./imageAttachments.js";
+import { McpAssistantView } from "./mcpAssistantView.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { colorizeSource } from "./sourceHighlight.js";
 
@@ -596,13 +597,6 @@ function run(): void {
   clearSubmittedInput();
 }
 
-function openMcpAssistantDialog(): void {
-  closeComposerMenus();
-  if (!elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.showModal();
-  updateMcpAssistantAction();
-  elements.mcpAssistantInput.focus();
-}
-
 function cancelUi(): void {
   pendingConfirmation = undefined;
   if (elements.uiDialog.open) elements.uiDialog.close();
@@ -638,14 +632,18 @@ function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLB
   return button;
 }
 
-let mcpAssistantRequestId: string | undefined;
-let mcpAssistantRunningRequestId: string | undefined;
-let mcpAssistantStopping = false;
-let mcpAssistantServer: SidebarState["mcpServers"][number] | undefined;
-let mcpAssistantProcessStartedAt: number | undefined;
-let mcpAssistantProcessCount = 0;
-let mcpAssistantProcessTokens: number | undefined;
-let mcpAssistantPendingTools: string[] | undefined;
+const mcp = new McpAssistantView({
+  elements: {
+    dialog: elements.mcpAssistantDialog, close: elements.mcpAssistantClose, input: elements.mcpAssistantInput,
+    status: elements.mcpAssistantStatus, process: elements.mcpAssistantProcess, processMeta: elements.mcpAssistantProcessMeta,
+    processBody: elements.mcpAssistantProcessBody, tools: elements.mcpAssistantTools, preview: elements.mcpAssistantPreview,
+    scope: elements.mcpAssistantScope, scopeLabel: elements.mcpAssistantScopeLabel,
+    generate: elements.mcpAssistantGenerate, save: elements.mcpAssistantSave
+  },
+  post: (message) => vscode.postMessage(message),
+  beforeOpen: () => closeComposerMenus()
+});
+
 function sendResourceAction(type: "chooseResource" | "previewResource" | "saveResource"): void {
   if (!browser.activeId || composerSelectionLocked()) return;
   resourceErrors.delete(browser.activeId);
@@ -768,168 +766,6 @@ function renderResourceToolbar(): void {
     ? "Paste a GitHub URL"
     : resource.type === "project" ? "Describe the norm to create…"
       : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
-}
-
-function resetMcpAssistantProcess(): void {
-  mcpAssistantProcessStartedAt = undefined;
-  mcpAssistantProcessCount = 0;
-  mcpAssistantProcessTokens = undefined;
-  mcpAssistantPendingTools = undefined;
-  elements.mcpAssistantProcessBody.replaceChildren();
-  elements.mcpAssistantProcessMeta.textContent = "";
-  elements.mcpAssistantProcess.hidden = true;
-  elements.mcpAssistantProcess.open = false;
-  elements.mcpAssistantTools.replaceChildren();
-  elements.mcpAssistantTools.hidden = true;
-}
-
-function updateMcpAssistantAction(): void {
-  // MCP generation is presented in its own dialog. Keep its Stop state
-  // independent from the conversation composer run control below.
-  const closeLabel = mcpAssistantRunningRequestId
-    ? mcpAssistantStopping ? "Stopping MCP generation" : "Stop MCP generation"
-    : "Close MCP Assistant";
-  elements.mcpAssistantClose.title = closeLabel;
-  elements.mcpAssistantClose.setAttribute("aria-label", closeLabel);
-  const closeIcon = elements.mcpAssistantClose.querySelector<HTMLElement>("i");
-  if (closeIcon) closeIcon.className = `codicon codicon-${mcpAssistantRunningRequestId ? "debug-stop" : "close"}`;
-  if (mcpAssistantRunningRequestId) {
-    elements.mcpAssistantGenerate.hidden = false;
-    elements.mcpAssistantGenerate.disabled = mcpAssistantStopping;
-    elements.mcpAssistantGenerate.textContent = mcpAssistantStopping ? "Stopping" : "Stop";
-    elements.mcpAssistantGenerate.classList.toggle("stopping", mcpAssistantStopping);
-    return;
-  }
-  elements.mcpAssistantGenerate.disabled = false;
-  elements.mcpAssistantGenerate.textContent = "Generate";
-  elements.mcpAssistantGenerate.classList.remove("stopping");
-}
-
-function renderMcpAssistantEvent(event: AgentStreamEvent): void {
-  if (event.phase === "todo") return;
-  if (!mcpAssistantProcessStartedAt) mcpAssistantProcessStartedAt = Date.now();
-  mcpAssistantProcessCount += 1;
-  const usage = event.usage;
-  if (usage) {
-    mcpAssistantProcessTokens = usage.totalTokens
-      ?? (usage.inputTokens !== undefined && usage.outputTokens !== undefined
-        ? usage.inputTokens + usage.outputTokens
-        : mcpAssistantProcessTokens);
-  }
-  elements.mcpAssistantProcess.hidden = false;
-  const elapsed = Math.max(0, Date.now() - mcpAssistantProcessStartedAt);
-  const tokenLabel = mcpAssistantProcessTokens === undefined ? "" : ` · ${mcpAssistantProcessTokens} tokens`;
-  elements.mcpAssistantProcessMeta.textContent = `Worked for ${formatDuration(elapsed)} · ${mcpAssistantProcessCount} events${tokenLabel}`;
-  if (event.phase === "status" && !event.text.trim()) return;
-  const row = document.createElement("div");
-  row.className = `mcp-process-event mcp-process-${event.phase}`;
-  const title = document.createElement("strong");
-  title.textContent = event.title || (event.phase === "tool" ? "Tool" : event.phase[0]!.toUpperCase() + event.phase.slice(1));
-  const text = document.createElement("div");
-  text.textContent = event.text;
-  row.append(title, text);
-  elements.mcpAssistantProcessBody.append(row);
-  elements.mcpAssistantProcessBody.scrollTop = elements.mcpAssistantProcessBody.scrollHeight;
-}
-
-function generateMcpAssistant(): void {
-  if (mcpAssistantRunningRequestId) {
-    if (mcpAssistantStopping) return;
-    mcpAssistantStopping = true;
-    elements.mcpAssistantStatus.textContent = "Stopping MCP generation…";
-    vscode.postMessage({ type: "stopExecution", turnId: mcpAssistantRunningRequestId });
-    updateMcpAssistantAction();
-    return;
-  }
-  const documentText = elements.mcpAssistantInput.value.trim();
-  if (!documentText) { elements.mcpAssistantStatus.textContent = "Paste a documentation or registry URL first."; return; }
-  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  mcpAssistantRequestId = requestId;
-  // Mark the request busy immediately, before the host's executing event
-  // comes back. This closes the small race where a fast click on X/Esc could
-  // dismiss the dialog while generation was already in flight.
-  mcpAssistantRunningRequestId = requestId;
-  mcpAssistantStopping = false;
-  elements.mcpAssistantStatus.textContent = "Dext is reading the documentation and drafting a safe configuration…";
-  resetMcpAssistantProcess();
-  elements.mcpAssistantProcess.hidden = false;
-  elements.mcpAssistantProcess.open = true;
-  mcpAssistantProcessStartedAt = Date.now();
-  updateMcpAssistantAction();
-  vscode.postMessage({ type: "generateMcp", requestId, document: documentText });
-}
-
-function saveMcpAssistant(): void {
-  if (!mcpAssistantServer) return;
-  let value: unknown;
-  try { value = JSON.parse(elements.mcpAssistantPreview.value); } catch { elements.mcpAssistantStatus.textContent = "Configuration must be valid JSON."; return; }
-  if (!value || typeof value !== "object" || Array.isArray(value)) { elements.mcpAssistantStatus.textContent = "Configuration must be a JSON object."; return; }
-  const server = value as Record<string, unknown>;
-  if ((server.transport !== "http" && server.transport !== "stdio") || typeof server.name !== "string") {
-    elements.mcpAssistantStatus.textContent = "Configuration needs a name and a supported transport."; return;
-  }
-  const rawAuth = server.auth && typeof server.auth === "object" ? server.auth as Record<string, unknown> : undefined;
-  if (rawAuth?.type === "query" && (typeof rawAuth.name !== "string" || !/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(rawAuth.name))) {
-    elements.mcpAssistantStatus.textContent = "Query authentication needs a parameter name such as 'key'.";
-    return;
-  }
-  const httpAuth = rawAuth?.type === "query"
-    ? { type: "query" as const, name: rawAuth.name as string }
-    : rawAuth ? { type: "bearer" as const } : undefined;
-  const candidate = server.transport === "http"
-    ? { name: server.name, transport: "http" as const, url: typeof server.url === "string" ? server.url : "", ...(httpAuth ? { auth: httpAuth } : {}) }
-    : {
-      name: server.name,
-      transport: "stdio" as const,
-      command: typeof server.command === "string" ? server.command : "",
-      ...(Array.isArray(server.args) ? { args: server.args.filter((item): item is string => typeof item === "string") } : {}),
-      ...(server.auth && typeof server.auth === "object" && (server.auth as Record<string, unknown>).type === "token"
-        && typeof (server.auth as Record<string, unknown>).env === "string"
-        ? { auth: { type: "token" as const, env: (server.auth as Record<string, unknown>).env as string } }
-        : {})
-    };
-  if (mcpAssistantPendingTools === undefined) {
-    const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    mcpAssistantRequestId = requestId;
-    vscode.postMessage({ type: "prepareMcp", requestId, scope: elements.mcpAssistantScope.value as "project" | "global", server: candidate });
-    elements.mcpAssistantStatus.textContent = "Discovering MCP tools…";
-    elements.mcpAssistantSave.disabled = true;
-    return;
-  }
-  vscode.postMessage({ type: "createMcp", scope: elements.mcpAssistantScope.value as "project" | "global", selectedTools: mcpAssistantPendingTools, server: candidate });
-  elements.mcpAssistantStatus.textContent = "MCP saved. Refreshing its tools…";
-  elements.mcpAssistantSave.disabled = true;
-}
-
-function renderMcpToolChoices(tools: Array<{ name: string; description?: string }>): void {
-  mcpAssistantPendingTools = tools.map((tool) => tool.name);
-  elements.mcpAssistantTools.replaceChildren();
-  elements.mcpAssistantTools.hidden = false;
-  const heading = document.createElement("div");
-  heading.className = "mcp-assistant-label";
-  heading.textContent = `Select tools to add (${tools.length})`;
-  elements.mcpAssistantTools.append(heading);
-  for (const tool of tools) {
-    const label = document.createElement("label");
-    label.className = "mcp-tool-choice";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = true;
-    input.addEventListener("change", () => {
-      if (!mcpAssistantPendingTools) return;
-      mcpAssistantPendingTools = input.checked
-        ? [...new Set([...mcpAssistantPendingTools, tool.name])]
-        : mcpAssistantPendingTools.filter((name) => name !== tool.name);
-    });
-    const text = document.createElement("span");
-    text.textContent = tool.name;
-    const description = document.createElement("small");
-    description.textContent = tool.description ?? "";
-    label.append(input, text, description);
-    elements.mcpAssistantTools.append(label);
-  }
-  elements.mcpAssistantStatus.textContent = "Choose the tools to include, then save MCP.";
-  elements.mcpAssistantSave.disabled = false;
 }
 
 /** Applies the editor theme and Dext token styles to the sidebar document. */
@@ -2385,20 +2221,9 @@ jumpToTop.addEventListener("click", () => {
   scroll.jumpToTop();
 });
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
-function requestCloseMcpAssistant(): void {
-  if (mcpAssistantRunningRequestId) {
-    // Closing while generation is active must go through the same cancellation
-    // path as the visible Stop button. The dialog stays open until the host
-    // confirms the abort with an `executing: false` message.
-    generateMcpAssistant();
-    return;
-  }
-  if (elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.close();
-}
-
-elements.mcpAssistantClose.addEventListener("click", requestCloseMcpAssistant);
-elements.mcpAssistantGenerate.addEventListener("click", generateMcpAssistant);
-elements.mcpAssistantSave.addEventListener("click", saveMcpAssistant);
+elements.mcpAssistantClose.addEventListener("click", () => mcp.requestClose());
+elements.mcpAssistantGenerate.addEventListener("click", () => mcp.generate());
+elements.mcpAssistantSave.addEventListener("click", () => mcp.save());
 elements.createResource.addEventListener("click", () => vscode.postMessage({ type: "openResourceCreator" }));
 elements.resourceTarget.addEventListener("click", () => sendResourceAction(activeResource()?.draft || activeResource()?.target ? "previewResource" : "chooseResource"));
 elements.resourceChoose.addEventListener("click", () => {
@@ -2463,14 +2288,14 @@ function bindTargetFileSelection(target: HTMLElement | null, kind: "plan" | "res
 const removePlanTargetFileDrop = bindTargetFileSelection(planTargetGroup, "plan");
 const removeResourceTargetFileDrop = bindTargetFileSelection(resourceTargetGroup, "resource");
 elements.mcpAssistantDialog.addEventListener("click", (event) => {
-  if (event.target === elements.mcpAssistantDialog) requestCloseMcpAssistant();
+  if (event.target === elements.mcpAssistantDialog) mcp.requestClose();
 });
 elements.mcpAssistantDialog.addEventListener("cancel", (event) => {
   // Native dialog Esc dispatches `cancel` before closing. Intercept it while
   // active so Esc behaves exactly like the close button and backdrop click.
-  if (!mcpAssistantRunningRequestId) return;
+  if (!mcp.busy) return;
   event.preventDefault();
-  requestCloseMcpAssistant();
+  mcp.requestClose();
 });
 elements.uiDialogClose.addEventListener("click", cancelUi);
 elements.uiDialog.addEventListener("cancel", (event) => {
@@ -2683,36 +2508,11 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     else resourcePending.delete(message.sessionId);
     if (message.sessionId === browser.activeId && sidebarState) renderAgentControls(sidebarState);
   }
-  if (message.type === "mcpAssistant") openMcpAssistantDialog();
-  if (message.type === "mcpProgress" && message.requestId === mcpAssistantRequestId) {
-    renderMcpAssistantEvent(message.event);
-  }
-  if (message.type === "mcpToolsDiscovered" && message.requestId === mcpAssistantRequestId) {
-    renderMcpToolChoices(message.tools);
-  }
-  if (message.type === "mcpGenerated" && message.requestId === mcpAssistantRequestId) {
-    mcpAssistantServer = message.server;
-    elements.mcpAssistantPreview.value = JSON.stringify(message.server, null, 2);
-    elements.mcpAssistantPreview.hidden = false;
-    elements.mcpAssistantScope.hidden = false;
-    elements.mcpAssistantScopeLabel.hidden = false;
-    elements.mcpAssistantGenerate.hidden = true;
-    elements.mcpAssistantSave.hidden = false;
-    // Tool discovery follows generation; keep Save disabled until the
-    // allowlist view has been populated.
-    elements.mcpAssistantSave.disabled = true;
-    // Completed Conversation Process sections are collapsed by default; keep
-    // the MCP trace available on demand as well.
-    elements.mcpAssistantProcess.open = false;
-    const elapsed = mcpAssistantProcessStartedAt ? Math.max(0, Date.now() - mcpAssistantProcessStartedAt) : 0;
-    const tokenLabel = mcpAssistantProcessTokens === undefined ? "" : ` · ${mcpAssistantProcessTokens} tokens`;
-    elements.mcpAssistantProcessMeta.textContent = `Worked for ${formatDuration(elapsed)} · ${mcpAssistantProcessCount} events${tokenLabel}`;
-    elements.mcpAssistantStatus.textContent = "Review the draft, choose where to save it, then confirm.";
-  }
-  if (message.type === "mcpCreated") {
-    elements.mcpAssistantStatus.textContent = `MCP '${message.name}' was added and its tools are ready.`;
-    elements.mcpAssistantDialog.close();
-  }
+  if (message.type === "mcpAssistant") mcp.open();
+  if (message.type === "mcpProgress") mcp.progress(message.requestId, message.event);
+  if (message.type === "mcpToolsDiscovered") mcp.toolsDiscovered(message.requestId, message.tools);
+  if (message.type === "mcpGenerated") mcp.generated(message.requestId, message.server);
+  if (message.type === "mcpCreated") mcp.created(message.name);
   if (message.type === "execution") {
     // A background turn changes the session while its DOM may be cached.
     // Drop that snapshot so returning to the tab renders the new turn once.
@@ -2765,25 +2565,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "executing"
     && (message.switchId === undefined || message.switchId === browser.switchId)
-    && (
-    message.sessionId === browser.activeId
-    || message.turnId === mcpAssistantRunningRequestId
-    || (message.value && message.turnId === mcpAssistantRequestId)
-  )) {
-    // MCP manifest generation has its own action in the MCP dialog. It is not
-    // a conversation turn and must not change the composer run control or
-    // create a phantom output entry in conversation history.
-    if (message.turnId === mcpAssistantRunningRequestId || (!mcpAssistantRunningRequestId && message.turnId === mcpAssistantRequestId && message.value)) {
-      if (message.value) {
-        mcpAssistantRunningRequestId = message.turnId;
-        mcpAssistantStopping = false;
-      } else {
-        mcpAssistantRunningRequestId = undefined;
-        elements.mcpAssistantProcess.open = false;
-      }
-      updateMcpAssistantAction();
-      return;
-    }
+    && (message.sessionId === browser.activeId || mcp.owns(message.turnId, message.value))
+  ) {
+    // MCP manifest generation belongs to the dialog, not to a conversation turn.
+    if (mcp.updateExecution(message.turnId, message.value)) return;
     executing = message.value;
     if (message.value) {
       if (message.switchId !== undefined) {
@@ -2844,11 +2629,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     // A rejected request still owns whatever it disabled when it was sent, such
     // as Plan's Build button, so re-render instead of waiting for a state message.
     updateRunState();
-    if (elements.mcpAssistantDialog.open) {
-      elements.mcpAssistantStatus.textContent = message.message;
-      updateMcpAssistantAction();
-      elements.mcpAssistantSave.disabled = false;
-    }
+    mcp.fail(message.message);
   }
   if (message.type === "setInput") {
     editor.setValue(message.source);
