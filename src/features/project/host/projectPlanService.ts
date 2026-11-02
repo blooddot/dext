@@ -99,7 +99,7 @@ export class ProjectPlanService implements ProjectPlanPort {
       // A none assessment judges every norm, not only the ones this input matched.
       const index = all.map(entry => `${entry.id}\t${entry.kind}\t${entry.title}`).join("\n");
       let grounding = index.length > GROUNDING_BUDGET ? index.slice(0, GROUNDING_BUDGET) : index;
-      if (index.length > GROUNDING_BUDGET) diagnostics.push("The Project index exceeds the grounding budget; omitted norms require explicit reading before a none assessment.");
+      if (index.length > GROUNDING_BUDGET) diagnostics.push("The Project norms exceed the grounding budget; omitted norms require explicit reading before a none assessment.");
       else for (const entry of selected) {
         const text = JSON.stringify({ id: entry.id, locator: entry.locator, value: entry.content, writeTargets: entry.writeTargets });
         if (grounding.length + text.length + 1 > GROUNDING_BUDGET) { omitted.push(entry.locator); continue; }
