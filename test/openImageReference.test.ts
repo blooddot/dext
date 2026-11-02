@@ -18,13 +18,29 @@ const mock = vi.hoisted(() => {
   };
 });
 vi.mock("vscode", () => mock);
-import { openDextFileReference, openWorkspaceDocument } from "../src/platform/vscode/contextHost.js";
+import { openDextFileReference, openWorkspaceDocument, VsCodeContextHost } from "../src/platform/vscode/contextHost.js";
 import { outputLinkReference } from "../src/features/workspace/browser/outputLink.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
   mock.commands.executeCommand.mockResolvedValue(undefined);
   mock.workspace.getWorkspaceFolder.mockReturnValue({});
+});
+
+describe("ref.file workspace containment", () => {
+  const host = new VsCodeContextHost();
+
+  it("refuses an absolute path outside the workspace", async () => {
+    mock.workspace.getWorkspaceFolder.mockReturnValue(undefined);
+    await expect(host.file("C:/outside/.env")).resolves.toBeUndefined();
+    expect(mock.workspace.openTextDocument).not.toHaveBeenCalled();
+  });
+
+  it("still reads an absolute path inside the workspace", async () => {
+    const document = { uri: { toString: () => "file:///C:/repo/file.ts" }, getText: () => "hello", version: 1 };
+    mock.workspace.openTextDocument.mockResolvedValue(document);
+    await expect(host.file("C:/repo/file.ts")).resolves.toMatchObject({ content: "hello", version: 1 });
+  });
 });
 
 describe("opening image links from output", () => {

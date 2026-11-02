@@ -234,9 +234,11 @@ export class VsCodeContextHost implements ContextHost {
 
   async file(filePath: string): Promise<TextSnapshot | undefined> {
     const target = workspaceFileUri(filePath);
-    if (!target) return undefined;
+    // An absolute path is no exception: ref.dir and apply already refuse to
+    // leave the workspace, and a read must not be the way around them.
+    if (!target || !vscode.workspace.getWorkspaceFolder(target.uri)) return undefined;
     if (!target.range) return snapshot(target.uri);
-    const { document, range } = await validatedDocumentRange(target.uri, target.range, Boolean(vscode.workspace.getWorkspaceFolder(target.uri)));
+    const { document, range } = await validatedDocumentRange(target.uri, target.range);
     if (!range) return undefined;
     return {
       uri: target.uri.toString(),
