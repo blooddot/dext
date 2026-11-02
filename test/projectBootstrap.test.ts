@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
 import { validateProjectModel } from "../src/features/project/knowledge/projectModel.js";
 import { bootstrapProject, detectProjectBootstrap, readBootstrapCheckpoint } from "../src/features/project/host/projectBootstrap.js";
+import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 import type { StructureSummary } from "../src/features/project/host/indexing/projectStructure.js";
 import type { ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { ProjectStore, projectContentHash, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
@@ -70,9 +71,10 @@ describe("native Project bootstrap", () => {
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, progress: report => reports.push(report) });
     const generating = reports.filter(report => report.phase === "generating");
     // One call per stage, each stage counted: goals first, then the responsibility batch.
-    expect(generate).toHaveBeenCalledTimes(2);
-    expect(generating.some(report => report.total === 2 && report.completed === 1)).toBe(true);
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(generating.some(report => report.total === 3 && report.completed === 1)).toBe(true);
     expect(generating.some(report => report.message === "Reading sources")).toBe(true);
+    expect(generating.some(report => report.message?.includes("runtime boundaries skipped"))).toBe(true);
     expect(initialized.model?.nodes.map(node => node.id)).toEqual(["project", "api"]);
   });
   it("drops relations whose endpoints no stage created instead of failing the import", async () => {
@@ -168,6 +170,44 @@ describe("native Project bootstrap", () => {
       "project--contains--module:src-ui-b-ts",
       "module:src-core-a-ts--depends_on--module:src-ui-b-ts"
     ]);
+  });
+  it("drafts runtime boundaries so the Knowledge reader gets its C4 landscape", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"], ["esbuild.mjs", "export default { entryPoints: ['src/core/a.ts'] }"], ["README.md", "A tool with a webview and a host."]]);
+    const member = (path: string) => ({ path, hash: "h-" + path, language: "typescript", lines: 1, symbols: [], dependencies: [] });
+    const structure = () => Promise.resolve<StructureSummary>({ version: 2, hash: "index", files: 1, parsed: 1, cached: 0, failed: 0, unsupported: 0, issues: [], modules: [
+      { id: "core", path: "src/core", package: "core", languages: ["typescript"], files: 1, entryPoints: ["src/core/a.ts"], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: "h1", members: [member("src/core/a.ts")] }
+    ] });
+    const generate = vi.fn(async (request: ProjectAiRequest) => {
+      if (request.prompt.includes("graph root only")) return { text: JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [
+        { id: "project", kind: "project", title: "Demo", canonicalName: "Demo", body: { kind: "inline", text: "Goal" } }] }) };
+      if (request.prompt.includes("runtime architecture only")) return { text: JSON.stringify({ c4: { systemId: "demo-system", elements: [
+        { id: "demo-system", name: "Demo", description: "Product", kind: "system", contextIds: [], evidence: [{ path: "README.md" }] },
+        { id: "demo-user", name: "User", description: "Person", kind: "person", contextIds: [], evidence: [{ path: "README.md" }] },
+        { id: "demo-ui", name: "Webview", description: "Browser UI", kind: "container", parentId: "demo-system", contextIds: ["module:src-core-a-ts"], evidence: [{ path: "src/core/a.ts", line: 1 }, { path: "missing.ts" }] },
+        // Not in the read package: an unsupported boundary is dropped, not drawn.
+        { id: "demo-ghost", name: "Ghost", description: "Unsupported", kind: "system", contextIds: [], evidence: [{ path: "missing.ts" }] }
+      ], relationships: [{ id: "user-uses", from: "demo-user", to: "demo-system", description: "Uses the tool", evidence: [{ path: "README.md" }] }] } }) };
+      if (request.prompt.includes("functional areas")) return { text: JSON.stringify({ areas: [{ title: "Core runtime", description: "核心", moduleIds: ["module:src-core-a-ts"] }] }) };
+      return { text: JSON.stringify({ title: "Core Unit", body: "## Responsibility\n\nOwns a." }) };
+    });
+    const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure });
+    const intent = initialized.intent!;
+    // The reader builds both C4 levels from these native nodes and relations.
+    expect(intent.c4?.elements.map(element => element.id)).toEqual(["demo-system", "demo-user", "demo-ui"]);
+    expect(intent.c4?.elements.find(element => element.id === "demo-ui")).toMatchObject({ parentId: "demo-system", contextIds: ["module:src-core-a-ts"], evidence: [{ path: "src/core/a.ts", line: 1 }] });
+    const topics = buildProjectTopics(intent);
+    expect(topics.find(topic => topic.kind === "system_context")?.diagram?.nodes.map(node => node.id)).toEqual(["demo-system", "demo-user"]);
+    expect(topics.find(topic => topic.kind === "containers")?.diagram?.nodes.map(node => node.id)).toContain("demo-ui");
+    // A structure index rebuilds module edges; it must not throw the runtime interactions away.
+    expect(intent.c4?.relationships.map(relation => relation.id)).toEqual(["demo-user--communicates--demo-system"]);
+    const c4Prompt = generate.mock.calls.find(([request]) => request.prompt.includes("runtime architecture only"))?.[0].prompt ?? "";
+    expect(c4Prompt).toContain("esbuild.mjs");
+    expect(c4Prompt).toContain("src/core/a.ts");
+    expect(c4Prompt).toContain("\"systemId\"");
+    // An update keeps the saved boundaries instead of drafting a second set.
+    const updated = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure });
+    expect(generate.mock.calls.filter(([request]) => request.prompt.includes("runtime architecture only"))).toHaveLength(1);
+    expect(updated.intent?.c4?.elements.map(element => element.id)).toEqual(["demo-system", "demo-user", "demo-ui"]);
   });
   it("groups indexed modules into authored functional areas and keeps the grouping on a resume", async () => {
     const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/ui/b.ts", "export const b = 2"]]);
@@ -321,8 +361,8 @@ describe("native Project bootstrap", () => {
     await f.store.updateProject({ ...first, nodes: first.nodes.map(node => node.id === "module:src-core-a-ts" ? { ...node, review: "accepted", freshness: "current" } : node) }, first.revision);
     prompts.length = 0;
     const unchanged = await run();
-    // Zero change: the root stage still drafts, but no module and no grouping reaches the provider.
-    expect(prompts).toHaveLength(1);
+    // Zero change: the root and runtime stages still draft, but no module and no grouping reaches the provider.
+    expect(prompts).toHaveLength(2);
     expect(unchanged.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ title: "Core Unit", review: "accepted", freshness: "current",
       body: { kind: "inline", text: "## Responsibility\n\nOwns a." }, evidence: [{ path: "src/core/a.ts", contentHash: projectContentHash("export const a = 1") }] });
     expect(unchanged.model?.nodes.find(node => node.id === "module:src-ui-b-ts")?.body).toEqual({ kind: "inline", text: "## Responsibility\n\nOwns a." });
@@ -343,7 +383,7 @@ describe("native Project bootstrap", () => {
     await f.store.updateProject(saved, 0);
     // Update used to throw "returned no nodes", because an existing model was not treated as code to draft.
     const updated = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate } });
-    expect(generate).toHaveBeenCalledTimes(4);
+    expect(generate).toHaveBeenCalledTimes(6);
     expect(updated.model?.nodes.find(node => node.id === "project")?.body).toEqual({ kind: "inline", text: "Reviewed goal" });
   });
   it("resumes a saved candidate without calling AI twice and invalidates changed sources", async () => {

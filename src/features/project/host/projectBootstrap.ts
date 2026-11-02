@@ -1,12 +1,13 @@
 import { z } from "zod";
 import { projectModelRelationSchema, projectModelSchema, projectModelNodeSchema, type ProjectModel, type ProjectModelNode, type ProjectModelRelation } from "../contracts/projectModel.js";
+import { projectC4Schema } from "../contracts/projectIntent.js";
 import type { StructureSummary } from "./indexing/projectStructure.js";
 import { structureCandidates, validateOwnership } from "./indexing/projectStructureKnowledge.js";
 import type { ProjectInitializationOutput, ProjectInitializationProgressListener } from "../contracts/lifecycle.js";
 import { parseProjectModel, projectModelIntent, validateProjectModel } from "../knowledge/projectModel.js";
 import { reconcileNativeProject } from "../knowledge/projectModelEvolution.js";
 import { jsonCandidates } from "../../../shared/protocol/resultBoundary.js";
-import { compareProjectEvidencePaths, type ProjectAiProvider } from "./generation/projectAiGeneration.js";
+import { compareProjectEvidencePaths, PROJECT_BUILD_CONFIG_PATH, type ProjectAiProvider } from "./generation/projectAiGeneration.js";
 import { projectModelQuality, withProjectQuality } from "./generation/projectModelQuality.js";
 import { type ProjectStore, projectContentHash, type ProjectFileHost } from "./persistence/projectStore.js";
 import { commitProjectMigration } from "./persistence/projectMigration.js";
@@ -25,11 +26,11 @@ const DEFAULT_BUDGET: ProjectBootstrapBudget = { files: 600, chars: 600_000, fil
 const STAGE_CHARS = 30_000;
 
 /** Bumped with the stage plan: a checkpoint from another plan must not be resumed. */
-const PROMPT_VERSION = "project-bootstrap-7";
+const PROMPT_VERSION = "project-bootstrap-10";
 
-/** Source text explains a module, so it is read before documentation and configuration. */
+/** Guidance and build configuration define boundaries, so they are read before documentation and source. */
 const compareBootstrapPaths = (left: string, right: string): number =>
-  Number(guidancePath(right)) - Number(guidancePath(left))
+  Number(runtimeBoundarySource(right)) - Number(runtimeBoundarySource(left))
   || Number(SOURCE_FILE.test(right)) - Number(SOURCE_FILE.test(left))
   || compareProjectEvidencePaths(left, right);
 
@@ -60,7 +61,7 @@ const guidancePath = (path: string): boolean => durable(path)
   || /(?:^|\/)(?:package\.json|pyproject\.toml|cargo\.toml|go\.mod|pom\.xml)$/i.test(path);
 
 /** One bounded model call. `module` marks a stage whose node identity and edges are already decided. */
-interface BootstrapStage { instructions: string; sources: Map<string, string>; module?: { id: string; paths: string[] }; areas?: true }
+interface BootstrapStage { instructions: string; sources: Map<string, string>; module?: { id: string; paths: string[] }; areas?: true; c4?: true }
 
 const ROOT_STAGE = "Draft the graph root only: one 'project' node stating purpose, scope and non-goals, and one 'architecture' node stating module boundaries, dependency edges and invariants, linked by a 'contains' relation. Create no module nodes yet; the directory list below is an overview, not a node per directory. Write each body as Markdown with '## Responsibility' (what it owns), '## Design' (the decisions and invariants behind the code) and '## Boundary' ('- Allowed:' and '- Forbidden:' dependencies).";
 const MODEL_GUIDANCE = "Build a native Project normative model: goals, then architecture, then modules/contracts and their explicit relationships. Do not mirror the directory tree. Read guidance before specifications, configuration and source evidence. Third-party sources are supporting evidence. All generated content is draft. Do not create Plan nodes. Adopt durable documents in place rather than copying them. Return a JSON object matching the supplied schema. Evidence outside this bounded package is unknown.";
@@ -73,6 +74,10 @@ const LABEL_LANGUAGE = "Every 'title' is a short English label of 2-5 words that
 const NAME_MAPPING = "Record the mapping once, in the first '## Responsibility' bullet of a node body or in an area 'description', as '**Names**: <interface name> → <public symbol or entry file>' (without an interface: '<code name> → <files>'); the title is the code name on that line, so the interface label, the code symbol and this record all name the same responsibility.";
 const PROSE_STAGE = "Return exactly {\"title\": \"<responsibility name>\", \"body\": \"<Markdown with ## Responsibility, ## Design and ## Boundary ('- Allowed:' / '- Forbidden:')>\"}. Name the responsibility, never the directory.";
 const STRUCTURE_GUIDANCE = "Group the known modules into developer-facing functional areas: 'areas', each with an English 'title', a Simplified Chinese 'description' and the exact 'moduleIds' it contains. Assign EVERY module id to exactly ONE area (usually 3-8 areas for a medium project, fewer for a small one). Grouping is navigation, not merging or a change of ownership: never invent module ids, never leave a module out, and do not repeat one area per module or use directory names as the taxonomy.";
+/** Runtime boundaries are a separate interpretation of configuration and guidance, never of a directory tree. */
+const C4_STAGE = "Draft the runtime architecture only when the supplied build configuration, guidance and entry-point excerpts support it. Return {\"c4\":{\"systemId\":...,\"elements\":[...],\"relationships\":[...]}} or {} when no boundary is supported. The focal system is this project. An element is a 'person', an external 'system', or a runtime 'container' (UI/webview, host/server, worker/subprocess or data store). Use a short English 'name' and a Simplified Chinese 'description'. A directory, package or module is not a container. Set each container's 'parentId' to the focal system and its 'contextIds' to the exact module ids from 'known' that implement it. Give the focal system a relationship to each person and external system it exchanges data with, and connect each container to the system or another container it actually talks to. External systems require evidence of a separate ownership/deployment boundary. Cite a supplied path and, for read excerpts, a visible line in every element and relationship. Omit unsupported boundaries.";
+const c4EnvelopeSchema = z.object({ c4: projectC4Schema.optional() }).strict();
+const c4EnvelopeJson = JSON.stringify(z.toJSONSchema(c4EnvelopeSchema));
 
 /**
  * Thinkrail imports a codebase by writing one spec node at a time; the same shape applies here as
@@ -114,6 +119,58 @@ function structureStages(groups: readonly StructureGroup[], sources: ReadonlyMap
     // Last, because it needs the finished module list; it authors no prose.
     ...(groups.length ? [{ instructions: `${STRUCTURE_GUIDANCE} ${LABEL_LANGUAGE} ${NAME_MAPPING}`, sources: new Map<string, string>(), areas: true as const }] : [])
   ];
+}
+
+/** The root, module and area stages explain code; only guidance and build configuration define a runtime boundary. */
+const runtimeBoundarySource = (path: string): boolean => guidancePath(path) || PROJECT_BUILD_CONFIG_PATH.test(path);
+const runtimeKind = (node: ProjectModelNode | undefined): boolean => node?.kind === "person" || node?.kind === "system" || node?.kind === "container";
+/** Guidance and build configuration set the stage; entry-point source is where a runtime actually starts. */
+const runtimeBoundaryStage = (sources: ReadonlyMap<string, string>, structure: StructureSummary | undefined): BootstrapStage => {
+  const staged = new Map([...sources].filter(([path]) => runtimeBoundarySource(path)));
+  let size = [...staged.values()].reduce((total, text) => total + text.length, 0);
+  for (const path of [...new Set(structure?.modules.flatMap(module => module.entryPoints) ?? [])]) {
+    const text = sources.get(path);
+    if (text === undefined || staged.has(path)) continue;
+    if (size + text.length > STAGE_CHARS) break;
+    staged.set(path, text); size += text.length;
+  }
+  return { instructions: `${MODEL_GUIDANCE} ${LABEL_LANGUAGE} ${C4_STAGE} Return JSON matching this schema: ${c4EnvelopeJson}`, sources: staged, c4: true };
+};
+
+/** C4 elements become native nodes; the reader derives its landscape and runtime views from them. */
+function mergeProjectC4(model: ProjectModel, c4: z.infer<typeof projectC4Schema>): void {
+  const known = new Map(model.nodes.map(node => [node.id, node]));
+  const elements = c4.elements.filter(element => !known.has(element.id));
+  const ids = new Set(elements.map(element => element.id));
+  const project = model.nodes.find(node => node.kind === "project");
+  if (project && elements.some(element => element.id === c4.systemId && element.kind === "system")) project.properties = { ...project.properties, c4SystemId: c4.systemId };
+  for (const element of elements) {
+    const node = projectModelNodeSchema.parse({ id: element.id, kind: element.kind, title: element.name, canonicalName: element.name,
+      body: { kind: "inline", text: element.description },
+      properties: { ...(element.external ? { external: true } : {}), ...(element.technology ? { technology: element.technology } : {}) },
+      evidence: element.evidence, origin: "inferred", review: "draft", freshness: "needs_verification" });
+    model.nodes.push(node); known.set(node.id, node);
+  }
+  const link = (from: string, to: string, kind: "contains" | "communicates" | "maps_to", description = "", evidence: ProjectModelRelation["evidence"] = []): void => {
+    const id = `${from}--${kind}--${to}`;
+    if (from === to || !known.has(from) || !known.has(to) || model.relations.some(edge => edge.id === id)) return;
+    model.relations.push(projectModelRelationSchema.parse({ id, from, to, kind, description, evidence, origin: "inferred", review: "draft", freshness: "needs_verification" }));
+  };
+  for (const element of elements) {
+    if (element.parentId && ids.has(element.parentId)) link(element.parentId, element.id, "contains");
+    // Containers point at responsibilities, never at another runtime element.
+    for (const id of element.contextIds) {
+      const target = known.get(id);
+      if (target && (target.kind === "module" || target.kind === "context")) link(element.id, id, "maps_to");
+    }
+  }
+  for (const relation of c4.relationships) if (ids.has(relation.from) && ids.has(relation.to)) link(relation.from, relation.to, "communicates", relation.description, relation.evidence);
+}
+
+/** The structure index owns module edges only; C4 interactions are not in the index and must survive. */
+function c4Relations(model: ProjectModel): ProjectModelRelation[] {
+  const runtime = new Set(model.nodes.filter(runtimeKind).map(node => node.id));
+  return model.relations.filter(edge => edge.kind === "maps_to" ? runtime.has(edge.from) : (edge.kind === "contains" || edge.kind === "communicates") && runtime.has(edge.from) && runtime.has(edge.to));
 }
 
 /** `contains` and `depends_on` come from the index, never from the model, so a module edge cannot dangle. */
@@ -325,6 +382,9 @@ export async function bootstrapProject(options: {
   // A module whose files were not read cannot be explained, and a stub named after its path is noise.
   const groups = structure ? structureGroups(structure).filter(group => group.paths.some(path => sources.has(path))) : [];
   const stages = !drafting ? [] : groups.length ? structureStages(groups, sources) : bootstrapStages(sources);
+  // shortcut: C4 is drafted only while the model has none, so an update cannot create a second set;
+  // delete the runtime-boundary nodes to refresh them.
+  if (drafting && !model?.nodes.some(runtimeKind)) stages.push(runtimeBoundaryStage(sources, structure));
   // The stage plan is part of the identity: a checkpoint drafted by a different batching or prompt
   // must not be resumed, or the same responsibility gets drafted (and merged) twice.
   const fingerprint = projectContentHash(JSON.stringify({ route, revision: model?.revision ?? null, documents: [...sources].map(([path, text]) => [path, projectContentHash(text)]), stages: stages.map(stage => [stage.module?.id ?? "", ...[...stage.sources.keys()]]), prompt: PROMPT_VERSION, schema: 1, ai: options.ai }));
@@ -344,6 +404,8 @@ export async function bootstrapProject(options: {
   let dropped: string[] = [];
   /** Set when the functional grouping was rejected twice, so the flat tree is explained instead of silent. */
   let ungrouped: string | undefined;
+  /** Why the optional C4 pass produced nothing, so the run reports it instead of looking successful. */
+  let c4Note = "";
   if (!candidate) {
     if (!drafting) {
       candidate = { schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [projectModelNodeSchema.parse({ id: "project", kind: "project", title: options.name, canonicalName: options.name, body: { kind: "inline", text: "Project intent needs definition and review." }, review: "draft", freshness: "needs_verification" })] };
@@ -370,15 +432,15 @@ export async function bootstrapProject(options: {
           await writeCheckpoint(candidate, completed);
           continue;
         }
-        const label = stage.module ? `Drafting ${stage.module.id}…` : stage.areas ? "Grouping modules into functional areas…" : index === 0 ? "Drafting goals and architecture…" : `Drafting responsibility batch ${index} of ${stages.length - 1}…`;
+        const label = stage.module ? `Drafting ${stage.module.id}…` : stage.areas ? "Grouping modules into functional areas…" : stage.c4 ? "Drafting runtime boundaries…" : index === 0 ? "Drafting goals and architecture…" : `Drafting responsibility batch ${index} of ${stages.length - 1}…`;
         progress({ phase: "generating", completed: index, total: stages.length, message: label });
         // Every drafted id, so a later batch cannot re-invent a responsibility one character off.
         const known = candidate.nodes.map(node => ({ id: node.id, kind: node.kind, title: node.title }));
         let reported = "";
         const response = await provider.generate({ prompt: [
           stage.instructions,
-          JSON.stringify({ existing: model, known, ...(stage.module ? { paths: stage.module.paths } : {}), inventory: index === 0 ? [...sources.keys()].slice(0, 400) : undefined, sources: [...stage.sources], omitted: options.paths.length - sources.size })
-        ].join("\n\n"), responseSchema: z.toJSONSchema(stage.module ? proseSchema : stage.areas ? areaSchema : draftModelSchema), inputHash: fingerprint, promptVersion: PROMPT_VERSION, attempt: 1, maxOutputTokens: 32_000, onEvent: event => {
+          JSON.stringify({ ...(stage.c4 ? {} : { existing: model }), known, ...(stage.module ? { paths: stage.module.paths } : {}), inventory: index === 0 ? [...sources.keys()].slice(0, 400) : undefined, sources: [...stage.sources], omitted: options.paths.length - sources.size })
+        ].join("\n\n"), responseSchema: z.toJSONSchema(stage.module ? proseSchema : stage.areas ? areaSchema : stage.c4 ? c4EnvelopeSchema : draftModelSchema), inputHash: fingerprint, promptVersion: PROMPT_VERSION, attempt: 1, maxOutputTokens: 32_000, onEvent: event => {
           const activity = event.title?.trim() || event.text.trim().slice(0, 160);
           if (!activity || activity === reported) return;
           reported = activity;
@@ -431,6 +493,26 @@ export async function bootstrapProject(options: {
             // One responsibility split by the index cap still reads from every one of its files.
             existing.evidence = [...new Map([...existing.evidence, ...stageEvidence(stage)].map((entry) => [entry.path, entry])).values()];
           } else candidate.nodes.push(projectModelNodeSchema.parse({ id: stage.module.id, kind: "module", title: prose.title, canonicalName: prose.title, body: { kind: "inline", text: prose.body }, paths: stage.module.paths, evidence: stageEvidence(stage) }));
+        } else if (stage.c4) {
+          // Runtime boundaries are optional: a malformed or unsupported answer never discards the model.
+          try {
+            const c4 = c4EnvelopeSchema.parse(parseJsonObject(response.text)).c4;
+            if (c4) {
+              // Keep every evidence entry this run actually read; a stale reference alone never drops the boundary.
+              const cited = (entries: ProjectModelRelation["evidence"]): ProjectModelRelation["evidence"] => entries.filter(entry => {
+                const text = sources.get(entry.path);
+                return text !== undefined && (entry.line === undefined || entry.line <= text.split("\n").length);
+              });
+              const elements = c4.elements.map(element => ({ ...element, evidence: cited(element.evidence) })).filter(element => element.evidence.length);
+              const ids = new Set(elements.map(element => element.id));
+              const relationships = c4.relationships.filter(relation => ids.has(relation.from) && ids.has(relation.to))
+                .map(relation => ({ ...relation, evidence: cited(relation.evidence) })).filter(relation => relation.evidence.length);
+              mergeProjectC4(candidate, { ...c4, elements, relationships });
+              c4Note = elements.length ? `runtime boundaries: ${elements.length} nodes` : "runtime boundaries: no supported evidence";
+            } else c4Note = "runtime boundaries: no supported boundary";
+          } catch (error) {
+            c4Note = `runtime boundaries skipped: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`;
+          }
         } else {
           const part: ProjectModel = { ...candidate, ...draftModelSchema.parse(normalizeBodies(parseJsonObject(response.text), sources)) };
           // With an index, this stage only contributes the root: module identity belongs to the index.
@@ -444,7 +526,8 @@ export async function bootstrapProject(options: {
       if (!candidate.nodes.length) throw new Error("Project AI returned no nodes; nothing was saved.");
       // The index owns module edges once it exists; model-proposed edges would only duplicate it.
       if (structure && groups.length) {
-        candidate.relations = structureRelations(structure, candidate.nodes);
+        // The index owns module edges; C4 interactions are not in the index and must survive.
+        candidate.relations = [...structureRelations(structure, candidate.nodes), ...c4Relations(candidate)];
         // Area membership is authored, so its edges are rebuilt from the nodes and survive a resume.
         for (const node of candidate.nodes) {
           if (node.kind !== "capability") continue;
@@ -454,7 +537,7 @@ export async function bootstrapProject(options: {
           }
         }
       }
-      progress({ phase: "generating", completed: stages.length, total: stages.length, message: `Drafted ${candidate.nodes.length} nodes in ${stages.length} stages${reused ? `, reusing ${reused} unchanged stage(s)` : ""}.${ungrouped ? ` Modules stay ungrouped: ${ungrouped}` : ""}` });
+      progress({ phase: "generating", completed: stages.length, total: stages.length, message: `Drafted ${candidate.nodes.length} nodes in ${stages.length} stages${reused ? `, reusing ${reused} unchanged stage(s)` : ""}.${ungrouped ? ` Modules stay ungrouped: ${ungrouped}` : ""}${c4Note ? ` ${c4Note}.` : ""}` });
     }
     if (!resumed) await writeCheckpoint(candidate, completed);
   }

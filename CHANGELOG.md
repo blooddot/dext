@@ -22,6 +22,8 @@ All notable changes to Dext are documented in this file.
 
 - Knowledge reads top-down in dependency order: the introduction's **Start here** lists every topic with a dependency-first ordering (a cycle is cut, not looped) and a one-line source-freshness summary that fills in after **Check sources**.
 
+- **Build/update project model** drafts the C4 runtime boundaries again: one bounded pass reads guidance, build configuration and module entry-point source and records evidence-backed `person`/`system`/`container` nodes plus their `communicates`/`contains` relations, so Knowledge shows the **Project landscape** and **Runtime units** diagrams. A malformed or unsupported answer is skipped instead of failing the model, and an existing set of runtime nodes is kept on update.
+
 - **Update project model** now re-drafts only the modules whose files changed: each module stage saves the content hashes it read, and an unchanged module keeps its saved prose and review state. The root stage still runs once per update, and a model saved before these hashes existed re-drafts every module on its first update.
 
 - **Breaking:** an API's entry function must be named after its file, and `main` is no longer recognised. `api/dev/fix.ts` exports `fix`, so rename `export async function main` to `export async function fix` and change `import { main as fix } from "dext/api/dev/fix"` to `import { fix } from "dext/api/dev/fix"`. Saving a draft that exports anything else is rejected with the name to use, a missing-import hint names the file's own binding, and the Execution flow starts at that function.
