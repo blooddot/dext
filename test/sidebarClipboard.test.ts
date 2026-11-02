@@ -27,7 +27,7 @@ vi.mock("vscode", () => ({
   } }
 }));
 
-import { AttachmentStore } from "../src/shared/lib/attachmentStore.js";
+import { AttachmentStore, MAX_ATTACHMENT_BYTES } from "../src/shared/lib/attachmentStore.js";
 import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 
 const selectedText = "# 项目说明\n\n保留文本内容。\n";
@@ -54,7 +54,7 @@ beforeEach(() => {
   sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
   post = vi.fn().mockResolvedValue(undefined);
   attachments = new AttachmentStore();
-  Object.assign(sidebar, { attachments, post });
+  Object.assign(sidebar, { attachments, post, application: { storage: { attachmentByteLimit: () => MAX_ATTACHMENT_BYTES } } });
 });
 
 async function paste(purpose: "code" | "text" = "code") {

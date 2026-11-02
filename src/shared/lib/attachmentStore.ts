@@ -51,10 +51,11 @@ export class AttachmentStore {
 
   stageClipboard(
     text: string,
-    reference: DextFileReference
+    reference: DextFileReference,
+    limit = MAX_ATTACHMENT_BYTES
   ): void {
     if (!text) throw new Error("Select text before copying it with context.");
-    this.assertSize(text);
+    this.assertSize(text, limit);
     this.fileCopy = undefined;
     this.clipboard = {
       text,
@@ -74,12 +75,12 @@ export class AttachmentStore {
   /** Copy Path runs first, so the path text is what the clipboard holds while
    * Dext stages it. `clipboardText` is what the command that runs last leaves
    * behind, so only that copy can consume the paths. */
-  stageFileCopy(paths: string, clipboardText = ""): void {
+  stageFileCopy(paths: string, clipboardText = "", limit = MAX_ATTACHMENT_BYTES): void {
     if (!paths) {
       this.fileCopy = undefined;
       return;
     }
-    this.assertSize(paths);
+    this.assertSize(paths, limit);
     this.clipboard = undefined;
     this.fileCopy = {
       paths,
@@ -121,9 +122,9 @@ export class AttachmentStore {
     return clipboard;
   }
 
-  private assertSize(text: string): void {
-    if (new TextEncoder().encode(text).byteLength > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`Attachments must be ${MAX_ATTACHMENT_BYTES} bytes or smaller.`);
+  private assertSize(text: string, limit: number): void {
+    if (new TextEncoder().encode(text).byteLength > limit) {
+      throw new Error(`Attachments must be ${limit} bytes or smaller.`);
     }
   }
 }

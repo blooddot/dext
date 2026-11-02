@@ -612,7 +612,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const copiedText = await writeExactClipboardText(vscode.env.clipboard, attachment.text);
     const reference = clipboardFileReference(attachment.reference);
     if (reference) {
-      this.attachments.stageClipboard(attachment.text, reference);
+      this.attachments.stageClipboard(attachment.text, reference, this.application.storage.attachmentByteLimit());
     } else {
       this.attachments.clearClipboard();
     }
@@ -623,14 +623,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
    * but an Explorer paste reads VS Code's file list instead, so the files stay
    * pasteable while the paths wait here for the Dext paste that consumes them. */
   async copyFilePathWithFiles(): Promise<void> {
-    this.attachments.stageFileCopy(await copyFilePathKeepingFiles());
+    this.attachments.stageFileCopy(await copyFilePathKeepingFiles(), "", this.application.storage.attachmentByteLimit());
   }
 
   /** Editor Copy Path with nothing selected. VS Code keeps its copy-line
    * behavior; the path waits here for the Dext paste that consumes it. */
   async copyFilePathWithLine(): Promise<void> {
     const { path, clipboardText } = await copyFilePathKeepingLine();
-    this.attachments.stageFileCopy(path, clipboardText);
+    this.attachments.stageFileCopy(path, clipboardText, this.application.storage.attachmentByteLimit());
   }
 
   /** Terminal text has no VS Code document URI. Save a bounded snapshot as a
@@ -643,7 +643,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.attachments.stageClipboard(text, {
       payload: attachment.relativePath,
       expression: `@${attachment.relativePath}`
-    });
+    }, this.application.storage.attachmentByteLimit());
   }
 
   async addFileToChat(resource?: vscode.Uri): Promise<void> {

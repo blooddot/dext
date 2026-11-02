@@ -47,13 +47,24 @@ describe("AttachmentStore", () => {
     expect(store.clipboardReference("selected text")).toBeUndefined();
   });
 
-  it("rejects oversized staged context", () => {
+  it("rejects oversized staged context and names the limit it was given", () => {
     const store = new AttachmentStore();
     const text = "a".repeat(MAX_ATTACHMENT_BYTES + 1);
     expect(() => store.stageClipboard(
       text,
       codeRef(text)
     )).toThrow("bytes or smaller");
+    // The caller's configured limit decides, not the constant.
+    const small = "a".repeat(1025);
+    expect(() => store.stageClipboard(small, codeRef(small), 1024)).toThrow("Attachments must be 1024 bytes or smaller.");
+    expect(() => store.stageFileCopy(small, "", 1024)).toThrow("Attachments must be 1024 bytes or smaller.");
+  });
+
+  it("accepts text past the default ceiling when the caller raises the limit", () => {
+    const store = new AttachmentStore();
+    const text = "a".repeat(MAX_ATTACHMENT_BYTES + 1);
+    store.stageClipboard(text, codeRef(text), MAX_CONFIGURED_ATTACHMENT_BYTES);
+    expect(store.clipboardReference(text)).toEqual(codeRef(text));
   });
 
   it("keeps Copy Path text while VS Code's own copy holds the clipboard", () => {
