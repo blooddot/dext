@@ -124,6 +124,22 @@ export class DextConversationPreferences implements ConversationPreferences {
     };
   }
 
+  /** Drop preferences whose conversation no longer exists. Trimming removes whole
+   * conversations inside the history store's persist(), which has no preferences. */
+  async pruneConversations(known: readonly string[]): Promise<void> {
+    const ids = new Set(known);
+    const kept = <T>(entries: Record<string, T>): Record<string, T> =>
+      Object.fromEntries(Object.entries(entries).filter(([id]) => ids.has(id)));
+    const selections = this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {});
+    const titles = this.state.get<Record<string, string>>(TITLES_KEY, {});
+    const pins = this.pinned(), favorites = this.favorites();
+    const nextSelections = kept(selections), nextTitles = kept(titles);
+    if (Object.keys(nextSelections).length !== Object.keys(selections).length) await this.state.update(SELECTIONS_KEY, nextSelections);
+    if (Object.keys(nextTitles).length !== Object.keys(titles).length) await this.state.update(TITLES_KEY, nextTitles);
+    if (pins.some((id) => !ids.has(id))) await this.state.update(PINNED_KEY, pins.filter((id) => ids.has(id)));
+    if (favorites.some((id) => !ids.has(id))) await this.state.update(FAVORITES_KEY, favorites.filter((id) => ids.has(id)));
+  }
+
   // A deleted conversation must not linger as a pin that reopens on reload, a
   // favourite that never resolves, or a name with nothing behind it.
   async forget(sessionId: string): Promise<void> {

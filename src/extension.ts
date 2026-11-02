@@ -113,6 +113,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   }
   const preferences = new DextConversationPreferences(context.workspaceState);
+  // History trims whole conversations inside its own persist(), where no
+  // preferences object exists; clear what trimming left behind at startup.
+  await preferences.pruneConversations(history.list(true).map((session) => session.id));
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
   // Unified editor tabs: Project, API, Global Resources, and History all go through one manager so

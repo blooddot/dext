@@ -171,4 +171,24 @@ describe("conversation preferences", () => {
     expect(store.pinned()).toEqual([]);
     expect(store.favorites()).toEqual([]);
   });
+
+  it("drops the selections, titles, pins and favorites of conversations history trimmed away", async () => {
+    const store = preferences();
+    const selection = { mode: "agent" as const, permission: "workspace-write" as const, profileId: "codex", model: "gpt", reasoningEffort: "", speed: "", serviceTier: "" };
+    for (const id of ["a", "b"]) {
+      await store.setConversationSelection(id, selection);
+      await store.setTitle(id, `Title ${id}`);
+      await store.setPinned(id, true);
+      await store.setFavorite(id, true);
+    }
+
+    await store.pruneConversations(["a"]);
+
+    expect(store.conversationSelection("a")).toEqual(selection);
+    expect(store.title("a")).toBe("Title a");
+    expect(store.pinned()).toEqual(["a"]);
+    expect(store.favorites()).toEqual(["a"]);
+    expect(store.conversationSelection("b")).toBeUndefined();
+    expect(store.title("b")).toBeUndefined();
+  });
 });
