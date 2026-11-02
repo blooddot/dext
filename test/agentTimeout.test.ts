@@ -25,6 +25,25 @@ describe("agent timeout policy", () => {
     expect(controller.signal.aborted).toBe(true);
   });
 
+  it("keeps only the recent completed tool ids for late duplicate frames", () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const timeout = agentTimeout(controller, 0, 1000, 0);
+    for (let index = 0; index < 300; index += 1) timeout.toolFinished(`tool-${index}`);
+    timeout.toolStarted("tool-299");
+    vi.advanceTimersByTime(1000);
+    // The newest id is remembered, so that duplicate cannot pause idle detection.
+    expect(controller.signal.aborted).toBe(true);
+
+    const reopened = new AbortController();
+    const second = agentTimeout(reopened, 0, 1000, 0);
+    for (let index = 0; index < 300; index += 1) second.toolFinished(`tool-${index}`);
+    second.toolStarted("tool-0");
+    vi.advanceTimersByTime(2000);
+    // The oldest ids were evicted, so one of them can start a tool again.
+    expect(reopened.signal.aborted).toBe(false);
+  });
+
   it("keeps the total limit and manual stop effective during silent tools", () => {
     vi.useFakeTimers();
     const controller = new AbortController();

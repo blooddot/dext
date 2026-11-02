@@ -79,6 +79,9 @@ export function agentTimeout(
     toolFinished: (id) => {
       if (disposed || !id) return;
       completedTools.add(id);
+      // Only a late duplicate `toolStarted` needs this memory, so a long plan
+      // round keeps the newest ids instead of every call it ever made.
+      while (completedTools.size > 256) completedTools.delete(completedTools.values().next().value!);
       if (!activeTools.delete(id) || activeTools.size) { armTool(); return; }
       // Sequential tools each get the full ceiling; only one silent phase is bounded.
       if (toolTimer) clearTimeout(toolTimer);
