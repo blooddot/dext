@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runProjectQuery } from "../src/features/project/host/indexing/projectModelMcp.js";
+import { runProjectQuery } from "../src/features/project/knowledge/projectQuery.js";
 import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
 
 describe("Project query tool", () => {

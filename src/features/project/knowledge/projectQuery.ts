@@ -35,3 +35,23 @@ export function queryProject(model: ProjectModel, input: ProjectQuery) {
   const relations = model.relations.filter(edge => selected.has(edge.from) && selected.has(edge.to));
   return { revision: model.revision, nodes: model.nodes.filter(node => selected.has(node.id)), relations: relations.slice(0, query.limit * 4), truncated: truncated || relations.length > query.limit * 4 };
 }
+
+/** Query a model whose budget is enforced in characters, so a large node body
+ * cannot make one MCP reply unbounded. */
+export function runProjectQuery(model: ProjectModel, input: unknown): unknown {
+  const result = queryProject(model, projectQuerySchema.parse(input));
+  let chars = 0; const nodes = [];
+  for (const node of result.nodes) {
+    const size = JSON.stringify(node).length;
+    if (size + chars > 60_000) { result.truncated = true; break; }
+    nodes.push(node); chars += size;
+  }
+  const ids = new Set(nodes.map(node => node.id)); const relations = [];
+  for (const edge of result.relations) {
+    if (!ids.has(edge.from) || !ids.has(edge.to)) continue;
+    const size = JSON.stringify(edge).length;
+    if (size + chars > 60_000) { result.truncated = true; break; }
+    relations.push(edge); chars += size;
+  }
+  return { ...result, nodes, relations };
+}

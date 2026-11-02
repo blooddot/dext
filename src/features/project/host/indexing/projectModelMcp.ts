@@ -2,29 +2,11 @@ import { readFile, stat } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { z } from "zod";
 import { parseProjectModel } from "../../knowledge/projectModel.js";
-import { projectQuerySchema, queryProject } from "../../knowledge/projectQuery.js";
-import type { ProjectModel } from "../../contracts/projectModel.js";
+import { projectQuerySchema, runProjectQuery } from "../../knowledge/projectQuery.js";
 
 export const PROJECT_QUERY_TOOL = "project_query";
 export const PROJECT_QUERY_DESCRIPTION = "Read maintained Project norms and explicit relationships. Does not initialize, scan sources or modify Project. Partial results do not prove no impact.";
 
-export function runProjectQuery(model: ProjectModel, input: unknown): unknown {
-  const result = queryProject(model, projectQuerySchema.parse(input));
-  let chars = 0; const nodes = [];
-  for (const node of result.nodes) {
-    const size = JSON.stringify(node).length;
-    if (size + chars > 60_000) { result.truncated = true; break; }
-    nodes.push(node); chars += size;
-  }
-  const ids = new Set(nodes.map(node => node.id)); const relations = [];
-  for (const edge of result.relations) {
-    if (!ids.has(edge.from) || !ids.has(edge.to)) continue;
-    const size = JSON.stringify(edge).length;
-    if (size + chars > 60_000) { result.truncated = true; break; }
-    relations.push(edge); chars += size;
-  }
-  return { ...result, nodes, relations };
-}
 
 export async function readProjectQuery(modelPath: string, input: unknown): Promise<unknown> {
   if ((await stat(modelPath)).size > 16 * 1024 * 1024) throw new Error("Project model exceeds query read budget.");

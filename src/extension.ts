@@ -11,7 +11,7 @@ import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
 import { ProjectStore } from "./features/project/host/persistence/projectStore.js";
 import { ProjectPlanService, projectWorkspaceKey } from "./features/project/host/projectPlanService.js";
 import { ProjectPlanReconciler } from "./features/project/host/projectPlanReconcile.js";
-import { runProjectQuery } from "./features/project/host/indexing/projectModelMcp.js";
+import { runProjectQuery } from "./features/project/knowledge/projectQuery.js";
 import type { ProjectEditorProvider } from "./features/project/host/projectEditorProvider.js";
 import { VscodeProjectFileHost, effectiveProjectWorkspaceSettings } from "./features/project/host/projectPanelDataSource.js";
 import { projectToolSettingsFromDefinition } from "./features/project/contracts/projectSettings.js";
