@@ -1,60 +1,64 @@
 import MarkdownIt from "markdown-it";
 import "../../media/styles.css";
+import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
+import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
+import type { DextHistoryRecord, DextHistorySession } from "../features/conversations/contracts/history.js";
+import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
 import { prepareHistoryTrace } from "../features/conversations/domain/agentTraceReplay.js";
-import type {
-AgentStreamEvent,
-AgentTokenUsage,
-InputExecutionResponse,
-RuntimeResponse,
-WorkflowStepResponse
-} from "../shared/contracts/types.js";
-import type { UiFormAnswers } from "../shared/contracts/uiForm.js";
+import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
+import { renderTurnInput, renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
+import {
+  formatTurnTokenUsage,
+  presentTurn,
+  resultCopyText,
+  updateTurnTokenUsage
+} from "../features/conversations/presentation/turnPresentation.js";
 import { RESOURCE_DIRECTORIES, RESOURCE_ICONS, RESOURCE_LABELS, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import { FileSearchClient } from "../features/workspace/browser/fileSearchClient.js";
-import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
-import type { DextHistoryRecord, DextHistorySession } from "../features/conversations/contracts/history.js";
-import { markdownCodeCopy } from "../shared/lib/markdownCopy.js";
-import { renderTurnInput, renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
-import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
-import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
-import {
-presentTurn, formatTurnTokenUsage, updateTurnTokenUsage, resultCopyText
-} from "../features/conversations/presentation/turnPresentation.js";
-import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
 import type { SidebarState, WebviewRequest, WebviewResponse } from "../platform/webviewProtocol.js";
+import type {
+  AgentStreamEvent,
+  AgentTokenUsage,
+  InputExecutionResponse,
+  RuntimeResponse,
+  WorkflowStepResponse
+} from "../shared/contracts/types.js";
+import type { UiFormAnswers } from "../shared/contracts/uiForm.js";
+import { formatDuration } from "../shared/lib/duration.js";
+import { markdownCodeCopy } from "../shared/lib/markdownCopy.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
-import { colorizeSource } from "./sourceHighlight.js";
-import { formatDuration } from "../shared/lib/duration.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
+import { colorizeSource } from "./sourceHighlight.js";
 
-import { planExecutionLabel } from "../features/conversations/presentation/agentTodoPresentation.js";
-import { OutputScrollController } from "../features/conversations/browser/outputScrollController.js";
-import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
-import { ComposerDraftStore, type DraftAttachment } from "../features/conversations/browser/composerController.js";
-import { renderConversationTabs } from "../features/conversations/browser/conversationTabs.js";
-import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
-import type { PlanProjectContext } from "../shared/contracts/planProject.js";
-import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
-import { renderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
-import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
-import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
-import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../features/agents/domain/harnessPresetDefault.js";
 import type { HarnessPresetOption } from "../features/agents/contracts/agent.js";
+import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../features/agents/domain/harnessPresetDefault.js";
 import { presentAgentSelection } from "../features/agents/presentation/agentSelectionDefaults.js";
-import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
 import { AgentInputView } from "../features/conversations/browser/agentInputView.js";
 import { AgentTodoView } from "../features/conversations/browser/agentTodoView.js";
+import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
+import { ComposerDraftStore, type DraftAttachment } from "../features/conversations/browser/composerController.js";
 import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
+import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
+import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
+import { renderConversationTabs } from "../features/conversations/browser/conversationTabs.js";
+import { OutputScrollController } from "../features/conversations/browser/outputScrollController.js";
+import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
+import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
 import {
   groupSkills, packCheckState, selectionLabel, togglePack, toggleSkill
 } from "../features/conversations/browser/skillSelection.js";
-import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
+import { planExecutionLabel } from "../features/conversations/presentation/agentTodoPresentation.js";
+import { terminalSegments } from "../features/conversations/presentation/terminalText.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
-import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
-import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
+import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
+import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
+import { renderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
+import type { PlanProjectContext } from "../shared/contracts/planProject.js";
+import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
@@ -1713,166 +1717,19 @@ function jsonOutput(content: string): HTMLElement {
 }
 
 
-const ANSI_COLOR_CLASSES = [
-  "ansi-black", "ansi-red", "ansi-green", "ansi-yellow",
-  "ansi-blue", "ansi-magenta", "ansi-cyan", "ansi-white",
-  "ansi-bright-black", "ansi-bright-red", "ansi-bright-green", "ansi-bright-yellow",
-  "ansi-bright-blue", "ansi-bright-magenta", "ansi-bright-cyan", "ansi-bright-white"
-];
-
-const ANSI_COLORS = new Map<number, string>([
-  [30, "ansi-black"], [31, "ansi-red"], [32, "ansi-green"], [33, "ansi-yellow"],
-  [34, "ansi-blue"], [35, "ansi-magenta"], [36, "ansi-cyan"], [37, "ansi-white"],
-  [90, "ansi-bright-black"], [91, "ansi-bright-red"], [92, "ansi-bright-green"], [93, "ansi-bright-yellow"],
-  [94, "ansi-bright-blue"], [95, "ansi-bright-magenta"], [96, "ansi-bright-cyan"], [97, "ansi-bright-white"]
-]);
-
-const ANSI_PALETTE = [
-  "#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
-  "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff"
-];
-
-function ansi256Color(value: number): string {
-  if (value < 16) return ANSI_PALETTE[value] ?? ANSI_PALETTE[7]!;
-  if (value >= 232) {
-    const gray = 8 + (value - 232) * 10;
-    return `rgb(${gray}, ${gray}, ${gray})`;
-  }
-  const index = value - 16;
-  const red = Math.floor(index / 36);
-  const green = Math.floor((index % 36) / 6);
-  const blue = index % 6;
-  const channel = (component: number): number => component === 0 ? 0 : 55 + component * 40;
-  return `rgb(${channel(red)}, ${channel(green)}, ${channel(blue)})`;
-}
-
-function normalizeTerminalText(content: string): string {
-  // Progress tools redraw a line with a bare carriage return. Resolve that
-  // redraw before putting the text into a webview <pre>, which cannot emulate
-  // a terminal cursor.
-  return content
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
-    .join("\n");
-}
-
-/**
- * A number of CLIs (notably when launched through a JSON/non-TTY adapter)
- * deliberately omit ANSI SGR codes. Keep the output readable in that case by
- * highlighting the small, tool-agnostic vocabulary used by test runners and
- * shell prompts. This is only a fallback; real ANSI styling always wins.
- */
-function plainTerminalClass(line: string): string | undefined {
-  if (/^\s*(?:[>$]|PS [^>]*>)\s+/.test(line)) return "ansi-cyan";
-  if (/\b(?:fail(?:ed|ure)?|errors?|fatal)\b|[✗×]/i.test(line)) return "ansi-red";
-  if (/\b(?:pass(?:ed)?|success(?:ful)?|succeed(?:ed)?|ok)\b|✓/i.test(line)) return "ansi-green";
-  if (/^\s*(?:RUN|Test Files|Tests|Snapshots|Start|Duration)\b/.test(line)) return "ansi-bright-blue";
-  return undefined;
-}
-
 function terminalText(content: string): DocumentFragment {
-  content = normalizeTerminalText(content);
   const fragment = document.createDocumentFragment();
-  const active = new Set<string>();
-  let foreground: string | undefined;
-  const escape = String.fromCharCode(27);
-  const bell = String.fromCharCode(7);
-  const ansi = new RegExp(
-    `${escape}(?:\\[([0-9;]*)m|\\[[0-?]*[ -/]*[@-~]|\\][^${bell}]*(?:${bell}|${escape}\\\\))`,
-    "g"
-  );
-  let cursor = 0;
-  const hasAnsi = content.includes(escape);
-
-  const appendText = (value: string): void => {
-    if (!value) return;
-    if (active.size === 0 && !foreground) {
-      if (hasAnsi) {
-        fragment.append(document.createTextNode(value));
-        return;
-      }
-      const lines = value.split("\n");
-      lines.forEach((line, index) => {
-        const className = plainTerminalClass(line);
-        if (className) {
-          const span = document.createElement("span");
-          span.className = className;
-          span.textContent = line;
-          fragment.append(span);
-        } else {
-          fragment.append(document.createTextNode(line));
-        }
-        if (index < lines.length - 1) fragment.append(document.createTextNode("\n"));
-      });
-      return;
+  for (const segment of terminalSegments(content)) {
+    if (!segment.classes.length && segment.color === undefined) {
+      fragment.append(document.createTextNode(segment.text));
+      continue;
     }
     const span = document.createElement("span");
-    span.className = [...active].join(" ");
-    if (foreground) span.style.color = foreground;
-    span.textContent = value;
+    span.className = segment.classes.join(" ");
+    if (segment.color !== undefined) span.style.color = segment.color;
+    span.textContent = segment.text;
     fragment.append(span);
-  };
-
-  for (const match of content.matchAll(ansi)) {
-    appendText(content.slice(cursor, match.index));
-    const codes = match[1] === undefined ? [] : (match[1] ? match[1].split(";").map(Number) : [0]);
-    for (let index = 0; index < codes.length; index += 1) {
-      const code = codes[index] ?? 0;
-      if (code === 0) {
-        active.clear();
-        foreground = undefined;
-      } else if (code === 1) {
-        active.add("ansi-bold");
-      } else if (code === 2) {
-        active.add("ansi-dim");
-      } else if (code === 3) {
-        active.add("ansi-italic");
-      } else if (code === 4) {
-        active.add("ansi-underline");
-      } else if (code === 22) {
-        active.delete("ansi-bold");
-        active.delete("ansi-dim");
-      } else if (code === 23) {
-        active.delete("ansi-italic");
-      } else if (code === 24) {
-        active.delete("ansi-underline");
-      } else if (code === 39) {
-        for (const color of ANSI_COLOR_CLASSES) active.delete(color);
-        foreground = undefined;
-      } else if (code === 49) {
-        // Background colors are intentionally ignored to keep output readable.
-      } else {
-        const color = ANSI_COLORS.get(code);
-        if (color) {
-          for (const existing of ANSI_COLOR_CLASSES) active.delete(existing);
-          active.add(color);
-          foreground = undefined;
-          continue;
-        }
-        if (code >= 40 && code <= 47 || code >= 100 && code <= 107 || code === 7 || code === 27) {
-          // Do not reproduce terminal reverse/background blocks in the webview.
-          continue;
-        }
-        if ((code === 38 || code === 48) && codes[index + 1] === 5 && codes[index + 2] !== undefined) {
-          const value = ansi256Color(codes[index + 2]!);
-          if (code === 38) foreground = value;
-          // 48;5/48;2 background colors are deliberately ignored.
-          index += 2;
-          continue;
-        }
-        if ((code === 38 || code === 48) && codes[index + 1] === 2 && codes[index + 4] !== undefined) {
-          const [red, green, blue] = codes.slice(index + 2, index + 5);
-          const value = `rgb(${red}, ${green}, ${blue})`;
-          if (code === 38) foreground = value;
-          // 48;2 background colors are deliberately ignored.
-          index += 4;
-        }
-      }
-    }
-    cursor = match.index + match[0].length;
   }
-  appendText(content.slice(cursor));
   return fragment;
 }
 

@@ -19,6 +19,7 @@ import {
   normalizeInputReferenceSource,
   type ContextReferenceOccurrence
 } from "../../workspace/domain/fileReference.js";
+import { terminalSegments } from "./terminalText.js";
 
 export function escapeHtml(value: string): string {
   return value.replace(/[&><"]/g, (character) => ({
@@ -111,121 +112,14 @@ function historySessionActions(session: DextHistorySession, favorite: boolean): 
   ].join("");
 }
 
-const ANSI_COLOR_CLASSES = [
-  "ansi-black", "ansi-red", "ansi-green", "ansi-yellow",
-  "ansi-blue", "ansi-magenta", "ansi-cyan", "ansi-white",
-  "ansi-bright-black", "ansi-bright-red", "ansi-bright-green", "ansi-bright-yellow",
-  "ansi-bright-blue", "ansi-bright-magenta", "ansi-bright-cyan", "ansi-bright-white"
-];
-
-const ANSI_COLORS = new Map<number, string>([
-  [30, "ansi-black"], [31, "ansi-red"], [32, "ansi-green"], [33, "ansi-yellow"],
-  [34, "ansi-blue"], [35, "ansi-magenta"], [36, "ansi-cyan"], [37, "ansi-white"],
-  [90, "ansi-bright-black"], [91, "ansi-bright-red"], [92, "ansi-bright-green"], [93, "ansi-bright-yellow"],
-  [94, "ansi-bright-blue"], [95, "ansi-bright-magenta"], [96, "ansi-bright-cyan"], [97, "ansi-bright-white"]
-]);
-
-const ANSI_PALETTE = [
-  "#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
-  "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff"
-];
-
-function ansi256Color(value: number): string {
-  if (value < 16) return ANSI_PALETTE[value] ?? ANSI_PALETTE[7]!;
-  if (value >= 232) {
-    const gray = 8 + (value - 232) * 10;
-    return `rgb(${gray}, ${gray}, ${gray})`;
-  }
-  const index = value - 16;
-  const red = Math.floor(index / 36);
-  const green = Math.floor((index % 36) / 6);
-  const blue = index % 6;
-  const channel = (component: number): number => component === 0 ? 0 : 55 + component * 40;
-  return `rgb(${channel(red)}, ${channel(green)}, ${channel(blue)})`;
-}
-
-function plainTerminalClass(line: string): string | undefined {
-  if (/^\s*(?:[>$]|PS [^>]*>)\s+/.test(line)) return "ansi-cyan";
-  if (/\b(?:fail(?:ed|ure)?|errors?|fatal)\b|[✗×]/i.test(line)) return "ansi-red";
-  if (/\b(?:pass(?:ed)?|success(?:ful)?|succeed(?:ed)?|ok)\b|✓/i.test(line)) return "ansi-green";
-  if (/^\s*(?:RUN|Test Files|Tests|Snapshots|Start|Duration)\b/.test(line)) return "ansi-bright-blue";
-  return undefined;
-}
-
 /** Render terminal ANSI SGR sequences as safe, theme-aware HTML. */
 export function highlightTerminal(source: string): string {
-  const content = source
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
-    .join("\n");
-  const active = new Set<string>();
-  let foreground: string | undefined;
-  let html = "";
-  const escape = String.fromCharCode(27);
-  const bell = String.fromCharCode(7);
-  const ansi = new RegExp(
-    `${escape}(?:\\[([0-9;]*)m|\\[[0-?]*[ -/]*[@-~]|\\][^${bell}]*(?:${bell}|${escape}\\\\))`,
-    "g"
-  );
-  const hasAnsi = content.includes(escape);
-  let cursor = 0;
-  const appendText = (value: string): void => {
-    if (!value) return;
-    const text = escapeHtml(value);
-    if (active.size === 0 && !foreground) {
-      if (hasAnsi) {
-        html += text;
-      } else {
-        html += value.split("\n").map((line) => {
-          const className = plainTerminalClass(line);
-          return className ? `<span class="${className}">${escapeHtml(line)}</span>` : escapeHtml(line);
-        }).join("\n");
-      }
-      return;
-    }
-    const style = foreground ? ` style="color:${foreground}"` : "";
-    html += `<span class="${[...active].join(" ")}"${style}>${text}</span>`;
-  };
-
-  for (const match of content.matchAll(ansi)) {
-    appendText(content.slice(cursor, match.index));
-    const codes = match[1] === undefined ? [] : (match[1] ? match[1].split(";").map(Number) : [0]);
-    for (let index = 0; index < codes.length; index += 1) {
-      const code = codes[index] ?? 0;
-      if (code === 0) {
-        active.clear();
-        foreground = undefined;
-      } else if (code === 1) active.add("ansi-bold");
-      else if (code === 2) active.add("ansi-dim");
-      else if (code === 3) active.add("ansi-italic");
-      else if (code === 4) active.add("ansi-underline");
-      else if (code === 22) { active.delete("ansi-bold"); active.delete("ansi-dim"); }
-      else if (code === 23) active.delete("ansi-italic");
-      else if (code === 24) active.delete("ansi-underline");
-      else if (code === 39) { for (const color of ANSI_COLOR_CLASSES) active.delete(color); foreground = undefined; }
-      else {
-        const color = ANSI_COLORS.get(code);
-        if (color) {
-          for (const existing of ANSI_COLOR_CLASSES) active.delete(existing);
-          active.add(color);
-          foreground = undefined;
-        } else if ((code === 38 || code === 48) && codes[index + 1] === 5 && codes[index + 2] !== undefined) {
-          if (code === 38) foreground = ansi256Color(codes[index + 2]!);
-          index += 2;
-        } else if ((code === 38 || code === 48) && codes[index + 1] === 2 && codes[index + 4] !== undefined) {
-          if (code === 38) {
-            const [red, green, blue] = codes.slice(index + 2, index + 5);
-            foreground = `rgb(${red}, ${green}, ${blue})`;
-          }
-          index += 4;
-        }
-      }
-    }
-    cursor = match.index + match[0].length;
-  }
-  appendText(content.slice(cursor));
-  return html;
+  return terminalSegments(source).map((segment) => {
+    const text = escapeHtml(segment.text);
+    if (!segment.classes.length && segment.color === undefined) return text;
+    const style = segment.color === undefined ? "" : ` style="color:${segment.color}"`;
+    return `<span class="${segment.classes.join(" ")}"${style}>${text}</span>`;
+  }).join("");
 }
 
 function referenceIcon(reference: ContextReferenceOccurrence): string {
