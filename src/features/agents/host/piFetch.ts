@@ -21,8 +21,12 @@ class Rejected extends Error {}
 /** Loopback, private, link-local, multicast and unspecified addresses are never fetched. */
 export function piAddressBlocked(address: string): boolean {
   const bare = address.replace(/^\[|]$/g, "").toLowerCase();
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(bare);
+  const mapped = /^::ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(bare);
   if (mapped?.[1]) return piAddressBlocked(mapped[1]);
+  if (mapped?.[2] && mapped[3]) {
+    const hi = parseInt(mapped[2], 16), lo = parseInt(mapped[3], 16);
+    return piAddressBlocked(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
   if (isIP(bare) === 6) return ["::", "::1"].includes(bare) || /^(f[cd]|fe[89ab]|ff)/.test(bare);
   const octets = bare.split(".").map(Number);
   if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return true;

@@ -50,11 +50,14 @@ describe("piFetch", () => {
     }
   });
   it("rejects local and private targets before any request", async () => {
-    const blocked = ["localhost", "127.0.0.1", "10.0.0.5", "172.16.3.4", "192.168.1.1", "169.254.169.254", "[::1]", "[fd00::1]", "[fe80::1]", "0.0.0.0", "dext.local"];
+    const blocked = ["localhost", "127.0.0.1", "10.0.0.5", "172.16.3.4", "192.168.1.1", "169.254.169.254", "[::1]", "[fd00::1]", "[fe80::1]", "0.0.0.0", "dext.local", "[::ffff:a9fe:a9fe]", "[::ffff:a00:1]"];
     for (const host of blocked) await expect(piFetch(`http://${host}/`, signal(), { fetch: offlineFetch, resolve: publicHost })).resolves.toMatchObject({ status: "rejected" });
     await expect(piFetch("http://dext.test/", signal(), { fetch: offlineFetch, resolve: async () => ["10.1.2.3"] })).resolves.toMatchObject({ status: "rejected" });
     expect(piAddressBlocked("1.1.1.1")).toBe(false);
     expect(piAddressBlocked("::ffff:127.0.0.1")).toBe(true);
+    expect(piAddressBlocked("::ffff:a9fe:a9fe")).toBe(true);
+    expect(piAddressBlocked("::ffff:a00:1")).toBe(true);
+    await expect(piFetch("http://[::ffff:a9fe:a9fe]/", signal(), { fetch: offlineFetch, resolve: publicHost })).resolves.toMatchObject({ status: "rejected" });
   });
   it("follows redirects itself and gives up after five", async () => {
     const before = hits;
