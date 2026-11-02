@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentInputBroker } from "../src/features/conversations/host/agentInputBroker.js";
-import { agentInputForm } from "../src/features/conversations/presentation/uiInteractionPresentation.js";
+import { agentInputForm, answeredCardTitle, presentAnswerChoice, presentAnswerField } from "../src/features/conversations/presentation/uiInteractionPresentation.js";
 const question = { id: "request", blocking: true, questions: [{ id: "q", header: "", question: "Which?", options: [] }] };
 const multi = { id: "request", blocking: true, questions: [{ id: "q", header: "", question: "Which?", multiSelect: true,
   detail: "Pick any", options: [{ label: "A", description: "" }, { label: "B", description: "" }] }] };
@@ -27,6 +27,25 @@ describe("live question ownership", () => {
     const next = broker.request("session", "next", question, new AbortController().signal);
     broker.dispose(); expect(await next).toBeNull();
     expect(await broker.request("session", "turn", question, controller.signal)).toBeNull();
+  });
+});
+
+describe("settled answer presentation", () => {
+  it("marks picked choices, hides a secret answer and words the title once", () => {
+    const field = agentInputForm(multi).fields[0]!;
+    expect(presentAnswerField(field, { type: "checkbox", selected: ["B"], custom: "Mine" })).toEqual({
+      label: "Which?", answer: "B, Mine",
+      choices: [
+        { label: "A", selected: false },
+        { label: "B", selected: true },
+        { label: "Mine", selected: true, custom: true }
+      ]
+    });
+    expect(presentAnswerField({ ...field, secret: true }, { type: "checkbox", selected: ["B"] }))
+      .toEqual({ label: "Which?", answer: "Answer hidden", choices: [] });
+    expect(presentAnswerChoice({ label: "Mine", selected: true, custom: true })).toEqual({ icon: "check", source: "Other", label: "Mine" });
+    expect(answeredCardTitle("Which?", true, "Submit answer")).toBe("Which? — Submitted (Submit answer)");
+    expect(answeredCardTitle("Which?", false)).toBe("Which? — Closed");
   });
 });
 

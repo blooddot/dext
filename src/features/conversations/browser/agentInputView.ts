@@ -1,6 +1,6 @@
 import type { AgentInputAnswers, AgentInputState } from "../../../shared/contracts/types.js";
 import type { UiField, UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../shared/contracts/uiForm.js";
-import { agentInputForm, agentFormAnswers, uiFieldChoices, uiResultText, type AnswerChoice } from "../presentation/uiInteractionPresentation.js";
+import { agentInputForm, agentFormAnswers, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerChoice } from "../presentation/uiInteractionPresentation.js";
 import { InteractionForm } from "./interactionForm.js";
 import { InteractionDialog } from "./interactionDialog.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
@@ -110,7 +110,7 @@ export class AgentInputView {
     const disclosure = document.createElement("details"); disclosure.className = "agent-input-disclosure";
     const summary = document.createElement("summary");
     const chevron = document.createElement("i"); chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-    const title = document.createElement("strong"); title.textContent = `${card.form.title} — ${card.status === "submitted" ? "Submitted" : "Closed"}${action ? ` (${action.label})` : ""}`;
+    const title = document.createElement("strong"); title.textContent = answeredCardTitle(card.form.title, card.status === "submitted", action?.label);
     summary.append(chevron, title); disclosure.append(summary);
     const body = document.createElement("div"); body.className = "agent-input-disclosure-body";
     if (card.form.description) body.append(interactionMarkdown(card.form.description));
@@ -123,33 +123,32 @@ export class AgentInputView {
    * gone. Fields without options keep their answer as plain text. */
   private field(card: Card, field: UiField): HTMLElement {
     const fieldBody = document.createElement("div"); fieldBody.className = "agent-input-field";
-    const label = document.createElement("strong"); label.textContent = field.label; fieldBody.append(label);
-    const answer = card.answers?.[field.id];
-    const text = field.secret ? "Answer hidden" : answer ? uiResultText(answer) : "No answer submitted";
-    const choices = field.secret ? [] : uiFieldChoices(field, answer);
-    if (!choices.length) {
-      const value = document.createElement("p"); value.className = "agent-input-answer"; value.textContent = text;
+    const presented = presentAnswerField(field, card.answers?.[field.id]);
+    const label = document.createElement("strong"); label.textContent = presented.label; fieldBody.append(label);
+    if (!presented.choices.length) {
+      const value = document.createElement("p"); value.className = "agent-input-answer"; value.textContent = presented.answer;
       fieldBody.append(value);
       return fieldBody;
     }
     const list = document.createElement("ul"); list.className = "agent-input-choices";
-    for (const choice of choices) list.append(this.choice(choice));
+    for (const choice of presented.choices) list.append(this.choice(choice));
     fieldBody.append(list);
     return fieldBody;
   }
   private choice(choice: AnswerChoice): HTMLElement {
+    const presented = presentAnswerChoice(choice);
     const item = document.createElement("li");
     item.className = `agent-input-choice${choice.selected ? " selected" : ""}${choice.custom ? " custom" : ""}`;
     const mark = document.createElement("i");
-    mark.className = `codicon codicon-${choice.selected ? "check" : "blank"}`; mark.setAttribute("aria-hidden", "true");
+    mark.className = `codicon codicon-${presented.icon}`; mark.setAttribute("aria-hidden", "true");
     const text = document.createElement("span");
-    if (choice.custom) {
-      const source = document.createElement("small"); source.className = "agent-input-choice-source"; source.textContent = "Other";
+    if (presented.source) {
+      const source = document.createElement("small"); source.className = "agent-input-choice-source"; source.textContent = presented.source;
       text.append(source);
     }
-    text.append(choice.label);
-    if (choice.description) {
-      const description = document.createElement("small"); description.textContent = choice.description;
+    text.append(presented.label);
+    if (presented.description) {
+      const description = document.createElement("small"); description.textContent = presented.description;
       text.append(description);
     }
     item.append(mark, text);

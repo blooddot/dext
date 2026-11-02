@@ -55,6 +55,36 @@ export function uiFieldChoices(field: UiField, answer: UiFieldAnswer | undefined
   return answerChoices(field.options, [...selection, custom]);
 }
 
+/** A settled field: its answer text and the choices it offered, if any. The live
+ * card and History both render this, so they cannot drift apart. */
+export interface AnswerFieldPresentation { label: string; answer: string; choices: readonly AnswerChoice[] }
+
+export function presentAnswerField(field: UiField, answer: UiFieldAnswer | undefined): AnswerFieldPresentation {
+  return {
+    label: field.label,
+    answer: field.secret ? "Answer hidden" : answer ? uiResultText(answer) : "No answer submitted",
+    choices: field.secret ? [] : uiFieldChoices(field, answer)
+  };
+}
+
+/** One row of a settled answer: the mark, the optional "Other" source label and
+ * the description. */
+export interface AnswerChoicePresentation { icon: "check" | "blank"; source?: "Other"; label: string; description?: string }
+
+export function presentAnswerChoice(choice: AnswerChoice): AnswerChoicePresentation {
+  return {
+    icon: choice.selected ? "check" : "blank",
+    ...(choice.custom ? { source: "Other" as const } : {}),
+    label: choice.label,
+    ...(choice.description ? { description: choice.description } : {})
+  };
+}
+
+/** Both views word a settled card the same way. */
+export function answeredCardTitle(title: string, submitted: boolean, actionLabel?: string): string {
+  return `${title} — ${submitted ? "Submitted" : "Closed"}${actionLabel ? ` (${actionLabel})` : ""}`;
+}
+
 /** Used by both live output and history, including results unknown to this version. */
 export function uiResultText(value: unknown): string {
   if (value === null || value === undefined) return "";
