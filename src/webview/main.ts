@@ -30,6 +30,7 @@ import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
+import { findImageItem, ImageAttachments } from "./imageAttachments.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { colorizeSource } from "./sourceHighlight.js";
 
@@ -40,7 +41,7 @@ import { presentAgentSelection } from "../features/agents/presentation/agentSele
 import { AgentInputView } from "../features/conversations/browser/agentInputView.js";
 import { AgentTodoView } from "../features/conversations/browser/agentTodoView.js";
 import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
-import { ComposerDraftStore, type DraftAttachment } from "../features/conversations/browser/composerController.js";
+import { ComposerDraftStore } from "../features/conversations/browser/composerController.js";
 import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
 import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
 import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
@@ -270,7 +271,12 @@ let agentProgressState = "Thinking";
 let agentTokenUsage: AgentTokenUsage | undefined;
 let pendingAgentEventBatches: Array<{ sessionId: string; events: AgentStreamEvent[] }> = [];
 let agentEventBatchFrame: number | undefined;
-const imageAttachments = new Map<string, HTMLElement>();
+const attachments = new ImageAttachments({
+  bar: elements.attachmentBar,
+  post: (message) => vscode.postMessage(message),
+  removeReference: (relativePath) => editor.removeFileReference(relativePath),
+  onChanged: () => persistComposerDraft()
+});
 
 function createTurnQuestions(turnId: string, sessionId: string | undefined): AgentInputView {
   return new AgentInputView((requestId, answers) => {
@@ -2202,14 +2208,6 @@ function renderOutputSession(session: DextHistorySession): void {
   });
 }
 
-function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
-  if (!data) return undefined;
-  for (const item of data.items) {
-    if (item.kind === "file" && item.type.startsWith("image/")) return item;
-  }
-  return undefined;
-}
-
 function renderOutputSessionRef(sessionId: string, signature: string, switchId?: number, hostInitiated = false): void {
   if (browser.renderedId === sessionId && browser.renderedSignature === signature) {
     return;
@@ -2236,69 +2234,21 @@ function renderOutputSessionRef(sessionId: string, signature: string, switchId?:
   scrollResultToBottom();
 }
 
-function addImageAttachment(relativePath: string, webviewUri: string, name: string): void {
-  if (imageAttachments.has(relativePath)) return;
-  const chip = document.createElement("div");
-  chip.className = "image-attachment";
-  const image = document.createElement("img");
-  image.src = webviewUri;
-  image.alt = name;
-  image.title = `Open ${name}`;
-  image.setAttribute("role", "button");
-  image.tabIndex = 0;
-  // The chip opens the same editor tab as an @ reference to this attachment.
-  const openPreview = (): void => vscode.postMessage({ type: "openFileReference", reference: relativePath });
-  image.addEventListener("click", openPreview);
-  image.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    openPreview();
-  });
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "image-attachment-remove";
-  remove.setAttribute("aria-label", "Remove image");
-  remove.textContent = "\u00d7";
-  remove.addEventListener("click", () => {
-    chip.remove();
-    imageAttachments.delete(relativePath);
-    elements.attachmentBar.classList.toggle("hidden", imageAttachments.size === 0);
-    activeImageAttachmentMetadata.delete(relativePath);
-    editor.removeFileReference(relativePath);
-    vscode.postMessage({ type: "deleteImageAttachment", relativePath });
-  });
-  chip.append(image, remove);
-  elements.attachmentBar.append(chip);
-  elements.attachmentBar.classList.remove("hidden");
-  imageAttachments.set(relativePath, chip);
-  activeImageAttachmentMetadata.set(relativePath, { relativePath, webviewUri, name });
-  persistComposerDraft();
-}
-
-const activeImageAttachmentMetadata = new Map<string, DraftAttachment>();
-
-function clearRenderedAttachments(): void {
-  for (const chip of imageAttachments.values()) chip.remove();
-  imageAttachments.clear();
-  activeImageAttachmentMetadata.clear();
-  elements.attachmentBar.classList.add("hidden");
-}
-
 function persistComposerDraft(): void {
   if (!browser.activeId || restoringDraft) return;
   // The store drops attachments whose @ reference no longer appears in the
   // editor, so removing one directly does not resurrect its chip later.
-  drafts.save(browser.activeId, editor.source, [...activeImageAttachmentMetadata.values()]);
+  drafts.save(browser.activeId, editor.source, attachments.all());
 }
 
 function restoreComposerDraft(sessionId: string): void {
   const draft = drafts.draft(sessionId);
   restoringDraft = true;
   try {
-    clearRenderedAttachments();
+    attachments.clear();
     editor.setValue(draft?.source ?? "");
     for (const attachment of draft?.attachments ?? []) {
-      addImageAttachment(attachment.relativePath, attachment.webviewUri, attachment.name);
+      attachments.add(attachment.relativePath, attachment.webviewUri, attachment.name);
     }
   } finally {
     restoringDraft = false;
@@ -2319,10 +2269,7 @@ function clearSubmittedInput(): void {
   // The chips stand for references that just left the composer with the turn,
   // so they go with it. The files stay on disk because the recorded turn and
   // its history entry still point at them.
-  for (const chip of imageAttachments.values()) chip.remove();
-  imageAttachments.clear();
-  activeImageAttachmentMetadata.clear();
-  elements.attachmentBar.classList.add("hidden");
+  attachments.clear();
   persistComposerDraft();
 }
 
@@ -2645,7 +2592,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     editor.focus();
   }
   if (message.type === "imageAttachment") {
-    addImageAttachment(message.relativePath, message.webviewUri, message.name);
+    attachments.add(message.relativePath, message.webviewUri, message.name);
     editor.insertFileReferences([`@${message.relativePath}`]);
   }
   if (message.type === "outputSession") {

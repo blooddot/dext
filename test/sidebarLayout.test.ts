@@ -576,6 +576,7 @@ describe("sidebar panel layout", () => {
 
   it("clears submitted text and its attachment chips without deleting the files", async () => {
     const main = await source("src/webview/main.ts");
+    const attachments = await source("src/webview/imageAttachments.ts");
     const sidebar = await source("src/app/sidebarProvider.ts");
     expect(main).toMatch(/vscode\.postMessage\(\{ type: "executeInput", mode: inputMode, source \}\);[\s\S]*?clearSubmittedInput\(\);/);
     const clear = main.slice(
@@ -584,13 +585,13 @@ describe("sidebar panel layout", () => {
     );
     expect(clear).toContain('editor.setValue("");');
     // The chips stood for references that left with the turn, so they go too.
-    expect(clear).toContain("imageAttachments.clear();");
-    expect(clear).toContain('elements.attachmentBar.classList.add("hidden");');
+    expect(clear).toContain("attachments.clear();");
+    expect(attachments).toContain('this.host.bar.classList.add("hidden");');
     // The recorded turn still points at those files, so submitting must not
     // ask the host to delete them.
     expect(clear).not.toContain("deleteImageAttachment");
     expect(main).not.toContain("function clearImageAttachments");
-    expect(main).toMatch(/image-attachment-remove[\s\S]*?type: "deleteImageAttachment"/);
+    expect(attachments).toMatch(/image-attachment-remove[\s\S]*?type: "deleteImageAttachment"/);
     // `dext.running` and Stop are still the sidebar's context/commands, but the
     // live execution they describe now belongs to the coordinator.
     const execution = gatedExecution();

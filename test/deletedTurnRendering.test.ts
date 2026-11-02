@@ -8,7 +8,7 @@ const main = readFileSync("src/webview/main.ts", "utf8");
 const browserModule = readFileSync("src/features/conversations/browser/conversationController.ts", "utf8");
 const source = [
   browserModule.slice(browserModule.indexOf("export function conversationSignature("), browserModule.indexOf("/** Keep the rendered DOM")).replace("export function conversationSignature", "function conversationSignature"),
-  main.slice(main.indexOf("function renderOutputSession("), main.indexOf("function findImageItem(")),
+  main.slice(main.indexOf("function renderOutputSession("), main.indexOf("function renderOutputSessionRef(")),
   `function receiveSnapshot(message) { ${main.slice(main.indexOf('  if (message.type === "outputSession") {'), main.indexOf('  if (message.type === "outputSessionRef") {'))} }`
 ].join("\n");
 const renderer = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
