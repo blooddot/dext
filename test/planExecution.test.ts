@@ -31,6 +31,33 @@ describe("plan continuation decisions", () => {
       if (i < 3) expect(outcome).toBeUndefined(); else expect(outcome?.status).toBe("incomplete");
     }
   });
+  it("keeps a repeated call old after the activity window passes it, so repeats cannot reset the stall counter", () => {
+    const run = new PlanExecution(tasks());
+    const tool = (text: string) => ({ phase: "tool" as const, title: "Check", text });
+    run.beginRound();
+    for (let i = 0; i < 256; i++) run.observe(tool(`result ${i}`));
+    expect(run.finishRound()).toBeUndefined();
+    // Use the oldest entry again, then one new call pushes the window past it.
+    run.beginRound(); run.observe(tool("result 0")); run.observe(tool("result 256"));
+    expect(run.finishRound()).toBeUndefined();
+    let outcome: ReturnType<PlanExecution["finishRound"]>;
+    for (let i = 0; i < 3; i++) { run.beginRound(); run.observe(tool("result 0")); outcome = run.finishRound(); }
+    expect(outcome).toMatchObject({ status: "incomplete", reason: expect.stringContaining("three consecutive rounds") });
+  });
+  it("keeps a repeated call old after the activity window overflows, so repeats cannot reset the stall counter", () => {
+    const run = new PlanExecution(tasks());
+    const tool = (text: string) => ({ phase: "tool" as const, title: "Check", text });
+    run.beginRound();
+    for (let i = 0; i < 300; i++) run.observe(tool(`result ${i}`));
+    expect(run.finishRound()).toBeUndefined();
+    // 300 distinct calls overflow the 256-entry window. A repeating loop keeps hitting the
+    // oldest entry the window still holds, and the refresh keeps it there instead of
+    // letting the window evict it and read the same call as new activity again.
+    const repeated = `result ${300 - 256}`;
+    let outcome: ReturnType<PlanExecution["finishRound"]>;
+    for (let i = 0; i < 3; i++) { run.beginRound(); run.observe(tool(repeated)); outcome = run.finishRound(); }
+    expect(outcome).toMatchObject({ status: "incomplete", reason: expect.stringContaining("three consecutive rounds") });
+  });
   it("lets new tool work continue a large task and enforces an explicit round ceiling", () => {
     const run = new PlanExecution(tasks(), 5);
     for (let i = 0; i < 5; i++) {

@@ -25,7 +25,10 @@ export class PlanExecution {
   observe(event: AgentStreamEvent): void {
     if (event.phase !== "tool") return;
     const key = `${event.title ?? ""}\n${event.text}`.slice(0, 4000);
-    if (!key.trim() || this.activity.has(key)) return;
+    if (!key.trim()) return;
+    // Refresh a repeated call so eviction only ever drops activity nothing needs; otherwise a
+    // busy set could evict a key and let the same repeated call look new again.
+    if (this.activity.has(key)) { this.activity.delete(key); this.activity.add(key); return; }
     this.novelActivity = true; this.activity.add(key);
     while (this.activity.size > 256) this.activity.delete(this.activity.values().next().value!);
   }
