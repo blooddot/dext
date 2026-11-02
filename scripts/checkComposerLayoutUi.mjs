@@ -95,5 +95,25 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   await evaluate(`host({type:'planContext',path:'a.plan.md',status:'active',projectContext:{workspaceKey:'test',planPath:'a.plan.md',documentHash:'h',fileHash:'f',availability:'ready',assessment:'change',reason:'Interface changed',basis:[],reviewStatus:'pending'}})`);
   assert.match(await evaluate(`document.querySelector('#plan-status').textContent`), /Project update required/);
   await evaluate(`host({type:'planContext',status:'new'})`);
+  // Annotating the same picture again must edit the block the tab already wrote
+  // instead of stacking a second copy, in this session and after a restart.
+  const block = (note) => `Image annotations for @.dext-global/attachments/shot.png (pixel coordinates, origin top-left):\n1. region (160,160)-(480,400): ${note}`;
+  await evaluate(`host({type:'insertAnnotations',text:${JSON.stringify(block('first'))}})`);
+  await settle();
+  await evaluate(`host({type:'insertAnnotations',text:${JSON.stringify(block('second'))},previous:${JSON.stringify(block('first'))}})`);
+  await settle();
+  const copyInput = async () => {
+    await evaluate(`document.querySelector('#code-editor .monaco-editor textarea')?.focus()`);
+    for (const [key, code] of [['a', 65], ['c', 67]]) {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key, windowsVirtualKeyCode: code, modifiers: 2 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key, windowsVirtualKeyCode: code, modifiers: 2 });
+    }
+    await settle();
+    return evaluate(`navigator.clipboard.readText()`);
+  };
+  const annotated = await copyInput();
+  assert.equal(annotated.split("Image annotations for @").length - 1, 1, `re-inserting edits the block in place: ${annotated}`);
+  assert.match(annotated, /: second$/m);
+  console.log('PASS re-annotating replaces the block in Input');
   console.log('PASS Plan attachments, layout, and Project status state');
 }, false);

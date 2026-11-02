@@ -8,6 +8,10 @@ export interface ImageAnnotatorOptions {
    * would taint the canvas and make `getImageData` throw. */
   loadImage(): Promise<string>;
   onInsert(text: string): void;
+  /** Marks saved from an earlier visit to this attachment. */
+  marks?: readonly ImageMark[];
+  /** Every change, so the tab can keep the marks after it is closed. */
+  onMarks?(marks: readonly ImageMark[]): void;
 }
 
 /** Long edge of the canvas the block detector reads. Downsampling is what keeps
@@ -46,7 +50,7 @@ export class ImageAnnotator {
   private readonly sizeLabel = document.createElement("span");
   private readonly toggle = document.createElement("button");
   private path = "";
-  /** shortcut: memory only, reloading the tab starts empty. */
+  /** Kept per attachment by the host: closing the tab does not lose them. */
   private marks: ImageMark[] = [];
   private blocks: ImageBox[] = [];
   private natural = { width: 0, height: 0 };
@@ -92,6 +96,7 @@ export class ImageAnnotator {
     this.toggle.addEventListener("click", () => this.setPlain(!this.plain));
     this.setPlain(false);
     this.element.append(this.stage, this.tools(), this.error, this.list, actions);
+    this.marks = [...(options.marks ?? [])];
 
     this.stage.addEventListener("pointerdown", (event) => this.pointerDown(event));
     this.stage.addEventListener("pointermove", (event) => this.pointerMove(event));
@@ -205,6 +210,7 @@ export class ImageAnnotator {
       this.blocks = this.scanBlocks();
       this.done.disabled = false;
       this.setZoom(this.fitScaleNow(), true);
+      this.renderRows();
     } catch (error) {
       this.error.textContent = error instanceof Error ? error.message : String(error);
       this.error.hidden = false;
@@ -314,8 +320,13 @@ export class ImageAnnotator {
     }
     this.renderMarks();
     this.renderRows();
+    this.save();
     // Focus the note of the mark that was just added, not the first one.
     this.list.lastElementChild?.querySelector("input")?.focus();
+  }
+
+  private save(): void {
+    this.options.onMarks?.([...this.marks]);
   }
   /** Row and mark share a number; hovering or focusing a row outlines its mark so
    * the two are readable as one item. */
@@ -372,7 +383,10 @@ export class ImageAnnotator {
       note.type = "text";
       note.placeholder = "What changes here?";
       note.value = mark.note;
-      note.addEventListener("input", () => { mark.note = note.value; });
+      note.addEventListener("input", () => {
+        mark.note = note.value;
+        this.save();
+      });
       note.addEventListener("focus", () => this.highlight(index, true));
       note.addEventListener("blur", () => this.highlight(index, false));
       row.addEventListener("pointerenter", () => this.highlight(index, true));
@@ -386,6 +400,7 @@ export class ImageAnnotator {
         this.marks.splice(index, 1);
         this.renderMarks();
         this.renderRows();
+        this.save();
         // Deleting must not drop the keyboard on the floor.
         this.focusNote(Math.min(index, this.marks.length - 1));
       });

@@ -27,7 +27,7 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
     for (const [name,content] of [['dext-image-path','.dext/attachments/shot.png'],['dext-image-name','shot.png']]) {
       const meta=document.createElement('meta');meta.name=name;meta.content=content;document.head.append(meta);
     }
-    window.acquireVsCodeApi=()=>({postMessage:m=>{if(m.type==='imageData')queueMicrotask(()=>window.dispatchEvent(new MessageEvent('message',{data:{type:'imageDataResult',dataUrl:window.shot}})));},getState:()=>({}),setState:()=>{}});
+    window.acquireVsCodeApi=()=>({postMessage:m=>{(window.posted??=[]).push(m);if(m.type==='imageData')queueMicrotask(()=>window.dispatchEvent(new MessageEvent('message',{data:{type:'imageDataResult',dataUrl:window.shot}})));},getState:()=>({}),setState:()=>{}});
     {
       const canvas=document.createElement('canvas');canvas.width=1600;canvas.height=1000;
       const c=canvas.getContext('2d');
@@ -111,6 +111,9 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
   assert.equal(await evaluate(`document.querySelectorAll('.image-annotator-mark').length`), 1, 'the drag creates one mark');
   const [mark] = await fractions();
   const firstLabel = (await labels())[0];
+  // The host is the only thing that outlives this tab, so every mark has to reach it.
+  const saved = await evaluate(`(window.posted??[]).filter(m=>m.type==='saveAnnotations').at(-1)?.marks ?? []`);
+  assert.equal(saved.length, 1, 'the tab hands its marks to the host');
   const recorded = /at (\d+),(\d+)/.exec(firstLabel)?.slice(1).map(Number) ?? [];
   const expected = [(from[0] - view.image[0]) / view.image[2] * view.natural[0], (from[1] - view.image[1]) / view.image[3] * view.natural[1]];
   close(recorded[0], expected[0], 2, `the mark records image pixels: ${firstLabel} vs ${expected.join(',')}`);

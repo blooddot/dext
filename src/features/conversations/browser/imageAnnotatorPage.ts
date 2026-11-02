@@ -1,3 +1,4 @@
+import { parseMarks } from "./imageAnnotation.js";
 import { ImageAnnotator } from "./imageAnnotator.js";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -18,7 +19,9 @@ const imageUrl = new Promise<string>((resolve, reject) => {
 
 const annotator = new ImageAnnotator({
   loadImage: () => imageUrl,
-  onInsert: (text) => vscode.postMessage({ type: "insertAnnotations", text })
+  onInsert: (text) => vscode.postMessage({ type: "insertAnnotations", text }),
+  marks: parseMarks(meta("dext-image-marks")),
+  onMarks: (marks) => vscode.postMessage({ type: "saveAnnotations", marks })
 });
 
 annotator.open(meta("dext-image-path"), meta("dext-image-name"));

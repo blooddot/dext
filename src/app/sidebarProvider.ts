@@ -1323,6 +1323,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     return this.imageAnnotatorPanel ??= new ImageAnnotatorPanel({
       extensionUri: this.extensionUri,
       storage: this.application.storage,
+      ...(this.application.globalState ? { state: this.application.globalState } : {}),
       onInsert: (text, previous) => this.postWhenReady({ type: "insertAnnotations", text, ...(previous ? { previous } : {}) })
     });
   }

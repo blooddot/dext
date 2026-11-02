@@ -177,6 +177,38 @@ export function boxFromPoints(from: ImagePoint, to: ImagePoint): ImageBox {
   };
 }
 
+/** Marks kept from an earlier visit to the same attachment. A stored value is
+ * checked for shape before it is drawn, so a stale entry cannot break the list. */
+export function parseMarks(json: string): ImageMark[] {
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  const point = (value: unknown): ImagePoint | undefined => {
+    const record = value as Record<string, unknown> | undefined;
+    return record && finite(record.x) && finite(record.y) ? { x: record.x, y: record.y } : undefined;
+  };
+  const box = (value: unknown): ImageBox | undefined => {
+    const record = value as Record<string, unknown> | undefined;
+    return record && finite(record.x) && finite(record.y) && finite(record.width) && finite(record.height)
+      ? { x: record.x, y: record.y, width: record.width, height: record.height }
+      : undefined;
+  };
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const marks: ImageMark[] = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const record = entry as Record<string, unknown> | undefined;
+    const note = typeof record?.note === "string" ? record.note : "";
+    const region = record?.kind === "region" ? box(record.box) : undefined;
+    const at = record?.kind === "point" ? point(record.point) : undefined;
+    if (region) marks.push({ kind: "region", box: region, note });
+    else if (at) marks.push({ kind: "point", point: at, note });
+  }
+  return marks;
+}
+
 export function composeAnnotationText(imagePath: string, marks: readonly ImageMark[]): string {
   const lines = marks.map((mark, index) => {
     const where = mark.kind === "region"

@@ -336,6 +336,8 @@ export class DextApplication {
   /** Kept beside the runtime copy so Project AI prompts follow the same setting. */
   private resolvedOutputLanguage: ResolvedOutputLanguage | undefined;
   readonly storage: DextStorage;
+  /** Dext's extension state; a tab that outlives its close keeps its marks here. */
+  readonly globalState: vscode.Memento | undefined;
   projectAiProvider(): ProjectAiProvider {
     return createProjectAiProvider({ runtime: this.runtime, listProfiles: () => this.agents.list(), profiles: () => this.agentProfiles(), selection: () => this.agents.currentSelection(), language: () => this.resolvedOutputLanguage });
   }
@@ -525,6 +527,7 @@ export class DextApplication {
   }
 
   constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage, globalStorageUri?: vscode.Uri) {
+    this.globalState = globalState;
     // Extension activation always supplies VS Code's Dext-specific global
     // storage root. The plain file URI keeps lightweight hostless tests from
     // needing to implement Uri.joinPath just to construct the application.

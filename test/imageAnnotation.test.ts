@@ -8,7 +8,9 @@ import {
   fitScale,
   imageBoxToDisplay,
   keepAnchor,
+  parseMarks,
   pickBlock,
+  type ImageMark,
   type ImagePixels
 } from "../src/features/conversations/browser/imageAnnotation.js";
 
@@ -96,6 +98,21 @@ describe("zoom", () => {
     expect(scroll).toEqual({ left: 250, top: 125 });
     expect({ x: after.left + 0.25 * after.width - scroll.left, y: after.top + 0.25 * after.height - scroll.top })
       .toEqual({ x: 250, y: 125 });
+  });
+});
+
+describe("parseMarks", () => {
+  it("reads back saved marks and drops anything that is not one", () => {
+    const marks: ImageMark[] = [
+      { kind: "region", box: { x: 1, y: 2, width: 3, height: 4 }, note: "here" },
+      { kind: "point", point: { x: 5, y: 6 }, note: "" }
+    ];
+    expect(parseMarks(JSON.stringify(marks))).toEqual(marks);
+    // A stale or hand-edited value must not throw or draw a meaningless mark.
+    expect(parseMarks("not json")).toEqual([]);
+    expect(parseMarks('{"kind":"region"}')).toEqual([]);
+    expect(parseMarks(JSON.stringify([...marks, null, { kind: "blob" }, { kind: "region", box: { x: 1 } }])))
+      .toEqual(marks);
   });
 });
 
