@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { isAbsolute, relative, resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import * as vscode from "vscode";
 import type { DeterministicHandler } from "../../features/workflow/contracts/runtime.js";
 import type { TerminalResult } from "../../shared/contracts/types.js";
@@ -9,6 +10,9 @@ import type { TerminalResult } from "../../shared/contracts/types.js";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_BYTES = 256 * 1024;
+/** A command that ignores SIGTERM must not keep the run waiting for a `close`
+ * that never comes: escalate to SIGKILL, then answer anyway. */
+const KILL_ESCALATION_MS = 3_000;
 
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) {
@@ -73,10 +77,12 @@ function workspaceCwd(root: string, value: unknown): string {
   return cwd;
 }
 
-function appendLimited(current: string, chunk: Buffer): string {
+function appendLimited(current: string, chunk: Buffer, decoder: StringDecoder): string {
   const remaining = MAX_OUTPUT_BYTES - Buffer.byteLength(current);
   if (remaining <= 0) return current;
-  const value = chunk.subarray(0, remaining).toString("utf8");
+  // The decoder holds an incomplete multi-byte character back instead of
+  // emitting U+FFFD where the byte budget cuts one in half.
+  const value = decoder.write(chunk.subarray(0, remaining));
   return chunk.length > remaining ? `${current}${value}\n[output truncated]` : current + value;
 }
 
@@ -110,35 +116,39 @@ function execute(command: string, cwd: string, timeoutMs: number, environmentOve
     let stderr = "";
     let timedOut = false;
     let settled = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (process.platform === "win32" && child.pid) {
+    let escalation: ReturnType<typeof setTimeout> | undefined;
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    const terminate = (force: boolean) => {
+      if (!child.pid) {
+        child.kill();
+        return;
+      }
+      if (process.platform === "win32") {
         spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
           windowsHide: true,
           stdio: "ignore"
         });
-      } else if (child.pid) {
-        try {
-          process.kill(-child.pid, "SIGTERM");
-        } catch {
-          child.kill();
-        }
-      } else {
-        child.kill();
+        return;
       }
-    }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => { stdout = appendLimited(stdout, chunk); });
-    child.stderr.on("data", (chunk: Buffer) => { stderr = appendLimited(stderr, chunk); });
-    child.on("error", (error) => {
-      if (settled) return;
+      try {
+        // `detached` above makes the child a process-group leader, so this also
+        // reaches the commands it started.
+        process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+      } catch {
+        child.kill(force ? "SIGKILL" : "SIGTERM");
+      }
+    };
+    /** Ends the call once, and stops both timers with it. */
+    const release = () => {
+      if (settled) return false;
       settled = true;
       clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+      if (escalation) clearTimeout(escalation);
+      return true;
+    };
+    const finish = (code: number | null) => {
+      if (!release()) return;
       const exitCode = timedOut ? -1 : (code ?? -1);
       complete({
         kind: "terminal",
@@ -150,7 +160,21 @@ function execute(command: string, cwd: string, timeoutMs: number, environmentOve
         stderr,
         duration_ms: performance.now() - started
       });
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate(false);
+      escalation = setTimeout(() => {
+        terminate(true);
+        finish(null);
+      }, KILL_ESCALATION_MS);
+    }, timeoutMs);
+    child.stdout.on("data", (chunk: Buffer) => { stdout = appendLimited(stdout, chunk, stdoutDecoder); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr = appendLimited(stderr, chunk, stderrDecoder); });
+    child.on("error", (error) => {
+      if (release()) reject(error);
     });
+    child.on("close", (code) => finish(code));
   });
 }
 

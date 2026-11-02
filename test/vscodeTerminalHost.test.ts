@@ -116,6 +116,27 @@ describe("VS Code terminal host", () => {
     }
   });
 
+  it("answers with timed_out even when the command ignores the termination signal", { timeout: 20_000 }, async () => {
+    const result = await terminalRunHandler(invocation({
+      command: `"${process.execPath}" -e "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"`,
+      timeout_ms: 100
+    }));
+    // Waiting only for `close` left this pending forever on a command that keeps
+    // its SIGTERM handler.
+    expect(result).toMatchObject({ kind: "terminal", status: "timed_out", exit_code: -1 });
+  });
+
+  it("never cuts a multi-byte character at the output limit", { timeout: 30_000 }, async () => {
+    const script = "process.stdout.write('a'.repeat(262143)); process.stdout.write(Buffer.from([0xe4, 0xb8, 0xad]));";
+    const result = await terminalRunHandler(invocation({
+      command: `"${process.execPath}" -e "${script}"`,
+      timeout_ms: 60_000
+    }));
+    const stdout = result.kind === "terminal" ? result.stdout : "";
+    expect(stdout).not.toContain("\uFFFD");
+    expect(stdout.endsWith("[output truncated]")).toBe(true);
+  });
+
   it("takes its default timeout from settings but never past the hard ceiling", async () => {
     vscodeState.defaultTimeoutMs = 50;
     const timedOut = await terminalRunHandler(invocation({
