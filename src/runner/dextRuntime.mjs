@@ -185,8 +185,8 @@ async function invoke(method, options) {
   if (reply.error) {
     flushStreams();
     process.send({ type: "step", step: { method, state: "failed", error: reply.error } });
-    // Kept for `settleCalls`: a call nobody awaited has no caller to throw into.
-    failures.push(new Error(reply.error));
+    // Only the caller decides whether this failure ends the run: a call nobody awaited
+    // is covered by `unhandledRejection`, and a caught one is not a run failure.
     throw new Error(reply.error);
   }
   flushStreams();

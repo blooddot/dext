@@ -205,6 +205,28 @@ export function workflowCases(runnerDirectory: string): void {
       expect(output).not.toContain("Unhandled rejection");
     });
 
+    it("does not fail a run whose API failure was caught", { timeout: 30000 }, async () => {
+      let attempts = 0;
+      const { kernel } = await setup(`
+        import { ask } from "dext";
+        export async function fix() {
+          let answer;
+          for (let attempt = 0; attempt < 3 && !answer; attempt += 1) {
+            try { answer = await ask({ input: "retry" }); } catch { /* try again */ }
+          }
+          console.log(answer.text);
+        }
+      `, async (call) => {
+        if (++attempts === 1) throw new Error("transient");
+        return response(call);
+      });
+      // A caller that handled the failure and finished successfully must be
+      // reported as a success, or every retry/fallback workflow is unusable.
+      const result = await kernel.runSource('import { fix } from "dext/api/fix"; fix();');
+      expect(attempts).toBe(2);
+      expect(result.steps?.at(-1)?.stream?.text).toBe("retry\n");
+    });
+
     it("preserves namespace receivers, optional chains, live imports and awaited arguments", { timeout: 30000 }, async () => {
       const { kernel } = await setup(`
         export const absent = undefined;
