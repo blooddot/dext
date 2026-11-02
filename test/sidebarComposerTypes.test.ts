@@ -5,7 +5,11 @@ import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 const host = vi.hoisted(() => ({ post: vi.fn() }));
 const output = vi.hoisted(() => ({ lines: [] as string[] }));
 vi.mock("vscode", () => ({
-  workspace: { findFiles: async () => [{ path: "src/current.ts" }], asRelativePath: (uri: { path: string }) => uri.path },
+  workspace: {
+    findFiles: async () => [{ path: "src/current.ts" }],
+    asRelativePath: (uri: { path: string }) => uri.path,
+    createFileSystemWatcher: () => ({ onDidCreate: () => ({ dispose() { } }), onDidDelete: () => ({ dispose() { } }), dispose() { } })
+  },
   window: { ...host, createOutputChannel: () => ({ appendLine: (line: string) => { output.lines.push(line); } }) },
   commands: host,
   Uri: { joinPath: () => ({ toString: () => "" }) }

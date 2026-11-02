@@ -46,7 +46,8 @@ describe("composer file search ranking", () => {
   });
 });
 
-const searchHost = vi.hoisted(() => ({ findFiles: vi.fn(), asRelativePath: (uri: { path: string }) => uri.path }));
+const searchHost = vi.hoisted(() => ({ findFiles: vi.fn(), asRelativePath: (uri: { path: string }) => uri.path,
+  createFileSystemWatcher: vi.fn(() => ({ onDidCreate: () => ({ dispose() {} }), onDidDelete: () => ({ dispose() {} }), dispose() {} })) }));
 vi.mock("vscode", () => ({ workspace: searchHost }));
 
 it("search controller suppresses stale responses and disposal during a pending index", async () => {
