@@ -56,7 +56,7 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
     + `<p data-topic-check="${esc(topic.id)}" class="project-reader-warning"${warning ? "" : " hidden"}>${warning ? "Sources changed or disappeared. This explanation and its diagrams need review." : ""}</p></header>`
     + (topic.kind === "context" || topic.kind === "flow" ? `<section class="project-reader-analysis"><p data-reader-analysis-state>${topic.analysisState === "outline" ? "Not analyzed · module outline only" : warning ? "Needs update · saved analysis remains available" : "Generated · saved explanation"}</p><button type="button" data-topic-diagram="${esc(topic.id)}">${topic.analysisState === "outline" ? "Analyze this module" : "Update module analysis"}</button><p class="project-help">Read this module's sources to generate its explanation and diagram together. Selecting a module does not start AI.</p></section>` : "")
     // Review signals belong to the module they question, above its diagram rather than below it.
-    + (topic.qualityIssues?.length ? renderProjectQuality(topic.qualityIssues, topic) : (topic.qualityWarnings?.length ? '<details class="project-reader-warning" open><summary>Ownership needs review' + qualityCopyButton('Copy', topic.qualityWarnings.join('\n\n'), 'Ownership needs review', topic.title) + '</summary>' + list(topic.qualityWarnings) + '</details>' : ''))
+    + (topic.qualityIssues?.length ? renderProjectQuality(topic.qualityIssues, topic) : (topic.qualityWarnings?.length ? '<details class="project-reader-warning" open><summary>Review warnings' + qualityCopyButton('Copy', topic.qualityWarnings.join('\n\n'), 'Review warnings', topic.title) + '</summary>' + list(topic.qualityWarnings) + '</details>' : ''))
     + `</div>`
     + readerDiagramFrame(topicDiagrams(topic, data.diagrams))
     + `<div class="project-reader-tail">${steps}`
@@ -126,13 +126,9 @@ function qualityCopyButton(label: string, text: string, title: string, heading?:
   return `<button type="button" class="project-quality-copy" data-project-quality-copy="${esc(content)}" aria-label="${esc(label)}" title="${esc(label)}: descriptions and source paths, ready for an AI turn">${esc(label)}</button>`;
 }
 
-/** Shared grouping for Overview and Knowledge; legacy issues remain unresolved. */
+/** Shared grouping for Overview and Knowledge. */
 export function renderProjectQuality(issues: readonly ProjectQualityIssue[], topic?: ProjectTopic): string {
-  const groups = [
-    { title: "Architecture issues", items: issues.filter(issue => issue.code !== "ownership-review"), collapsed: false },
-    { title: "Ownership needs review", items: issues.filter(issue => issue.code === "ownership-review" && (!issue.status || issue.status === "unresolved")), collapsed: false },
-    { title: "Explained ownership decisions", items: issues.filter(issue => issue.code === "ownership-review" && (issue.status === "retained" || issue.status === "reassigned")), collapsed: true }
-  ];
+  const groups = [{ title: "Architecture issues", items: issues, collapsed: false }];
   const sourceList = (issue: ProjectQualityIssue): string => {
     const sources: Array<{ path: string; line?: number }> = issue.evidence ?? issue.sourcePaths.map(path => ({ path }));
     if (!sources.length) return "";

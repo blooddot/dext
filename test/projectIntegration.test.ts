@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ProjectStore, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
 import { ProjectInitializationService } from "../src/features/project/host/projectService.js";
-import { buildProjectEvidencePackage, PROJECT_MODEL_PROMPT_VERSION, ProjectAiGenerationService, type IndexedProjectEvidence, type ProjectAiProvider } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildProjectEvidencePackage, attachProjectStructure, ProjectAiGenerationService } from "../src/features/project/host/generation/projectAiGeneration.js";
+import { buildStructureIndex } from "../src/features/project/host/indexing/projectStructure.js";
 import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import type { ProjectDiagram } from "../src/features/project/contracts/projectDiagram.js";
 import { ProjectDiagramAdapterRegistry } from "../src/features/project/host/diagrams/projectDiagramRegistry.js";
@@ -33,23 +34,13 @@ const diagram = (id = "architecture"): ProjectDiagram => ({
   relations: []
 });
 
-function providerFor(config: { initialize?: unknown; diagram?: unknown }): ProjectAiProvider {
-  return {
-    id: "mock",
-    generate: async (request) => {
-      const value = request.promptVersion === PROJECT_MODEL_PROMPT_VERSION ? config.initialize : config.diagram;
-      return { text: JSON.stringify(value) };
-    }
-  };
-}
-
-// The orchestration test exercises the explicit excerpt fallback; a real initialization supplies a
-// complete structure index through readStructureIndexEvidence instead.
+// Generation itself is covered by the project structure tests; this file proves the orchestration
+// around it, so the AI answer is stubbed and only the evidence hand-off is real.
 const evidence = (requirement?: string) => buildProjectEvidencePackage({
   projectName: "Example",
   files: [{ path: "README.md", content: "# Example" }, { path: "src/app.ts", content: "export function start() {}" }],
   ...(requirement ? { requirement } : {})
-}) as IndexedProjectEvidence;
+});
 
 function persistence(store: ProjectStore) {
   return async (output: { intent?: ReturnType<typeof intent>; diagrams?: readonly ProjectDiagram[] }): Promise<void> => {
@@ -62,12 +53,13 @@ function persistence(store: ProjectStore) {
 }
 
 describe("project integration without any static scan", () => {
-  it("initializes the index from bounded evidence and reports success only after persistence", async () => {
+  it("initializes the model from the prepared evidence and reports success only after persistence", async () => {
     const host = new MemoryHost();
     const store = new ProjectStore(host);
+    const index = await buildStructureIndex([{ path: "src/app.ts", content: "export function start() {}" }]);
     const service = new ProjectInitializationService({
-      prepareEvidence: async () => evidence(),
-      generate: async (packageValue) => new ProjectAiGenerationService(providerFor({ initialize: { brief: { name: "Example", summary: "A task application", evidence: [{ path: "README.md", line: 1 }] }, contexts: [{ id: "app", canonicalName: "App", purpose: "Runs the application", entryPoints: ["src/app.ts"], evidence: [{ path: "src/app.ts", line: 1 }] }] } })).generateProjectModelFromExcerpts(packageValue),
+      prepareEvidence: async () => attachProjectStructure(evidence(), index.summary),
+      generate: async () => ({ intent: intent(), diagrams: [] }),
       persist: async (output, signal) => {
         if (signal.aborted) throw new Error("cancelled");
         await persistence(store)(output);
@@ -90,7 +82,7 @@ describe("project integration without any static scan", () => {
     await store.writeDiagram(diagram("saved"));
     const hydration = await store.readInitialization();
     expect(hydration).toMatchObject({ hasIntent: false, diagramCount: 1, markedInitialized: false });
-    const service = new ProjectInitializationService({ prepareEvidence: async () => evidence(), generate: async () => ({}), persist: async () => undefined });
+    const service = new ProjectInitializationService({ prepareEvidence: async () => { throw new Error("Hydration never prepares evidence."); }, generate: async () => ({}), persist: async () => undefined });
     service.hydrate(hydration);
     expect(service.snapshot.status).toBe("uninitialized");
     expect(service.snapshot.diagramsGenerated).toBe(1);
@@ -101,7 +93,7 @@ describe("project integration without any static scan", () => {
     const store = new ProjectStore(host);
     await store.writeIntent(intent() as never);
     await store.writeDiagram(diagram("first"));
-    const service = new ProjectAiGenerationService(providerFor({ diagram: { diagram: { ...diagram("second"), title: "Second" } } }));
+    const service = new ProjectAiGenerationService({ id: "mock", generate: async () => ({ text: JSON.stringify({ diagram: { ...diagram("second"), title: "Second" } }) }) });
     const result = await service.generateDiagram(evidence("Add a second view"), { requirement: "Add a second view", kind: "architecture" });
     await store.writeDiagram(result.diagram);
     expect((await store.readDiagrams()).map((item) => item.id).sort()).toEqual(["first", "second"]);

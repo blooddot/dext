@@ -2,21 +2,7 @@ import type { ProjectContext, ProjectIntent, ProjectQualityIssue } from "../../c
 import type { ProjectModel } from "../../contracts/projectModel.js";
 import { systemContextRelationships } from "../../presentation/projectC4.js";
 import type { StructureMember } from "../indexing/projectStructure.js";
-import { buildStructureGraphFromMembers, structureConsumers, type StructureGraph } from "../indexing/projectStructureGraph.js";
-
-/** A review signal, never an automatic ownership rewrite or proof of incorrect behavior. */
-export function ownershipConcerns(contexts: readonly ProjectContext[], files: readonly StructureMember[]): ProjectQualityIssue[] {
-  const owners = new Map(contexts.flatMap(context => (context.sourceFiles ?? []).map(path => [path, context] as const)));
-  const graph = buildStructureGraphFromMembers(files);
-  return files.flatMap(file => {
-    const owner = owners.get(file.path), usedBy = structureConsumers(graph, file.path, { typeOnly: false });
-    if (!owner || (owner.sourceFiles?.length ?? 0) < 2 || file.symbols.length > 3 || usedBy.length !== 1) return [];
-    const consumer = owners.get(usedBy[0]!);
-    if (!consumer || consumer.id === owner.id || file.dependencies.some(edge => !edge.typeOnly && edge.to && owners.get(edge.to)?.id === owner.id)) return [];
-    return [{ code: "ownership-review", message: `${file.path} is grouped under '${owner.canonicalName}', but its only non-type import consumer is ${usedBy[0]} in '${consumer.canonicalName}'. Review the responsibility boundary; imports alone do not prove ownership.`,
-      contextIds: [owner.id, consumer.id], elementIds: [], sourcePaths: [file.path, usedBy[0]!] }];
-  });
-}
+import { buildStructureGraphFromMembers, type StructureGraph } from "../indexing/projectStructureGraph.js";
 
 /** A community spread across more responsibilities than this describes the whole application, not one reviewable boundary. */
 const COMMUNITY_REVIEW_MAX_MODULES = 8;
@@ -86,10 +72,8 @@ function communityConcerns(contexts: readonly ProjectContext[], graph: Structure
 }
 
 /** Semantic review signals remain separate from schema/reference validation. */
-export function projectModelQuality(intent: ProjectIntent, files: readonly StructureMember[], reviews: readonly ProjectQualityIssue[] = []): ProjectQualityIssue[] {
-  const issues = ownershipConcerns(intent.contexts, files).map(issue => reviews.find(review => review.sourcePaths[0] === issue.sourcePaths[0]) ?? { ...issue, status: "unresolved" as const });
-  for (const review of reviews) if (!issues.some(issue => issue.sourcePaths[0] === review.sourcePaths[0])) issues.push(review);
-  issues.push(...communityConcerns(intent.contexts, buildStructureGraphFromMembers(files)));
+export function projectModelQuality(intent: ProjectIntent, files: readonly StructureMember[]): ProjectQualityIssue[] {
+  const issues = communityConcerns(intent.contexts, buildStructureGraphFromMembers(files));
   const model = intent.c4;
   if (!model) return issues;
   const contextEdges = systemContextRelationships(model);

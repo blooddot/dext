@@ -6,7 +6,6 @@ AI_DIAGRAM_KINDS,
 buildProjectEvidencePackage,
 compareProjectEvidencePaths,
 PROJECT_DIAGRAM_PROMPT_VERSION,
-PROJECT_MODEL_PROMPT_VERSION,
 ProjectAiGenerationError,
 ProjectAiGenerationService,
 projectEvidenceFileRank,
@@ -49,8 +48,6 @@ const architectureDiagram = (): ProjectDiagram => ({
   ],
   relations: [], version: 0, updatedAt: 1
 });
-
-const validIndex = () => ({ brief: { name: "Example", summary: "Task application", evidence: [{ path: "README.md", line: 1 }] }, contexts: [{ id: "task.context", canonicalName: "TaskApplication", purpose: "Application boundary", entryPoints: ["src/app.ts"], evidence: [{ path: "src/app.ts", line: 1 }] }] });
 
 const validModel = (input: ProjectEvidencePackage): ProjectAiGeneratedModel => ({ intent: intent(input), diagrams: [architectureDiagram()] });
 
@@ -128,14 +125,11 @@ describe("Project evidence package", () => {
     expect(summary.excerpted.length).toBeLessThan(summary.paths.length);
   });
 
-  it("records the local structure index a bounded diagram read did not attach", () => {
+  it("records structure facts only when the read attached a built index", () => {
     const packaged = buildProjectEvidencePackage({ projectName: "Example", files: [{ path: "src/app.ts", content: "export class App {}" }] });
-    const structureIndex = { hash: "index", files: 12, parsed: 12, modules: 3, failed: 0, unsupported: 1 };
-    const summary = summarizeProjectEvidence(packaged, { trigger: "diagram", generatedAt: 42, structureIndex });
+    const summary = summarizeProjectEvidence(packaged, { trigger: "diagram", generatedAt: 42 });
     expect(summary.structure).toBeUndefined();
-    expect(summary.structureIndex).toEqual(structureIndex);
-    // No index at all is distinguishable from "index existed but was not attached".
-    expect(summarizeProjectEvidence(packaged, { trigger: "diagram", generatedAt: 42 }).structureIndex).toBeUndefined();
+    expect(summary.generatedAt).toBe(42);
   });
 
   it("orders evidence by ownership and kind so a docs tree cannot outrank the project it documents", () => {
@@ -368,52 +362,49 @@ describe("Project AI generation service", () => {
     expect(result.diagram.metadata?.topicSummary).toBe("Runs tasks and returns a result.");
   });
 
-  it("times out and aborts an unresponsive provider through the explicit excerpt fallback", async () => {
+  it("times out and aborts an unresponsive provider", async () => {
+    const requirement = "Show the architecture", input = evidence(requirement);
     let providerSignal: AbortSignal | undefined;
     const provider: ProjectAiProvider = { id: "hanging", generate: async (_request, signal) => {
       providerSignal = signal;
       return await new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("Provider aborted")), { once: true }));
     } };
-    await expect(new ProjectAiGenerationService(provider, { timeoutMs: 20, maxAttempts: 1 }).generateProjectModelFromExcerpts(evidence())).rejects.toMatchObject({ code: "timeout" });
+    await expect(new ProjectAiGenerationService(provider, { timeoutMs: 20, maxAttempts: 1 }).generateDiagram(input, { requirement })).rejects.toMatchObject({ code: "timeout" });
     expect(providerSignal?.aborted).toBe(true);
   });
 
-  it("retries invalid output and stamps inferred draft provenance", async () => {
-    const input = evidence();
-    const value = validIndex();
+  it("retries invalid output and reports the attempt count", async () => {
+    const requirement = "Show the architecture", input = evidence(requirement);
+    const value = { diagram: architectureDiagram() };
     let calls = 0;
     const provider: ProjectAiProvider = { id: "mock", generate: async () => ({ text: ++calls === 1 ? "{}" : JSON.stringify(value), model: "mock-model" }) };
-    const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000, now: () => 42 }).generateProjectModelFromExcerpts(input);
+    const result = await new ProjectAiGenerationService(provider, { timeoutMs: 2_000 }).generateDiagram(input, { requirement });
     expect(calls).toBe(2);
     expect(result.metadata.attempts).toBe(2);
-    expect(result.metadata.promptVersion).toBe(PROJECT_MODEL_PROMPT_VERSION);
-    expect(result.intent.brief.origin).toBe("inferred");
-    expect(result.intent.brief.review).toBe("draft");
-    expect(result.intent.generatedAt).toBe(42);
-    expect(result.diagrams).toEqual([]);
+    expect(result.metadata.promptVersion).toBe(PROJECT_DIAGRAM_PROMPT_VERSION);
   });
 
   it("spends the retry budget on a provider failure and reports it when every attempt fails", async () => {
-    const input = evidence();
-    const value = validIndex();
+    const requirement = "Show the architecture", input = evidence(requirement);
+    const value = { diagram: architectureDiagram() };
     let calls = 0;
     // A CLI that failed to start is worth one more attempt with the same bounded evidence.
     const transient: ProjectAiProvider = {
       id: "mock",
       generate: async () => (++calls === 1 ? { text: "CLI failed to start.", finishReason: "error" as const } : { text: JSON.stringify(value) })
     };
-    const recovered = await new ProjectAiGenerationService(transient).generateProjectModelFromExcerpts(input);
+    const recovered = await new ProjectAiGenerationService(transient).generateDiagram(input, { requirement });
     expect(calls).toBe(2);
     expect(recovered.metadata.attempts).toBe(2);
 
     const dead: ProjectAiProvider = { id: "mock", generate: async () => ({ text: "CLI auth expired.", finishReason: "error" as const }) };
-    await expect(new ProjectAiGenerationService(dead).generateProjectModelFromExcerpts(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI auth expired."] });
+    await expect(new ProjectAiGenerationService(dead).generateDiagram(input, { requirement })).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI auth expired."] });
   });
 
   it("reports live activities, terminal provider errors and cancellation", async () => {
-    const input = evidence();
+    const requirement = "Show the architecture", input = evidence(requirement);
     const events: ProjectAiActivityEvent[] = [];
-    const value = validIndex();
+    const value = { diagram: architectureDiagram() };
     const provider: ProjectAiProvider = {
       id: "mock",
       generate: async (request) => {
@@ -421,20 +412,20 @@ describe("Project AI generation service", () => {
         return { text: request.attempt === 1 ? "{}" : JSON.stringify(value) };
       }
     };
-    await new ProjectAiGenerationService(provider).generateProjectModelFromExcerpts(input, { onEvent: (event) => events.push(event) });
+    await new ProjectAiGenerationService(provider).generateDiagram(input, { requirement }, { onEvent: (event) => events.push(event) });
     expect(events.some((event) => event.id === "cli-output")).toBe(true);
     expect(events.some((event) => event.title === "AI analysis attempt failed" && event.done)).toBe(true);
     expect(events.some((event) => event.title === "Retrying AI analysis")).toBe(true);
 
     const failing: ProjectAiProvider = { id: "failed", generate: async () => ({ text: "CLI authentication expired.", finishReason: "error" }) };
-    await expect(new ProjectAiGenerationService(failing, { maxAttempts: 1 }).generateProjectModelFromExcerpts(input)).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI authentication expired."] });
+    await expect(new ProjectAiGenerationService(failing, { maxAttempts: 1 }).generateDiagram(input, { requirement })).rejects.toMatchObject({ code: "provider_error", diagnostics: ["CLI authentication expired."] });
 
     const hanging: ProjectAiProvider = { id: "hanging", generate: (_request, signal) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })) };
     const controller = new AbortController();
-    const promise = new ProjectAiGenerationService(hanging, { timeoutMs: 10_000 }).generateProjectModelFromExcerpts(input, { signal: controller.signal });
+    const promise = new ProjectAiGenerationService(hanging, { timeoutMs: 10_000 }).generateDiagram(input, { requirement }, { signal: controller.signal });
     controller.abort();
     await expect(promise).rejects.toMatchObject({ code: "cancelled" });
-    await expect(new ProjectAiGenerationService(undefined).generateProjectModelFromExcerpts(input)).rejects.toMatchObject({ code: "unavailable" });
+    await expect(new ProjectAiGenerationService(undefined).generateDiagram(input, { requirement })).rejects.toMatchObject({ code: "unavailable" });
   });
 
   it("generates one on-demand diagram of the requested kind without touching other artifacts", async () => {

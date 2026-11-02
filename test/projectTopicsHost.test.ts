@@ -138,7 +138,7 @@ describe("Project topic host", () => {
     const intent = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [{ id: "code", canonicalName: "Code", evidence: [{ path: "src/code.ts", line: 1 }] }],
       structure: { hash: "structure-hash", files: 1, parsed: 1, modules: 1, failed: 2, unsupported: 3, unresolved: 0, issues: [] } });
     let saved: ProjectDiagram[] = [];
-    const written: { structure?: unknown; structureIndex?: unknown; trigger?: string }[] = [];
+    const written: { structure?: unknown; trigger?: string }[] = [];
     const source = createProjectPanelDataSource({
       name: "Example", root: "C:/ws", rootUri: {} as never,
       store: { readObjects: async () => [], readArchitecture: async () => ({ decisions: [] }), readIntent: async () => intent,
@@ -167,9 +167,9 @@ describe("Project topic host", () => {
     const progress = messages.filter((message) => message.type === "projectDiagramProgress").map((message) => String(message.message));
     expect(progress).toContain("Validating AI output: Checking sources.");
     expect(progress.some((line) => line.includes("export function execute") || line.includes('"diagram"'))).toBe(false);
-    // A bounded topic read records the persisted index without claiming it was attached to the prompt.
+    // A bounded topic read cannot attach structure facts, so the record names none.
     expect(written).toHaveLength(1);
-    expect(written[0]).toMatchObject({ trigger: "diagram", structureIndex: { hash: "structure-hash", files: 1, parsed: 1, modules: 1, failed: 2, unsupported: 3 } });
+    expect(written[0]).toMatchObject({ trigger: "diagram" });
     expect(written[0]!.structure).toBeUndefined();
     expect(messages.find((message) => message.type === "projectDiagramGenerated")).toMatchObject({ document: saved[0], topics: [{ id: "code", diagrams: [{ id: "code-view" }] }] });
     expect(messages.some((message) => message.type === "projectDiagramRenderFailed")).toBe(false);

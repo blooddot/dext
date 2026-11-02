@@ -304,6 +304,8 @@ describe("structure-driven AI generation", () => {
     expect(result.intent.structure).toMatchObject({ parsed: 25, modules: 1, responsibilities: 25 });
     expect(new Set(result.intent.contexts.flatMap(context => context.sourceFiles!)).size).toBe(25);
     expect(result.intent.contexts.every(context => context.structureHash && context.detail === "outline")).toBe(true);
+    expect(result.intent.contexts.every(context => context.entryPoints.every(path => context.sourceFiles!.includes(path)))).toBe(true);
+    expect(result.diagrams).toEqual([]);
     expect(result.intent.contexts.every(context => context.evidence[0]?.contentHash)).toBe(true);
     expect(result.intent.c4?.systemId).toBe("system:app");
     expect(result.intent.capabilities[0]!.contextIds).toHaveLength(25);
@@ -505,45 +507,6 @@ describe("structure-driven AI generation", () => {
     expect(result.intent.contexts[1]!.sourceFiles).toEqual(['src/templates.ts']);
   });
 
-  it.each(['retained', 'reassigned', 'unresolved', 'missing-decision', 'duplicate-decision', 'foreign-evidence'])("validates ownership decisions and preserves unresolved warnings: %s", async status => {
-    const correct = status === 'reassigned';
-    const invalid = ['missing-decision', 'duplicate-decision', 'foreign-evidence'].includes(status);
-    const index = await buildStructureIndex(inputs({
-      'src/profiles.ts': 'import { parse } from "./config"; export function profiles() { return parse(); }',
-      'src/config.ts': 'export function parse() { return {}; }',
-      'src/view.ts': 'import type { profiles } from "./profiles"; export function view() {}'
-    }));
-    const evidence = attachProjectStructure(buildProjectEvidencePackage({ files: [{ path: 'README.md', content: 'App' }] }), index.summary);
-    let reviews = 0;
-    const groups = (fixed: boolean) => [
-      { canonicalName: 'Profiles', purpose: 'Read settings', sourceFiles: fixed ? ['src/profiles.ts', 'src/config.ts'] : ['src/profiles.ts'], entryPoints: ['src/profiles.ts'] },
-      { canonicalName: 'View', purpose: 'Display UI', sourceFiles: fixed ? ['src/view.ts'] : ['src/view.ts', 'src/config.ts'], entryPoints: ['src/view.ts'] }
-    ];
-    const service = new ProjectAiGenerationService({ id: 'fixture', generate: async request => {
-      if (request.prompt.includes('Optionally describe C4')) return reply(request);
-      if (request.prompt.includes('Ownership review facts:')) {
-        reviews++;
-        expect(request.prompt).toContain('"typeOnly":true');
-        expect(request.prompt).toContain('src/config.ts');
-        const decision = { sourcePath: 'src/config.ts', status: invalid ? 'retained' : status,
-          reason: correct ? 'Settings parser belongs with profile configuration.' : status === 'retained' ? 'The parser defines the view configuration format consumed by profile setup.' : 'Consumer facts alone do not establish ownership.',
-          evidence: [{ path: status === 'foreign-evidence' ? 'src/unread.ts' : 'src/config.ts' }, { path: 'src/profiles.ts' }] };
-        return { text: JSON.stringify({ contexts: groups(correct), decisions: status === 'missing-decision' ? [] : status === 'duplicate-decision' ? [decision, decision] : [decision] }) };
-      }
-      return { text: JSON.stringify({ contexts: groups(false) }) };
-    } }, { maxAttempts: 1 });
-    if (invalid) {
-      await expect(service.generateProjectModel(evidence)).rejects.toMatchObject({ code: 'invalid_output' });
-      expect(reviews).toBe(1);
-      return;
-    }
-    const result = await service.generateProjectModel(evidence);
-    expect(reviews).toBe(1);
-    expect(result.intent.contexts.flatMap(context => context.sourceFiles!).sort()).toEqual(['src/config.ts', 'src/profiles.ts', 'src/view.ts']);
-    expect(result.intent.qualityIssues?.find(issue => issue.code === 'ownership-review')).toMatchObject({ status });
-    expect(result.intent.qualityIssues?.filter(issue => issue.code === 'ownership-review' && issue.status === 'unresolved')).toHaveLength(status === 'unresolved' ? 1 : 0);
-    if (status === 'unresolved') expect(buildProjectTopics(result.intent).find(topic => topic.title === 'View')?.qualityWarnings?.[0]).toContain('src/config.ts');
-  });
 
   it.each(['missing', 'duplicate', 'unknown', 'foreign-entry'])("rejects %s files after consolidation reassignment", async mode => {
     const { evidence } = await setup(2);

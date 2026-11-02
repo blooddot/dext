@@ -29,8 +29,7 @@ type ProjectAiActivityEvent,
 type ProjectAiProvider,
 type IndexedProjectEvidence,
 type ProjectEvidencePackage,
-type ProjectEvidenceSummary,
-type ProjectStructureIndexSummary
+type ProjectEvidenceSummary
 } from "./generation/projectAiGeneration.js";
 import { textDecoder } from "./indexing/workspaceEvidence.js";
 import type { ProjectDefinition, ProjectSaveResult } from "./persistence/projectStore.js";
@@ -127,13 +126,6 @@ export function effectiveProjectToolSettings(definition: ProjectDefinition | und
 }
 
 
-/** A persisted index summary, so a bounded read can still say which structure map existed. */
-export function localStructureIndex(intent: ProjectIntent | undefined): ProjectStructureIndexSummary | undefined {
-  const structure = intent?.structure;
-  return structure ? { hash: structure.hash, files: structure.files, parsed: structure.parsed, modules: structure.modules, failed: structure.failed, unsupported: structure.unsupported } : undefined;
-}
-
-
 export function safeFileName(title: string): string {
   const sanitized = [...title].map((character) => /[\\/:*?"<>|]/.test(character) || character.charCodeAt(0) < 32 ? "-" : character).join("");
   return sanitized.trim().slice(0, 80) || "diagram";
@@ -206,13 +198,9 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
   const tasks = new DiagramTaskRegistry();
   const listeners = new Set<(message: ProjectPanelMessage) => void>();
   const post = (message: ProjectPanelMessage): void => { for (const listener of listeners) listener(message); };
-  /**
-   * Persists the evidence record for diagnostics, including unsuccessful generation attempts.
-   * A bounded diagram read never attaches structure facts, so the persisted index summary is
-   * recorded separately: the field is about availability, not about what the prompt contained.
-   */
-  const captureEvidence = async (trigger: "initialize" | "diagram", packaged: ProjectEvidencePackage, structureIndex?: ProjectStructureIndexSummary): Promise<void> => {
-    const summary = summarizeProjectEvidence(packaged, { trigger, generatedAt: (options.now ?? Date.now)(), ...(structureIndex ? { structureIndex } : {}) });
+  /** Persists the evidence record for diagnostics, including unsuccessful generation attempts. */
+  const captureEvidence = async (trigger: "initialize" | "diagram", packaged: ProjectEvidencePackage): Promise<void> => {
+    const summary = summarizeProjectEvidence(packaged, { trigger, generatedAt: (options.now ?? Date.now)() });
     lastEvidence = summary;
     try {
       await options.store.writeEvidenceSummary?.(summary);
@@ -356,13 +344,10 @@ export function createProjectPanelDataSource(options: ProjectPanelDataSourceOpti
         ? { id: target.id, title: target.title, kind: target.kind as AiProjectDiagramKind, version: target.version }
         : undefined;
       if (target && !targetRequest) throw new Error("Derived structure diagrams cannot be updated by AI.");
-      const [evidence, persistedIntent] = await Promise.all([
-        options.readEvidence({ requirement, ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}), ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}) }, signal, (progress) => {
-          post({ type: "projectDiagramProgress", message: progress.message ?? "Preparing evidence…", phase: progress.phase });
-        }),
-        options.store.readIntent?.() ?? Promise.resolve(undefined)
-      ]);
-      await captureEvidence("diagram", evidence, localStructureIndex(persistedIntent));
+      const evidence = await options.readEvidence({ requirement, ...(request.preferredPaths ? { preferredPaths: request.preferredPaths } : {}), ...(request.modulePaths ? { modulePaths: request.modulePaths } : {}) }, signal, (progress) => {
+        post({ type: "projectDiagramProgress", message: progress.message ?? "Preparing evidence…", phase: progress.phase });
+      });
+      await captureEvidence("diagram", evidence);
       post({ type: "projectDiagramProgress", message: "Calling the AI to generate the diagram…" });
       const service = new ProjectAiGenerationService(projectAiProvider, projectPromptLimits(evidence.selection.evidenceChars));
       const result = await service.generateDiagram(evidence, {

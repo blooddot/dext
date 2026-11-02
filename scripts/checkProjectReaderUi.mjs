@@ -172,7 +172,7 @@ try {
   }
   const qualityIssues = [
     { code: 'community-split', message: '检查 <entry> & "边界"', contextIds: [], elementIds: [], sourcePaths: ['src/fallback.ts'], reason: '保留完整原因', evidence: [{ path: 'src/runner.ts', line: 12 }] },
-    { code: 'ownership-review', message: 'Review ownership', contextIds: [], elementIds: [], sourcePaths: ['src/editor.ts'] }
+    { code: 'community-split', message: 'Review ownership', contextIds: [], elementIds: [], sourcePaths: ['src/editor.ts'] }
   ];
   const qualityTopic = { ...topics.find(topic => topic.id === 'run'), qualityIssues };
   await load('vscode-dark', { ...data, knowledge: { ...data.knowledge, topics: [qualityTopic] } });
@@ -186,7 +186,7 @@ try {
   assert.equal(await evaluate(`document.querySelector('[data-project-quality-copy]').textContent`), 'Copied');
   await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].click()`);
   const reviewRequest = await evaluate(`messages.at(-1)`);
-  assert.match(reviewRequest.text, /Ownership needs review[\s\S]*Review ownership[\s\S]*src\/editor.ts/);
+  assert.match(reviewRequest.text, /Architecture issues[\s\S]*Review ownership[\s\S]*src\/editor.ts/);
   await hostMessage({ type: 'projectQualityCopied', requestId: reviewRequest.requestId, success: false });
   await writeFile(join(artifacts, 'quality-article.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
   assert.equal(await evaluate(`document.querySelectorAll('[data-project-quality-copy]')[1].textContent`), 'Copy failed');
@@ -497,12 +497,6 @@ try {
     await load('vscode-dark', { ...data, readerDiagrams: savedDiagrams, architecture: { diagrams: savedDiagrams }, knowledge: { brief: savedIntent.brief.summary, topics: savedTopics } }, { topic: savedTopics[0].id });
     for (const topic of savedTopics) {
       await click(`.project-reader-directory [data-reader-topic="${topic.id}"]`); await ready();
-      if (topic.qualityIssues?.some(issue => issue.status === 'retained' || issue.status === 'reassigned')) {
-        assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-reader-article] details')).find(d=>d.querySelector('summary')?.textContent.startsWith('Explained ownership decisions'))?.open`), false, 'explained decisions stay folded');
-      }
-      if (topic.qualityIssues?.some(issue => issue.code === 'ownership-review' && (!issue.status || issue.status === 'unresolved'))) {
-        assert.equal(await evaluate(`!!Array.from(document.querySelectorAll('[data-reader-article] .project-quality-head')).find(head => head.textContent.startsWith('Ownership needs review'))`), true, 'legacy and unresolved concerns stay visible');
-      }
       if (await evaluate(`!!document.querySelector('[data-reader-article] [data-topic-evidence]')`)) {
         await click('[data-reader-article] [data-topic-evidence]');
         const request = await evaluate('messages.at(-1)');
@@ -600,7 +594,7 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll('[data-diagram-state=ready] svg').length`), 2);
   assert.equal(await evaluate(`document.querySelector('[data-diagram-state=error] details').open`), true);
   assert.equal(await evaluate(`document.querySelectorAll('.markdown-diagram-staging').length`), 0);
-  console.log('PASS: Project reader uses Archify for all seven kinds, with model/prose/source links, CSP, ownership, export, explicit render errors and responsive themes. Screenshots: .tmp-tb/project-reader-ui');
+  console.log('PASS: Project reader uses Archify for all seven kinds, with model/prose/source links, CSP, quality, export, explicit render errors and responsive themes. Screenshots: .tmp-tb/project-reader-ui');
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}
