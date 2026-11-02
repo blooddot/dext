@@ -21,7 +21,9 @@ schema's fields, with a JSON `content` body parsed and a body that is not an
 object refused. A tool without an `outputSchema` returns the raw
 `{ kind: "mcpRaw", server, tool, content?, structured? }` envelope instead.
 Project manifests take precedence when a server name collides, and the
-`inputSchema` is required.
+`inputSchema` is required. Dext reads at most 200 manifest files and skips any
+file over 256 KB, because a repository ships these files and an untrusted
+workspace still has them read; both limits are reported in the diagnostics.
 
 A project's own manifests also shape the committed `dext` declaration, so those
 tools are named with the result their manifest declares, whether or not Dext is

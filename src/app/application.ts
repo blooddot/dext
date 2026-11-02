@@ -72,6 +72,11 @@ import {
 const COMPOSER_MODULE_LIMIT = 200;
 const COMPOSER_MODULE_BYTES = 2 * 1024 * 1024;
 
+/** A repository ships its own `.dext/mcp` manifests, and an untrusted workspace still
+ * has them read on every activation, so the walk is bounded in file size and count. */
+const MCP_MANIFEST_LIMIT = 200;
+const MCP_MANIFEST_BYTES = 256 * 1024;
+
 export interface SkillPackUpgradeConfirmation {
   label: string;
   detail: string;
@@ -917,6 +922,8 @@ export class DextApplication {
     const projectDiagnostics: string[] = [];
     const globalDiagnostics: string[] = [];
     const seenServerNames = new Set<string>();
+    let manifestFiles = 0;
+    let manifestCapReported = false;
     for (const { uri: directory, scope } of uniqueDirectories) {
       const visit = async (current: vscode.Uri, depth: number): Promise<void> => {
         if (depth > 12) return;
@@ -936,7 +943,19 @@ export class DextApplication {
           }
           if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
           const file = vscode.Uri.joinPath(current, name);
+          if (manifestFiles >= MCP_MANIFEST_LIMIT) {
+            if (!manifestCapReported) {
+              manifestCapReported = true;
+              const message = `MCP manifest discovery: reading the first ${MCP_MANIFEST_LIMIT} manifest files only; ${file.fsPath} and later files are ignored.`;
+              diagnostics.push(message);
+              (scope === "global" ? globalDiagnostics : projectDiagnostics).push(message);
+            }
+            continue;
+          }
+          manifestFiles += 1;
           try {
+            const size = (await vscode.workspace.fs.stat(file)).size;
+            if (size > MCP_MANIFEST_BYTES) throw new Error(`manifest is ${size} bytes, over the ${MCP_MANIFEST_BYTES}-byte limit; not read.`);
             const manifest = parseMcpManifest(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)), file.fsPath);
             if (manifest.server && seenServerNames.has(manifest.server.name)) continue;
             if (manifest.server) {
@@ -2097,6 +2116,7 @@ export class DextApplication {
     directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
     for (const { uri: directory, scope } of directories) {
       if (server.scope && server.scope !== scope) continue;
+      let files = 0;
       const visit = async (current: vscode.Uri, depth: number): Promise<number | undefined> => {
         if (depth > 12) return undefined;
         let entries: [string, vscode.FileType][];
@@ -2112,8 +2132,15 @@ export class DextApplication {
             continue;
           }
           if (type !== vscode.FileType.File || !name.toLowerCase().endsWith(".jsonc")) continue;
+          if (files >= MCP_MANIFEST_LIMIT) return undefined;
+          files += 1;
           const file = vscode.Uri.joinPath(current, name);
-          const source = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+          let source: string;
+          // One unreadable or oversized manifest must not abort the discovery that finds the target.
+          try {
+            if ((await vscode.workspace.fs.stat(file)).size > MCP_MANIFEST_BYTES) continue;
+            source = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+          } catch { continue; }
           const parsed = parseMcpManifest(source, file.fsPath);
           if (parsed.server?.name !== serverName) continue;
           const tools = discovered.map((tool) => {
