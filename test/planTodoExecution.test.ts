@@ -98,4 +98,27 @@ describe("Plan execution task initialization", () => {
     expect(session.planStatus).toBe("active");
     expect(session.activePlanPath).toBe("old.plan.md");
   });
+  it("takes the same task report from the provider's update tool, without a protocol comment", async () => {
+    const harness = createConversationHarness();
+    await harness.controller.open({ id: "session", createdAt: 1, updatedAt: 1, turns: [], planStatus: "running", activePlanPath: "a.plan.md" });
+    const session = harness.controller.session("session")!;
+    session.planStatus = "running";
+    let round = 0;
+    harness.executeConversation.mockImplementation(async (_mode, _source, metadata) => {
+      metadata.planTodo?.(round++ === 0
+        ? { updates: [{ id: "plan-1", status: "completed" }, { id: "plan-2", status: "completed" }] }
+        : { verification: "passed" });
+      return { kind: "workflow", executions: [{
+        invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
+        method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
+        result: { kind: "plan", text: "Done." }
+      }] };
+    });
+
+    await harness.coordinator.execute(session, "plan", "## Tasks\n1. [ ] Inspect\n2. [ ] Verify", { planPath: "a.plan.md", executePlan: true });
+
+    expect(harness.executeConversation).toHaveBeenCalledTimes(2);
+    expect(session.turns[0]?.planOutcome?.status).toBe("completed");
+    expect(session.planProgress?.todos.map((item) => item.status)).toEqual(["completed", "completed"]);
+  });
 });

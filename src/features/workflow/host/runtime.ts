@@ -949,6 +949,7 @@ export class DextRuntime implements WorkflowRuntime {
     const projectQuery = await this.projectQuery(this.workspaceRoot);
     const response = await this.agentRunner.runConversation({
       ...(projectQuery ? { projectQuery } : {}),
+      ...(metadata.planTodo ? { planTodo: metadata.planTodo } : {}),
       profile,
       workspaceTrusted: this.workspaceTrusted,
       ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, selectedPreset ?? "", readOnly) } : {}),

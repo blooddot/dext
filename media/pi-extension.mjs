@@ -46,6 +46,13 @@ export default async function dextPiExtension(pi) {
   pi.registerTool({ name: "dext_request_user_input", label: "Ask the user", description: "Ask the user one or more questions. Supports choices, multiple selections and a custom answer. Wait for the actual response.",
     parameters: { type: "object", properties: { questions: { type: "array", items: question, minItems: 1, maxItems: 20 } }, required: ["questions"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("question", { questions: args.questions }, signal)); } });
+  pi.registerTool({ name: "dext_update_todos", label: "Update plan tasks", description: "Report Dext plan task status changes. Call it as soon as a task's verify step passes, together with the task you start next; never batch finished tasks into one call at the end. Only a Dext plan turn has tasks to update.",
+    parameters: { type: "object", properties: {
+      updates: { type: "array", items: { type: "object", properties: { id: string, status: { type: "string", enum: ["pending", "in_progress", "completed"] } }, required: ["id", "status"], additionalProperties: false } },
+      blocked: { type: "array", items: { type: "object", properties: { id: string, reason: string }, required: ["id", "reason"], additionalProperties: false } },
+      verification: { type: "string", enum: ["passed"] }
+    }, additionalProperties: false },
+    async execute(_id, args, signal) { return result(await call("plan_todo", { report: args }, signal)); } });
   pi.registerTool({ name: "dext_fetch", label: "Fetch URL", description: "Read one http(s) URL and return its text content, truncated when long. GitHub file URLs are read through cdn.jsdelivr.net, falling back to the original URL, so prefer a commit or tag over a branch name for a stable copy. Read-only: no POST, custom headers or cookies.",
     parameters: { type: "object", properties: { url: string }, required: ["url"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("fetch", { url: args.url }, signal)); } });

@@ -109,6 +109,10 @@ export class PiAgentRunner implements AgentRunner {
     if (!active || active.done || active.controller.signal.aborted) return { status: "unavailable" };
     if (frame.kind === "question") return piQuestion(active.request, frame.id, frame.questions, active.controller.signal, active.timeout);
     if (frame.kind === "fetch") return piFetch(frame.url, active.controller.signal);
+    if (frame.kind === "plan_todo") {
+      if (!active.request.planTodo) return { status: "rejected", diagnostics: "This turn does not execute a Dext plan, so there is no task list to update." };
+      active.request.planTodo(frame.report); return { status: "accepted" };
+    }
     if (frame.kind === "project_query") {
       if (!active.request.workspaceTrusted || !active.request.projectQuery) return { status: "unavailable" };
       const value = await active.request.projectQuery(frame.query);

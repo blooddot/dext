@@ -337,6 +337,8 @@ export interface ExecutionMetadata {
   onAgentSessionId?: (provider: string, sessionId: string) => void;
   signal?: AbortSignal;
   onAgentEvent?: (event: AgentStreamEvent) => void;
+  /** A plan task report from a provider tool that mirrors the dext-todo comment. */
+  planTodo?: (report: unknown) => void;
   requestAgentInput?: (request: AgentInputRequest, signal: AbortSignal) => Promise<AgentInputAnswers | null>;
   /** Process output emitted while an MCP tool is running. */
   onMcpEvent?: (event: McpProcessEvent) => void;

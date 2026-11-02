@@ -250,6 +250,12 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
           this.requestAgentInput(sessionId, turnId, request, signal),
         ...(mode === "plan" && executionPlanPath ? { planPath: executionPlanPath } : {}),
         ...(executePlan ? { executePlan: true } : {}),
+        // Same parser as the comment channel: one source of truth for task state.
+        ...(todoProgress ? { planTodo: (report: unknown) => {
+          for (const update of todoProgress.consume({ id: "plan-tool", phase: "message", text: `<!-- dext-todo:${JSON.stringify(report)}-->` })) {
+            if (update.phase === "todo") this.options.events.append(sessionId, events, update);
+          }
+        } } : {}),
         onAgentEvent: (event: AgentStreamEvent) => {
           planRun?.observe(event);
           const scoped = planRun ? { ...event, id: `plan-round-${planRun.rounds}:${event.id ?? "stream"}` } : event;

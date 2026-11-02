@@ -51,6 +51,8 @@ export interface AgentExecutionRequest {
  * envelope or output schema and its result is ordinary assistant text. */
 export interface AgentConversationRequest {
   projectQuery?: (input: unknown) => Promise<unknown>;
+  /** Plan task reports from a provider tool; absent outside plan execution. */
+  planTodo?: (report: unknown) => void;
   workspaceTrusted?: boolean;
   agentPreset?: string;
   profile: AgentProfile;

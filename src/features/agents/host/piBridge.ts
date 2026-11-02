@@ -14,6 +14,7 @@ const requests = z.discriminatedUnion("kind", [
   z.object({ id: z.string(), kind: z.literal("project_query"), query: z.unknown() }).strict(),
   z.object({ id: z.string(), kind: z.literal("question"), questions: z.array(question).min(1).max(20).refine((items) => new Set(items.map((item) => item.id)).size === items.length) }),
   z.object({ id: z.string(), kind: z.literal("submit_result"), args: z.unknown() }),
+  z.object({ id: z.string(), kind: z.literal("plan_todo"), report: z.unknown() }),
   z.object({ id: z.string(), kind: z.literal("fetch"), url: z.string().min(1).max(2048) })
 ]);
 
