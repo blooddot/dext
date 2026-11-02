@@ -17,6 +17,9 @@ describe("plan task progress without native task tools", () => {
     expect(new PlanTodoProgress(items).initial().todos).toEqual(items);
     expect(planTodoInstruction(items)).toContain('"id":"plan-1"');
     expect(planTodoInstruction(items)).toContain("even if a native plan/task tool is unavailable");
+    // The panel only moves from these comments, so the cadence is the feature:
+    // one report per finished task, never a single batch at the end.
+    expect(planTodoInstruction(items)).toContain("Never batch several finished tasks into one comment at the end");
   });
 
   it("ignores code examples and non-task sections and supports Chinese headings", () => {

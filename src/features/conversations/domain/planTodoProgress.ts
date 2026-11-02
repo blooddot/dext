@@ -34,8 +34,10 @@ export function planTodoItems(document: string): AgentTodoItem[] {
 export function planTodoInstruction(items: readonly AgentTodoItem[]): string {
   if (!items.length) return "Use your native plan or task-tracking tool, if available, to publish tasks and update their status as you work.";
   return [
-    "Dext displays the following task IDs from this plan. Report their status explicitly in a brief progress message before starting work and whenever a status changes, including before your final response.",
-    'Use exactly this machine-readable comment, with the actual task IDs and statuses: <!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->',
+    "Dext shows the task IDs below in its Todo panel and cannot observe your work any other way: only these comments move it.",
+    "Report cadence: as soon as a task's verify step succeeds, emit that task's completed update in the same message as the narration for it, together with the task you start next. Never batch several finished tasks into one comment at the end, and report any status the panel still lacks before your final response.",
+    'Use exactly this machine-readable comment, with the actual task IDs and statuses: <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"},{"id":"plan-2","status":"in_progress"}]} -->',
+    'If the dext_update_todos tool is available, call it with that same object ({"updates":[…]} plus optional "blocked" and "verification") instead of writing the comment.',
     "Allowed statuses: pending, in_progress, completed. You may update several IDs in one comment. Dext consumes these comments and displays the task list. Emit them even if a native plan/task tool is unavailable. Do not write progress into the plan file.",
     "When resuming, verify existing changes before reporting completion. Keep unfinished tasks unfinished if execution stops.",
     'Continue all actionable tasks. For an external blocker, add "blocked":[{"id":"plan-1","reason":"Specific external condition needed"}] to a dext-todo report; do not classify difficult or unfinished work as blocked. Other tasks must continue.',
