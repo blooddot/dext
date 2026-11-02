@@ -427,9 +427,10 @@ describe("sidebar panel layout", () => {
 
   it("renders text output through a safe Markdown surface with code token styles", async () => {
     const main = await source("src/webview/main.ts");
+    const markdown = await source("src/shared/lib/markdown.ts");
     const css = await source("media/styles.css");
-    expect(main).toContain('const markdown = new MarkdownIt({');
-    expect(main).toContain('html: false');
+    expect(main).toContain('const markdown = dextMarkdown();');
+    expect(markdown).toContain('new MarkdownIt({ html: false, breaks: true, linkify: true })');
     expect(main).toMatch(/function copyableText[\s\S]*?className = "markdown-body"[\s\S]*?markdown\.render\(content\)/);
     expect(css).toContain(".markdown-body pre");
     expect(css).toContain(".tok-keyword");
@@ -458,7 +459,8 @@ describe("sidebar panel layout", () => {
     expect(main).toContain('type: "openExternalLink", url: externalUrl');
     expect(outputLinks).toContain('value.toLowerCase().startsWith("file:")');
     expect(outputLinks).toContain('export function outputExternalLink');
-    expect(main).toContain("linkify: true");
+    // The renderer keeps `file:` destinations, so the click handler above sees them.
+    expect(await source("src/shared/lib/markdown.ts")).toContain("/^file:/i.test(url.trim())");
   });
 
   it("offers the @ file picker in every mode and inserts the same chip as a drop", async () => {

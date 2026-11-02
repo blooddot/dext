@@ -1,8 +1,8 @@
 import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
-import MarkdownIt from "markdown-it";
+import { dextMarkdown } from "../../../shared/lib/markdown.js";
 
 // Live Todo rows and restored history use the same Markdown interpretation.
-const todoMarkdown = new MarkdownIt({ html: false, breaks: true, linkify: true });
+const todoMarkdown = dextMarkdown();
 
 export function planExecutionLabel(events: readonly AgentStreamEvent[], error?: string, outcome?: PlanExecutionOutcome): string {
   if (outcome?.status === "cancelled") return "Stopped";

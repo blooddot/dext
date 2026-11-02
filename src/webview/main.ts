@@ -1,4 +1,3 @@
-import MarkdownIt from "markdown-it";
 import "../../media/styles.css";
 import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
 import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
@@ -26,6 +25,7 @@ import type {
 import type { UiFormAnswers } from "../shared/contracts/uiForm.js";
 import { formatDuration } from "../shared/lib/duration.js";
 import { markdownCodeCopy } from "../shared/lib/markdownCopy.js";
+import { dextMarkdown } from "../shared/lib/markdown.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
@@ -404,27 +404,8 @@ function restoreCachedAgentRenders(cached: CachedConversationViewState): void {
   cached.pendingAgentItems = [];
 }
 
-const markdown = new MarkdownIt({
-  html: false,
-  breaks: true,
-  // Agent output often contains a bare URL instead of Markdown's
-  // `[label](url)` form. Turn those into anchors as well, so the shared
-  // output-link handler can hand them to the extension host.
-  linkify: true,
-  // Dext output is reproduced as written: the editor's own TypeScript service is
-  // what colours source now, and this renderer only ever saw fenced blocks.
-  highlight() {
-    return "";
-  }
-});
-
-// markdown-it intentionally rejects `file:` destinations. Dext's host-side
-// handler validates these URLs against the current workspace, so keep the
-// renderer from turning an otherwise valid file link into inert plain text.
-const defaultValidateLink = markdown.validateLink.bind(markdown);
+const markdown = dextMarkdown();
 markdown.use(markdownCodeCopy);
-markdown.validateLink = (url: string): boolean =>
-  /^file:/i.test(url.trim()) || defaultValidateLink(url);
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,

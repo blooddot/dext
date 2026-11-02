@@ -1,7 +1,7 @@
-import MarkdownIt from "markdown-it";
 import { renderMarkdownDiagrams } from "../../../platform/browser/markdownDiagrams.js";
+import { dextMarkdown } from "../../../shared/lib/markdown.js";
 
-const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true });
+const markdown = dextMarkdown();
 const renderImage = markdown.renderer.rules.image!;
 markdown.renderer.rules.image = (tokens, index, options, env, renderer) => {
   const token = tokens[index]!;

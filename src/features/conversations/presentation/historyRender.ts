@@ -1,7 +1,6 @@
 import { answerChoices, uiFieldChoices, uiResultText, type AnswerChoice } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "../domain/historyResponse.js";
 import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
-import MarkdownIt from "markdown-it";
 import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
@@ -20,22 +19,14 @@ import {
   type ContextReferenceOccurrence
 } from "../../workspace/domain/fileReference.js";
 import { terminalSegments } from "./terminalText.js";
-
-export function escapeHtml(value: string): string {
-  return value.replace(/[&><"]/g, (character) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"
-  })[character] ?? character);
-}
+import { escapeHtml } from "../../../shared/lib/html.js";
+import { dextMarkdown } from "../../../shared/lib/markdown.js";
 
 // Process events are also shown in the live conversation, where Markdown owns
 // paragraph and soft-break layout. History must use the same interpretation:
 // rendering the stored source with pre-wrap turns Markdown's blank lines into
 // unusually large gaps after a conversation is reopened.
-const processMarkdown = new MarkdownIt({
-  html: false,
-  breaks: true,
-  linkify: true
-});
+const processMarkdown = dextMarkdown();
 processMarkdown.use(markdownCodeCopy);
 
 function renderProcessMarkdown(source: string): string {
@@ -49,7 +40,7 @@ function chevron(): string {
 // VS Code reads this attribute to build the native context menu and passes the
 // merged object to the invoked command.
 function contextAttribute(context: Record<string, string | boolean>): string {
-  return `data-vscode-context='${escapeHtml(JSON.stringify(context)).replaceAll("'", "&#39;")}'`;
+  return `data-vscode-context='${escapeHtml(JSON.stringify(context))}'`;
 }
 
 function copyButton(value: string): string {
