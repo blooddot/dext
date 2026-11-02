@@ -605,6 +605,23 @@ describe("CLI command resolution", () => {
     await expect(running).rejects.toMatchObject({ name: "ExecutionCancelledError" });
   });
 
+  it.skipIf(process.platform === "win32")("stops the processes a cancelled CLI started", async () => {
+    const controller = new AbortController();
+    let command: number | undefined;
+    const script = 'const {spawn}=require("node:child_process");'
+      + 'console.log("child:"+spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}).pid);'
+      + "setInterval(()=>{},1000);";
+    const running = runProcess(process.execPath, ["-e", script], "", process.cwd(), controller.signal, (chunk) => {
+      const match = /child:(\d+)/.exec(chunk);
+      if (match) command = Number(match[1]);
+    });
+    // A cold macOS/Linux start spawns two node processes; the default 1s is tight.
+    await vi.waitFor(() => expect(command).toBeDefined(), { timeout: 5000 });
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ name: "ExecutionCancelledError" });
+    await vi.waitFor(() => expect(() => process.kill(command!, 0)).toThrow(), { timeout: 5000 });
+  });
+
   it.each(["stdout", "stderr"])("counts %s output as activity even without a rendered event", async (stream) => {
     const activity = vi.fn();
     const result = await runProcess(process.execPath,

@@ -811,7 +811,8 @@ export async function runClaudeConversation(request: AgentConversationRequest, o
   request.signal?.addEventListener("abort", cancel, { once: true });
   const shell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(options.command);
   const child = spawn(options.command, [...options.args], {
-    cwd: request.cwd, windowsHide: true, shell, stdio: ["pipe", "pipe", "pipe"], ...(options.env ? { env: options.env } : {})
+    cwd: request.cwd, windowsHide: true, shell, detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe"], ...(options.env ? { env: options.env } : {})
   });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -834,9 +835,16 @@ export async function runClaudeConversation(request: AgentConversationRequest, o
 
   /** Terminate the CLI and every descendant: a Claude turn can start services. */
   const terminate = (): Promise<void> => {
-    if (process.platform !== "win32" || child.pid === undefined) { child.kill(); return Promise.resolve(); }
+    if (child.pid === undefined) return Promise.resolve();
+    if (process.platform !== "win32") {
+      // `detached` above makes the CLI lead its own process group, so the group
+      // signal also reaches the commands it started.
+      try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill(); }
+      return Promise.resolve();
+    }
+    const pid = child.pid;
     return new Promise((done) => {
-      const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
+      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
       killer.once("error", () => { child.kill(); done(); });
       killer.once("close", () => done());
     });
@@ -1058,7 +1066,9 @@ export function runProcess(
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const shell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
-    const child = spawn(command, [...args], { cwd, windowsHide: true, shell, ...(env ? { env } : {}) });
+    const child = spawn(command, [...args], {
+      cwd, windowsHide: true, shell, detached: process.platform !== "win32", ...(env ? { env } : {})
+    });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -1089,12 +1099,16 @@ export function runProcess(
       if (completionCode !== undefined) { finishCompleted(); return; }
       aborting = true;
       const terminate = (): Promise<void> => {
-        if (process.platform !== "win32" || child.pid === undefined) {
-          child.kill();
+        if (child.pid === undefined) return Promise.resolve();
+        if (process.platform !== "win32") {
+          // `detached` above makes the CLI lead its own process group, so this
+          // also stops the services it started.
+          try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill(); }
           return Promise.resolve();
         }
+        const pid = child.pid;
         return new Promise((done) => {
-          const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+          const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
             windowsHide: true,
             stdio: "ignore"
           });

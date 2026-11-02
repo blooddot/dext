@@ -78,7 +78,7 @@ export class DeepSeekHarnessTransport {
     );
     try {
       this.child = spawn(invocation.command, invocation.args, {
-        cwd, windowsHide: true, stdio: "pipe", shell: false,
+        cwd, windowsHide: true, stdio: "pipe", shell: false, detached: process.platform !== "win32",
         env: { ...process.env, ...invocation.env, [HARNESS_BRIDGE_ENV]: this.bridge.endpoint, [HARNESS_BRIDGE_TOKEN_ENV]: this.bridge.token }
       });
     } catch (error) {
@@ -189,7 +189,10 @@ export class DeepSeekHarnessTransport {
           const kill = spawn("taskkill", ["/pid", String(this.child.pid), "/T", "/F"], { windowsHide: true, timeout: 2000 });
           kill.on("error", () => resolve()); kill.on("exit", () => resolve());
         });
-      } else this.child.kill("SIGKILL");
+      } else {
+        // `detached` above makes the Harness lead its own process group.
+        try { process.kill(-this.child.pid, "SIGKILL"); } catch { this.child.kill("SIGKILL"); }
+      }
     }
     this.child.stdout.destroy(); this.child.stderr.destroy(); this.child.stdin.destroy();
   }

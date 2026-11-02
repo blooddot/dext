@@ -25,6 +25,7 @@ export class CodexConversationConnection {
   async start(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<void> {
     const child = spawn(command, args, {
       cwd, env, windowsHide: true, shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(command),
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"]
     });
     this.child = child;
@@ -102,7 +103,15 @@ export class CodexConversationConnection {
     const child = this.child;
     if (!child) return;
     child.stdin.end(); child.stdout.destroy(); child.stderr.destroy();
-    const kill = setTimeout(() => child.kill(), 500);
+    // `detached` above makes the App Server lead its own process group, so a
+    // Stop also reaches the commands it started.
+    const kill = setTimeout(() => {
+      if (process.platform !== "win32" && child.pid) {
+        try { process.kill(-child.pid); } catch { child.kill(); }
+        return;
+      }
+      child.kill();
+    }, 500);
     kill.unref(); child.once("exit", () => clearTimeout(kill));
   }
 }
