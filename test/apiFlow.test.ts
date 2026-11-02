@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
+import { renderApiFlow, renderApiFlowMermaid } from "../src/features/resources/presentation/apiFlowDiagram.js";
+import { buildResourceDefinition, renderResourceDefinition } from "../src/features/resources/presentation/resourceDocuments.js";
+import type { ApiFlow } from "../src/features/workflow/contracts/apiFlow.js";
 import { describeApiFlow } from "../src/features/workflow/host/apiFlow.js";
 import { describeApiSource } from "../src/features/workflow/host/apiSource.js";
-import { createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
-import { buildResourceDefinition, renderResourceDefinition } from "../src/features/resources/presentation/resourceDocuments.js";
-import { renderApiFlow, renderApiFlowMermaid } from "../src/features/resources/presentation/apiFlowDiagram.js";
-import type { ApiFlow } from "../src/features/workflow/contracts/apiFlow.js";
 
 describe("API flow analysis", () => {
   it("reads declarations, arrows, export aliases and their direct calls", async () => {
