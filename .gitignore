@@ -1,6 +1,5 @@
 node_modules/
 dist/
-release/
 *.vsix
 coverage/
 .vscode-test/
