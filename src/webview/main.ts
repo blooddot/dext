@@ -1611,18 +1611,6 @@ function terminalText(content: string): DocumentFragment {
   return fragment;
 }
 
-function terminalBlock(content: string, className = "terminal-output"): HTMLElement {
-  const wrapper = document.createElement("div");
-  wrapper.className = "output-copyable";
-  const pre = document.createElement("pre");
-  pre.className = className;
-  const code = document.createElement("code");
-  code.append(terminalText(content));
-  pre.append(code);
-  wrapper.append(pre, copyButton(content));
-  return wrapper;
-}
-
 function copyableText(content: string): HTMLElement {
   const body = document.createElement("div");
   body.className = "markdown-body";
@@ -1658,7 +1646,6 @@ function renderExecution(response: RuntimeResponse): DocumentFragment {
     ...turnDomAdapter(document),
     markdown: copyableText,
     json: jsonOutput,
-    terminal: (text, stderr) => terminalBlock(text, stderr ? "terminal-output terminal-stderr" : "terminal-output"),
     plan: (planPath) => planActions(document, planPath, (reference) => vscode.postMessage({ type: "openFileReference", reference }))
   }, response.result, response.patchApplication));
   return fragment;
@@ -1708,7 +1695,7 @@ function renderResult(response: InputExecutionResponse): void {  const target = 
     }
     if (step.branch === undefined) {
       fanOut = undefined;
-      target.append(item);
+      if (item.childNodes.length > 0) target.append(item);
       if (index < entries.length - 1) item.classList.add("has-next");
       continue;
     }

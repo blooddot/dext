@@ -1722,12 +1722,11 @@ body.image-page {
   overflow-wrap: anywhere;
 }
 
-/* console.log / console.error output: process output, not an API card. */
+/* console.log / console.error output: process output, not an API card. It grows
+   to its full length; Output already scrolls, and the API chose to print it. */
 .process-output {
-  max-height: 260px;
   margin: 0 0 8px;
   padding: 6px 8px;
-  overflow: auto;
   border-left: 2px solid var(--vscode-widget-border, #454545);
   color: var(--vscode-editor-foreground);
   background: var(--vscode-textCodeBlock-background, transparent);
@@ -3102,8 +3101,6 @@ pre {
   margin: 0 0 8px;
   padding: 8px;
   overflow: visible;
-  border: 1px solid var(--vscode-textBlockQuote-border, var(--vscode-widget-border));
-  border-radius: 3px;
   background: var(--vscode-textCodeBlock-background);
   font-family: var(--vscode-editor-font-family);
   font-size: var(--vscode-editor-font-size, 12px);
@@ -3677,15 +3674,8 @@ details[open] > summary > .disclosure-chevron {
   opacity: 1;
 }
 
-.json-output,
-.terminal-disclosure,
-.terminal-disclosure .execution-disclosure-body { min-width: 0; max-width: 100%; }
-.json-output-text { max-height: 480px; overflow: auto; }
-.json-output-text,
-.terminal-command { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
-.terminal-disclosure > summary { flex-wrap: wrap; min-width: 0; }
-.terminal-command-summary { flex: 1 1 120px; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.terminal-disclosure .result-meta { overflow-wrap: anywhere; }
+.json-output { min-width: 0; max-width: 100%; }
+.json-output-text { max-height: 480px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
 .agent-inputs[hidden] { display: none; }
 /* Reports and code blocks must not set the grid's intrinsic column width. */
 .agent-inputs { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 10px; margin: 10px 0; }

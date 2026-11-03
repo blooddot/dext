@@ -54,22 +54,9 @@ export function renderTurnJson<E>(adapter: TurnRenderAdapter<E>, text: string, c
   ]);
 }
 
-/** A preview, never a rewritten command to execute. No shell content is decoded. */
-export function terminalCommandSummary(command: string): string {
-  let preview = command.trim();
-  const executable = /^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(preview);
-  const name = (executable?.[1] ?? executable?.[2] ?? executable?.[3] ?? "").split(/[\\/]/).pop()!;
-  if (/^(?:powershell|pwsh)(?:\.exe)?$/i.test(name)) {
-    preview = preview.replace(/(\s-(?:encodedcommand|enc|ec)\s+)(?:"[A-Za-z0-9+/=]+"|'[A-Za-z0-9+/=]+'|[A-Za-z0-9+/=]+)(?=\s|$)/i,
-      "$1[encoded command — expand for full command]");
-  }
-  return preview.length > 120 ? `${preview.slice(0, 120)}… (expand for full command)` : preview;
-}
-
 export interface TurnResultAdapter<E> extends TurnRenderAdapter<E> {
   markdown(text: string): E;
   json(text: string): E;
-  terminal(text: string, stderr: boolean): E;
   plan(path: string): E;
 }
 
@@ -92,24 +79,12 @@ export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextR
     }, ["Legacy patch ignored; no files were written when loading this conversation."])] : [])
   ];
   if (result.kind === "apply") return [adapter.markdown(`${result.status}: ${result.summary}`)];
-  if (result.kind === "terminal") {
-    const el = adapter.element;
-    return [el("details", { class: "execution-disclosure terminal-disclosure" }, [
-      el("summary", {}, [
-        el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []),
-        el("span", { class: "terminal-command-summary" }, [terminalCommandSummary(result.command)]),
-        el("span", { class: "disclosure-meta" }, [`${result.status} | exit ${result.exit_code}`])
-      ]),
-      el("div", { class: "execution-disclosure-body" }, [
-        el("pre", { class: "terminal-command", "aria-label": "Full command" }, [el("code", {}, [result.command])]),
-        el("div", { class: "result-meta" }, [result.cwd]),
-        ...(result.stdout ? [adapter.terminal(result.stdout, false)] : []),
-        ...(result.stderr ? [adapter.terminal(result.stderr, true)] : [])
-      ])
-    ])];
-  }
+  // terminal 的返回值是给 API 读的，不进 Output；要给人看就由 API 自己 console.log。
+  if (result.kind === "terminal") return [];
   if (result.kind === "ui") return [adapter.markdown(uiResultText(result))];
-  return [adapter.json(JSON.stringify(result, null, 2))];
+  // 没有 kind 的普通返回值同样不进 Output：要给人看就由 API 自己 console.log。
+  const declared = typeof (result as { kind?: unknown }).kind === "string";
+  return declared ? [adapter.json(JSON.stringify(result, null, 2))] : [];
 }
 
 export interface TurnHtml { readonly html: string }

@@ -148,7 +148,6 @@ function resultBody(result: DextResult, patchApplication?: RuntimeResponse["patc
     ...turnHtmlAdapter,
     markdown: (text) => ({ html: markdownOutput(text) }),
     json: (text) => ({ html: jsonOutput(text) }),
-    terminal: (text, stderr) => ({ html: `<pre class="terminal-text${stderr ? " terminal-stderr" : ""}">${highlightTerminal(text)}</pre>` }),
     plan: (path) => ({ html: planLink(path) })
   }, result, patchApplication).map((node) => node.html).join("");
 }
@@ -161,7 +160,8 @@ function planLink(planPath: string): string {
 }
 
 function execution(response: RuntimeResponse): string {
-  return `<section class="history-execution execution-result">${resultBody(response.result, response.patchApplication)}</section>`;
+  const body = resultBody(response.result, response.patchApplication);
+  return body === "" ? "" : `<section class="history-execution execution-result">${body}</section>`;
 }
 
 function steps(response: InputExecutionResponse): WorkflowStepResponse[] {

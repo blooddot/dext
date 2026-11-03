@@ -95,12 +95,15 @@ export function formatTurnTokenUsage(usage?: AgentTokenUsage): string {
     : `${compactTokenCount(context)} context`;
 }
 
-/** The text a result's copy control should place on the clipboard. */
+/** The text a result's copy control should place on the clipboard. It follows the
+ * same rules as `renderTurnResult`: a result Output does not show is not copied. */
 export function resultCopyText(result: DextResult): string {
   if (result.kind === "ask" || result.kind === "plan" || result.kind === "skill" || result.kind === "agent" || result.kind === "template") return result.text;
   if (result.kind === "apply") return result.summary;
-  if (result.kind === "terminal") return [result.stdout, result.stderr].filter(Boolean).join("\n");
-  return uiResultText(result);
+  // terminal 的返回值是给 API 读的，不进 Output，也就不进复制文本。
+  if (result.kind === "terminal") return "";
+  const declared = typeof (result as { kind?: unknown }).kind === "string";
+  return declared ? uiResultText(result) : "";
 }
 
 /** Usage events are snapshots. A snapshot that reports billed counts replaces

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, terminalCommandSummary, turnHtmlAdapter } from "../src/features/conversations/presentation/turnComponents.js";
+import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, turnHtmlAdapter } from "../src/features/conversations/presentation/turnComponents.js";
 import { presentTurn } from "../src/features/conversations/presentation/turnPresentation.js";
 import { presentAgentMessage } from "../src/features/conversations/presentation/agentMessagePresentation.js";
 
@@ -33,7 +33,6 @@ describe("shared turn rendering", () => {
     const literal = (text: string) => turnHtmlAdapter.element("span", {}, [text]);
     return {
       ...turnHtmlAdapter, markdown: vi.fn(literal), json: vi.fn(literal),
-      terminal: vi.fn((text: string, stderr: boolean) => turnHtmlAdapter.element("pre", { "data-stderr": String(stderr) }, [text])),
       patch: vi.fn((change: { uri: string }) => literal(change.uri)), plan: vi.fn(literal)
     };
   }
@@ -60,19 +59,6 @@ describe("shared turn rendering", () => {
     expect(adapter.json).not.toHaveBeenCalled();
   });
 
-  it.each(['powershell -NoProfile -EncodedCommand', 'pwsh.exe -enc', '& "C:\\Program Files\\PowerShell\\pwsh.exe" -EC'])("summarizes %s without executing its payload", (prefix) => {
-    const payload = Buffer.from('Write-Output "中文"', 'utf16le').toString('base64').repeat(200);
-    const command = `${prefix} ${payload} -NoExit`;
-    const html = renderTurnResult(resultAdapter(), { kind: "terminal", command, cwd: ".", status: "succeeded", exit_code: 0, stdout: "", stderr: "", duration_ms: 1 })[0]!.html;
-    const summary = html.slice(0, html.indexOf('</summary>'));
-    expect(summary).toContain('encoded command');
-    expect(summary).not.toContain(payload);
-    expect(html).toContain(payload);
-    expect(terminalCommandSummary(command)).toContain('-NoExit');
-    expect(terminalCommandSummary('npm test -- --run')).toBe('npm test -- --run');
-    expect(terminalCommandSummary('echo ' + 'x'.repeat(2000))).toContain('… (expand for full command)');
-  });
-
   it("ignores legacy Agent patches and dispatches Plan links without granting actions to History", () => {
     const adapter = resultAdapter();
     const change = { uri: "a.ts", before: "old", after: "new" };
@@ -89,15 +75,18 @@ describe("shared turn rendering", () => {
     expect(adapter.json).toHaveBeenLastCalledWith(JSON.stringify({ kind: "mcp.custom", answer: "kept" }, null, 2));
   });
 
-  it("renders terminal data as text and preserves both output streams", () => {
+  it("keeps terminal results out of Output so the API decides what people see", () => {
     const adapter = resultAdapter();
-    const html = renderTurnResult(adapter, { kind: "terminal", command: '<script>run()</script>', cwd: ".",
-      status: "failed", exit_code: 1, stdout: "output", stderr: "error", duration_ms: 1234 }).map((node) => node.html).join("");
-    expect(html).toContain("&lt;script&gt;");
-    expect(html).not.toContain("<script>");
-    expect(html).toContain("exit 1");
-    expect(html).not.toContain("1234");
-    expect(adapter.terminal.mock.calls).toEqual([["output", false], ["error", true]]);
+    const nodes = renderTurnResult(adapter, { kind: "terminal", command: "git status", cwd: ".",
+      status: "failed", exit_code: 1, stdout: "output", stderr: "error", duration_ms: 1234 });
+    expect(nodes).toEqual([]);
+    expect(adapter.json).not.toHaveBeenCalled();
+  });
+
+  it("keeps a plain return value out of Output and still shows a typed MCP payload", () => {
+    const adapter = resultAdapter();
+    expect(renderTurnResult(adapter, { ready: true, blockers: [] } as never)).toEqual([]);
+    expect(adapter.json).not.toHaveBeenCalled();
   });
 
   it("uses the same readable structured Process content for both adapters", () => {

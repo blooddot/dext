@@ -213,7 +213,7 @@ describe("Dext history rendering", () => {
     expect(html).toContain('<span class="ansi-red">error: failed</span>');
   });
 
-  it("keeps terminal stderr separate and highlighted in history output", () => {
+  it("keeps a terminal result's streams out of history Output", () => {
     const record: DextHistoryRecord = {
       id: "terminal-ansi",
       createdAt: 1,

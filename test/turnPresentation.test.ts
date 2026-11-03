@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatTurnTokenUsage, presentTurn, presentPlanProject, TURN_EDIT_ACTION, TURN_RENAME_ACTION } from "../src/features/conversations/presentation/turnPresentation.js";
+import { formatTurnTokenUsage, presentTurn, presentPlanProject, resultCopyText, TURN_EDIT_ACTION, TURN_RENAME_ACTION } from "../src/features/conversations/presentation/turnPresentation.js";
+import type { DextResult } from "../src/shared/contracts/types.js";
 import { TurnTitle } from "../src/features/conversations/browser/turnTitle.js";
 
 describe("turn title presentation", () => {
@@ -68,6 +69,14 @@ describe("turn title presentation", () => {
     for (const durationMs of [undefined, 0, -1, NaN, Infinity]) {
       expect(presentTurn({ source: "prompt", durationMs }).process.detail).toBeUndefined();
     }
+  });
+
+  it("copies only what Output shows", () => {
+    const terminal = { kind: "terminal" as const, status: "succeeded" as const, command: "git rev-parse HEAD", cwd: "/w", exit_code: 0, stdout: "f0af18c\n", stderr: "", duration_ms: 1 };
+    expect(resultCopyText(terminal)).toBe("");
+    expect(resultCopyText({ reported: true } as unknown as DextResult)).toBe("");
+    expect(resultCopyText({ kind: "ask", text: "检查通过。" })).toBe("检查通过。");
+    expect(resultCopyText({ kind: "mcpRaw", server: "files", tool: "read", content: "x" })).toContain('"tool": "read"');
   });
 
   it("restores a stored name and preserves it when a Plan turn is hydrated", () => {
