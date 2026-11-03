@@ -1,19 +1,22 @@
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedInvocation } from "../src/shared/contracts/types.js";
 import type { DeterministicHandler } from "../src/features/workflow/host/runtime.js";
 
 const vscodeState = vi.hoisted(() => ({
   trusted: true,
-  defaultTimeoutMs: undefined as number | undefined
+  defaultTimeoutMs: undefined as number | undefined,
+  root: undefined as string | undefined
 }));
 
 vi.mock("vscode", () => ({
   workspace: {
     get isTrusted() { return vscodeState.trusted; },
     get workspaceFolders() {
-      return [{ uri: { scheme: "file", fsPath: process.cwd() } }];
+      return [{ uri: { scheme: "file", fsPath: vscodeState.root ?? process.cwd() } }];
     },
     getConfiguration: () => ({
       get: (_key: string, fallback: unknown) => vscodeState.defaultTimeoutMs ?? fallback
@@ -51,6 +54,7 @@ describe("VS Code terminal host", () => {
   beforeEach(() => {
     vscodeState.trusted = true;
     vscodeState.defaultTimeoutMs = undefined;
+    vscodeState.root = undefined;
   });
 
   it("describes itself as running without a confirmation step, which is what it does", async () => {
@@ -76,11 +80,27 @@ describe("VS Code terminal host", () => {
       kind: "terminal",
       status: "succeeded",
       command: "node --version",
-      cwd: resolve(process.cwd()),
+      cwd: realpathSync.native(resolve(process.cwd())),
       exit_code: 0,
       stderr: ""
     });
     expect(result.kind === "terminal" && result.stdout.trim()).toMatch(/^v\d+/);
+  });
+
+  it("hands the shell the on-disk spelling of the workspace path", async () => {
+    // VS Code reports the folder from a file URI, which keeps the drive-letter
+    // case the workspace was opened with (`c:\repo`). Vite keys its module graph
+    // by path, so that spelling made every test file load a second copy of
+    // @vitest/runner and fail before running. The spawned cwd has to be canonical.
+    const root = mkdtempSync(join(tmpdir(), "dext-terminal-"));
+    const lowercase = process.platform === "win32" ? `${root.charAt(0).toLowerCase()}${root.slice(1)}` : root;
+    vscodeState.root = lowercase;
+    try {
+      const result = await terminalRunHandler(invocation({ command: "node --version" }));
+      expect(result).toMatchObject({ kind: "terminal", status: "succeeded", cwd: realpathSync.native(root) });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("returns nonzero exits and enforces timeout bounds", async () => {

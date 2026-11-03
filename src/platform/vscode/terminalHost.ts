@@ -52,6 +52,16 @@ function environmentValue(value: unknown): Record<string, string> {
   return environment;
 }
 
+/** Windows keeps the drive-letter case a path was opened with, and VS Code reports
+ * the folder from a file URI (`file:///c%3A/repo`), so `c:\repo` is what reaches
+ * `cwd` here. Tools that key their module graph by path string then load one copy
+ * through `c:\repo` and another through the on-disk `C:\repo`: Vite and Vitest do
+ * this, and every test file failed with "Vitest failed to find the default suite"
+ * before a single test ran. `native` realpath returns the on-disk spelling. */
+function diskPath(target: string): string {
+  return realpathSync.native(target);
+}
+
 function trustedWorkspaceRoot(): string {
   if (!vscode.workspace.isTrusted) {
     throw new Error("terminal requires a trusted workspace.");
@@ -60,14 +70,13 @@ function trustedWorkspaceRoot(): string {
   if (!folders?.length || folders.some((folder) => folder.uri.scheme !== "file")) {
     throw new Error("terminal requires a local file workspace.");
   }
-  return folders[0]!.uri.fsPath;
+  return diskPath(folders[0]!.uri.fsPath);
 }
 
 function workspaceCwd(root: string, value: unknown): string {
   const requested = value === undefined ? "." : requiredString(value, "cwd");
-  const realRoot = realpathSync(root);
-  const cwd = realpathSync(resolve(realRoot, requested));
-  const pathFromRoot = relative(realRoot, cwd);
+  const cwd = diskPath(resolve(root, requested));
+  const pathFromRoot = relative(root, cwd);
   if (isAbsolute(pathFromRoot) || pathFromRoot === ".." || pathFromRoot.startsWith(`..\\`) || pathFromRoot.startsWith("../")) {
     throw new Error("terminal cwd must stay inside the current workspace.");
   }
