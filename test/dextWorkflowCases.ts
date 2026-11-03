@@ -186,6 +186,26 @@ export function workflowCases(runnerDirectory: string): void {
       expect(result.steps?.map((step) => step.method)).toEqual(["ask"]);
     });
 
+    it("tracks a call to a method below an exported object", { timeout: 30000 }, async () => {
+      const { api, kernel } = await setup(`
+        import { ask } from "dext";
+        import { setTimeout as delay } from "node:timers/promises";
+        export async function audit(since: string) {
+          await ask({ input: "first " + since });
+          await delay(40);
+          await ask({ input: "second" });
+          console.log("audited");
+        }
+      `);
+      await writeFile(join(api, "release.ts"), 'import { audit } from "./fix.ts"; export const release = { audit };');
+      const result = await kernel.runSource(`
+        import { release } from "dext/api/release";
+        release.audit("0.1.1");
+      `);
+      expect(result.steps?.map((step) => step.method)).toEqual(["ask", "ask", "stdout"]);
+      expect(result.steps?.at(-1)?.stream?.text).toBe("audited\n");
+    });
+
     it("preserves caught rejections and Promise.all/Promise.race semantics", { timeout: 30000 }, async () => {
       const { kernel } = await setup(`
         import { setTimeout as delay } from "node:timers/promises";
