@@ -1,4 +1,5 @@
 import type { ProjectModelNode } from "../../contracts/projectModel.js";
+import { structureFingerprint } from "../../knowledge/projectModel.js";
 import type { ProjectStore } from "./projectStore.js";
 
 /** One editable norm: its body is inline text, because a document owns its own file. */
@@ -38,5 +39,7 @@ export async function writeProjectNorm(store: ProjectStore, id: string, text: st
   node.body = { kind: "inline", text };
   node.review = changed ? "edited" : "accepted";
   node.freshness = changed ? "needs_verification" : "current";
+  // The confirmation covers this member/parent structure, not the prose wording.
+  node.properties = { ...node.properties, structureHash: structureFingerprint(model, id) };
   await store.updateProject(model, model.revision);
 }

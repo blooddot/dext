@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { projectModelSchema } from "../src/features/project/contracts/projectModel.js";
+import { projectModelNodeSchema, projectModelRelationSchema, projectModelSchema } from "../src/features/project/contracts/projectModel.js";
 import { listProjectNorms, readProjectNorm, writeProjectNorm } from "../src/features/project/host/persistence/projectNorms.js";
+import { structureFingerprint } from "../src/features/project/knowledge/projectModel.js";
+import { reconcileNativeProject } from "../src/features/project/knowledge/projectModelEvolution.js";
 import { ProjectStore, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
 
 const savedModel = () => projectModelSchema.parse({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [
@@ -44,4 +46,48 @@ describe("Project norms", () => {
     await expect(writeProjectNorm(store, "missing", "text")).rejects.toThrow("missing");
     await expect(writeProjectNorm(store, "doc", "text")).rejects.toThrow("document");
   });
+
+  it("confirms only the structure it was reviewed on and reopens it when members move", async () => {
+    const { files, store } = fixture();
+    const model = savedModel();
+    model.nodes[0]!.paths = ["src/a.ts"];
+    files.set(".dext/project/model.json", JSON.stringify(model));
+    await writeProjectNorm(store, "module:a", "## Responsibility\n\nOwns a.\n");
+    const confirmed = committed(files).nodes[0]!;
+    expect(confirmed.review).toBe("accepted");
+    expect(typeof confirmed.properties.structureHash).toBe("string");
+    expect(confirmed.properties.structureHash).toBe(structureFingerprint(committed(files), "module:a"));
+
+    const previous = committed(files);
+    const candidate = { ...previous, nodes: previous.nodes.map(node => node.id === "module:a" ? { ...node, paths: ["src/a.ts", "src/b.ts"], body: { kind: "inline" as const, text: "Regenerated body" } } : node) };
+    const next = reconcileNativeProject(candidate, previous);
+    const reopened = next.nodes.find(node => node.id === "module:a")!;
+    expect(reopened.review).toBe("draft");
+    expect(reopened.freshness).toBe("needs_verification");
+    expect(reopened.body).toEqual({ kind: "inline", text: "## Responsibility\n\nOwns a.\n" });
+    expect(reopened.properties.structureHash).toBeUndefined();
+  });
+
+  it("reopens a confirmation when only the parent module changes", async () => {
+    const { files, store } = fixture();
+    const model = savedModel();
+    model.nodes[0]!.paths = ["src/a.ts"];
+    files.set(".dext/project/model.json", JSON.stringify(model));
+    await writeProjectNorm(store, "module:a", "## Responsibility\n\nOwns a.\n");
+    const previous = committed(files);
+    const parent = projectModelNodeSchema.parse({ id: "module:src", kind: "module", title: "src", canonicalName: "src", body: { kind: "inline", text: "Parent" }, paths: [] });
+    const candidate = { ...previous, nodes: [...previous.nodes, parent],
+      relations: [projectModelRelationSchema.parse({ id: "module:src--contains--module:a", from: "module:src", to: "module:a", kind: "contains", origin: "detected", review: "draft", freshness: "needs_verification" })] };
+    const next = reconcileNativeProject(candidate, previous);
+    expect(next.nodes.find(node => node.id === "module:a")).toMatchObject({ review: "draft", freshness: "needs_verification", body: { kind: "inline", text: "## Responsibility\n\nOwns a.\n" } });
+  });
+
+  it("keeps an edited body and its confirmation snapshot together", async () => {
+    const { files, store } = fixture();
+    await writeProjectNorm(store, "module:a", "## Responsibility\n\nOwns more.");
+    const edited = committed(files).nodes[0]!;
+    expect(edited).toMatchObject({ review: "edited", freshness: "needs_verification" });
+    expect(typeof edited.properties.structureHash).toBe("string");
+  });
 });
+

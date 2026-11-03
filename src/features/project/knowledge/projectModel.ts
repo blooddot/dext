@@ -1,4 +1,30 @@
 import { projectModelSchema, type ProjectModel } from "../contracts/projectModel.js";
+
+/**
+ * Small dependency-free digest: this is a local consistency check, not a security hash. A collision
+ * only delays reopening a confirmation until the next structural edit.
+ */
+const digest = (value: unknown): string => {
+  const text = JSON.stringify(value);
+  let left = 0x811c9dc5, right = 0x9e3779b9;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    left = Math.imul(left ^ code, 0x01000193) >>> 0;
+    right = Math.imul(right ^ code, 0x85ebca6b) >>> 0;
+  }
+  return left.toString(16).padStart(8, "0") + right.toString(16).padStart(8, "0");
+};
+
+/**
+ * The structure a reviewer confirmed: primary members and the containing module. Titles and prose are
+ * not part of it, so rewording a norm never invalidates its own confirmation.
+ */
+export function structureFingerprint(model: ProjectModel, nodeId: string): string {
+  const node = model.nodes.find((item) => item.id === nodeId);
+  const parent = model.relations.find((edge) => edge.kind === "contains" && edge.to === nodeId
+    && model.nodes.some((item) => item.id === edge.from && (item.kind === "module" || item.kind === "context")));
+  return digest({ members: [...(node?.paths ?? [])].sort(), parent: parent?.from ?? null });
+}
 import { projectIntentSchema, type ProjectIntent } from "../contracts/projectIntent.js";
 import { knowledgeText } from "./projectKnowledge.js";
 

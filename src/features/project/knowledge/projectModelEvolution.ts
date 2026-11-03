@@ -53,6 +53,7 @@ export function reconcileProjectModel(next: ProjectIntent, previous: ProjectInte
   };
 }
 import type { ProjectModel } from "../contracts/projectModel.js";
+import { structureFingerprint } from "./projectModel.js";
 
 /** Merge validated candidates; the persistence boundary validates the resulting graph before commit. */
 export function reconcileNativeProject(candidate: ProjectModel, previous?: ProjectModel): ProjectModel {
@@ -74,9 +75,25 @@ export function reconcileNativeProject(candidate: ProjectModel, previous?: Proje
   }
   if (!previous) return candidate;
   const reviewed = (item: { review: string }) => item.review === "accepted" || item.review === "edited";
-  const nodes = new Map(previous.nodes.map(node => [node.id, node]));
-  for (const node of candidate.nodes) if (!nodes.has(node.id) || !reviewed(nodes.get(node.id)!)) nodes.set(node.id, node);
-  const relations = new Map(previous.relations.map(edge => [edge.id, edge]));
+  // A confirmation is only valid for the structure it was made on. Recompute from the incoming graph so
+  // a changed member list or parent reopens the node while its reviewed prose stays untouched.
+  const ids = new Set(candidate.nodes.map((node) => node.id));
+  const structure: ProjectModel = { ...candidate,
+    nodes: [...candidate.nodes, ...previous.nodes.filter((node) => !ids.has(node.id))],
+    relations: [...candidate.relations, ...previous.relations.filter((edge) => !candidate.relations.some((item) => item.id === edge.id))] };
+  const reopened = new Map<string, ProjectModel["nodes"][number]>();
+  for (const node of previous.nodes) {
+    if (!reviewed(node) || typeof node.properties.structureHash !== "string") continue;
+    if (structureFingerprint(structure, node.id) === node.properties.structureHash) continue;
+    const properties = { ...node.properties };
+    delete properties.structureHash;
+    reopened.set(node.id, { ...node, properties, review: "draft", freshness: "needs_verification" });
+  }
+  const nodes = new Map(previous.nodes.map((node) => [node.id, reopened.get(node.id) ?? node]));
+  // A reviewed body is never replaced by generation, even when its structure just reopened it.
+  const protectedIds = new Set(previous.nodes.filter(reviewed).map((node) => node.id));
+  for (const node of candidate.nodes) if (!protectedIds.has(node.id)) nodes.set(node.id, node);
+  const relations = new Map(previous.relations.map((edge) => [edge.id, edge]));
   for (const edge of candidate.relations) if (!relations.has(edge.id) || !reviewed(relations.get(edge.id)!)) relations.set(edge.id, edge);
   return { ...previous, nodes: [...nodes.values()], relations: [...relations.values()] };
 }
