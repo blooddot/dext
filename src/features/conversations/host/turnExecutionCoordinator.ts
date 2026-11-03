@@ -172,6 +172,9 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     // resource draft. Resolve the command once so every Plan round sees the
     // same expanded instruction.
     const selectedSkills = mode === "code" || session.resource ? [] : [...(selection.skills ?? [])];
+    // Pi packages are a provider capability rather than conversation content,
+    // so Code and resource turns keep their own default (every installed one).
+    const selectedPlugins = session.resource ? undefined : selection.piPlugins;
     let command: TurnCommandSnapshot | undefined;
     let commandInstruction: string | undefined;
     let taskSource = source;
@@ -244,6 +247,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {}),
         ...(selection.permission ? { agentPermission: selection.permission } : {}),
         ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+        ...(selectedPlugins ? { piPlugins: selectedPlugins } : {}),
         ...(commandInstruction ? { commandInstruction } : {}),
         ...(session.resource ? { resourceSource } : {}),
         agentPreset: harnessPresetOrDefault(selection.agentPreset),

@@ -9,6 +9,8 @@ export interface PiSessionBinding { path: string; binding: string }
 export interface PiBridgeConfig {
   permission: AgentPermission;
   tools: string[];
+  /** Pi packages are loaded, so their tools must pass the read-only gate. */
+  plugins?: boolean;
   mcpServers: readonly AgentMcpServer[];
   resultSchema?: Record<string, unknown>;
   projectQuery?: boolean;

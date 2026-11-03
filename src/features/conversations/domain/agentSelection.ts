@@ -25,9 +25,12 @@ export function dedupeSkillIds(values: readonly unknown[] | undefined): string[]
  * `skills` keeps reading exactly as before. */
 export function normalizeAgentSelection(selection: AgentSelection): AgentSelection {
   const skills = dedupeSkillIds(selection.skills);
-  const { skills: _ignored, ...rest } = selection;
+  const { skills: _ignored, piPlugins: rawPlugins, ...rest } = selection;
   void _ignored;
-  return skills.length ? { ...rest, skills } : rest;
+  // An absent list means every installed Pi package, so only an explicit list
+  // is stored; an empty one still means "none".
+  const piPlugins = rawPlugins === undefined ? undefined : [...new Set(rawPlugins.filter((id): id is string => typeof id === "string" && Boolean(id.trim())).map((id) => id.trim()))].slice(0, 32);
+  return { ...rest, ...(piPlugins ? { piPlugins } : {}), ...(skills.length ? { skills } : {}) };
 }
 
 /** A new tab starts with no skills: the user opts in for every conversation. */

@@ -15,6 +15,7 @@ import { planPathSegments } from "../features/conversations/domain/planFile.js";
 import type { InputNotificationTarget } from "../features/conversations/host/inputNotifications.js";
 import { normalizeInputReferenceSource } from "../features/workspace/domain/fileReference.js";
 import { harnessPresetOrDefault } from "../features/agents/domain/harnessPresetDefault.js";
+import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { dedupeSkillIds, withoutSkills } from "../features/conversations/domain/agentSelection.js";
 import type { McpServerConfig } from "../features/mcp/host/mcpRegistry.js";
 import { formatProjectReference, type ProjectReferenceCandidate, type ProjectObjectReference } from "../features/project/knowledge/projectReference.js";
@@ -231,6 +232,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private installedSkillIds(): Set<string> {
     const catalog = (this.application as { skills?: { list(): Array<{ id: string }> } }).skills;
     return new Set((catalog?.list() ?? []).map((skill) => skill.id));
+  }
+
+  private installedPluginIds(): Set<string> {
+    return new Set(installedPiPlugins().map((plugin) => plugin.id));
   }
 
   /** A persisted or late selection may name a skill that was uninstalled while
@@ -864,6 +869,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           const requestedSkills = request.selection.skills === undefined
             ? previousSelection?.skills
             : dedupeSkillIds(request.selection.skills).filter((id) => this.installedSkillIds().has(id));
+          // Pi packages the user uninstalled are dropped for the same reason;
+          // an absent list keeps the tab's stored default (every package).
+          const requestedPlugins = request.selection.piPlugins === undefined
+            ? previousSelection?.piPlugins
+            : request.selection.piPlugins.filter((id) => this.installedPluginIds().has(id));
           const selection = {
             mode: this.activeSession.resource ? "ask" : request.selection.mode,
             permission: request.selection.permission,
@@ -873,7 +883,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             reasoningEffort: request.selection.reasoningEffort,
             speed: request.selection.speed,
             serviceTier: request.selection.serviceTier,
-            ...(!this.activeSession.resource && requestedSkills?.length ? { skills: requestedSkills } : {})
+            ...(!this.activeSession.resource && requestedSkills?.length ? { skills: requestedSkills } : {}),
+            ...(!this.activeSession.resource && requestedPlugins ? { piPlugins: requestedPlugins } : {})
           } satisfies AgentSelection;
           const sessionId = this.activeSession.id;
           this.conversation.controller.setSelection(sessionId, selection);

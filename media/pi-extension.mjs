@@ -1,5 +1,23 @@
 import { connect } from "node:net";
 import { StringDecoder } from "node:string_decoder";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+/** Tools a read-only turn must never reach, even with Pi packages loaded. */
+const WRITE_TOOLS = new Set(["write", "edit", "bash", "powershell"]);
+
+/** pi-subagents takes a child's tools from its agent file, not from this turn,
+ * so a read-only turn hands its limit down as the package's capability ceiling.
+ * Only pi-subagents' own install path resolves this module from here, and the
+ * package is optional: no import means nothing to restrict. */
+async function capSubagentsAtReadOnly(sessionId) {
+  try {
+    const agentDirectory = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+    const module = await import(pathToFileURL(join(agentDirectory, "npm", "node_modules", "pi-subagents", "bundle", "capability-ceiling.js")).href);
+    module.registerSubagentCapabilityCeiling({ sessionId, source: "dext-read-only", ceiling: { allowedTools: ["read", "grep", "find", "ls"], denyExtensions: true } });
+  } catch { /* pi-subagents is not installed. */ }
+}
 
 /** This file is shipped with Dext and loaded explicitly into the user's existing Pi. */
 export default async function dextPiExtension(pi) {
@@ -68,9 +86,14 @@ export default async function dextPiExtension(pi) {
     return { continue: true, entries: [{ type: "custom_message", customType: "dext_result_reminder", display: false, content: "This Dext turn is not complete: call dext_submit_result with the whole result object. Plain text is not a result." }] };
   });
   pi.on("tool_call", (event) => {
-    if (config.permission !== "full-access" && !config.tools.includes(event.toolName)) return { block: true, reason: "This Dext turn is read-only; this tool is unavailable." };
+    const pluginTool = config.plugins === true && !WRITE_TOOLS.has(event.toolName);
+    if (config.permission !== "full-access" && !config.tools.includes(event.toolName) && !pluginTool) return { block: true, reason: "This Dext turn is read-only; this tool is unavailable." };
     if (!active && event.toolName.startsWith("dext_")) return { block: true, reason: "The Dext turn has ended." };
     return undefined;
+  });
+  if (config.permission !== "full-access") pi.on("session_start", (_event, ctx) => {
+    const sessionId = ctx?.sessionManager?.getSessionId?.();
+    if (sessionId) void capSubagentsAtReadOnly(sessionId);
   });
   pi.on("session_shutdown", () => { active = false; socket.destroy(); });
   if (config.permission === "full-access") for (const server of config.mcpServers) pi.registerMcpServer(`dext_${server.name}`, { command: server.command, args: server.args, env: server.env, exposure: "direct" });

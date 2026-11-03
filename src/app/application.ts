@@ -12,6 +12,7 @@ import { planSemanticContent } from "../features/project/knowledge/projectPlan.j
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
 import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
+import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
 import { resolveOutputLanguage, type ResolvedOutputLanguage } from "../features/agents/domain/outputLanguage.js";
@@ -1052,6 +1053,7 @@ export class DextApplication {
         ...(skill.packName ? { packName: skill.packName } : {})
       })),
       skillCommands: this.skills.commands(skillAgent),
+      piPlugins: installedPiPlugins().map(({ id, label }) => ({ id, label })),
       skillsEnabled: this.workspaceTrusted,
       ...(this.workspaceTrusted ? {} : { skillsDisabledReason: "Skills require a trusted local workspace." }),
       settings: this.webviewSettings()

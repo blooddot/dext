@@ -65,15 +65,24 @@ export function piTools(permission: AgentPermission, result: boolean, platform: 
     ...(permission === "read-only" && trusted ? ["dext_fetch"] : []),
     ...(permission === "full-access" ? ["write", "edit", platform === "win32" ? "powershell" : "bash", "mcp__*"] : [])];
 }
+/** Tools that write files or run commands. A plugin turn declares every tool
+ * so the packages' own tools reach the model, so these stay excluded from a
+ * read-only turn (the Pi extension blocks them again at call time). */
+const PI_WRITE_TOOLS = "write,edit,bash,powershell";
+
 export function piArguments(options: {
   extensionPath: string; sessionDirectory: string; sessionPath?: string; trusted: boolean;
   permission: AgentPermission; result?: boolean; ephemeral?: boolean; extra?: readonly string[];
-  projectQuery?: boolean;
+  projectQuery?: boolean; plugins?: readonly string[];
 }): string[] {
+  const plugins = options.plugins ?? [];
   return [...piExtraArguments(options.extra ?? []), "--mode", "rpc", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-approve", "--offline",
     ...(!options.trusted ? ["--no-context-files"] : []),
     "--extension", options.extensionPath,
+    ...plugins.flatMap((path) => ["--extension", path]),
     ...(options.permission === "full-access" ? ["--extension", "builtin:mcp"] : ["--no-mcp"]),
-    "--tools", piTools(options.permission, Boolean(options.result), process.platform, options.trusted, options.projectQuery).join(","),
+    ...(plugins.length
+      ? ["--tools", "*", ...(options.permission === "read-only" ? ["--exclude-tools", PI_WRITE_TOOLS] : [])]
+      : ["--tools", piTools(options.permission, Boolean(options.result), process.platform, options.trusted, options.projectQuery).join(",")]),
     ...(options.result || options.ephemeral ? ["--no-session"] : ["--session-dir", options.sessionDirectory, ...(options.sessionPath ? ["--session", options.sessionPath] : [])])];
 }

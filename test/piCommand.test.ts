@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkPiVersion, piArguments, piCommand, piExtraArguments, piPermission, piTools } from "../src/features/agents/host/piCommand.js";
 
@@ -49,5 +50,16 @@ describe("associating an installed Pi command", () => {
     expect(args[args.indexOf("--tools") + 1]).toContain("dext_fetch");
     const untrusted = piArguments({ ...base, trusted: false });
     expect(untrusted[untrusted.indexOf("--tools") + 1]).not.toContain("dext_fetch");
+  });
+  it("loads selected Pi packages without letting a read-only turn write", () => {
+    const base = { extensionPath: "pi.mjs", sessionDirectory: "sessions", trusted: true };
+    const plugin = join("plugins", "pi-web-access");
+    const readOnly = piArguments({ ...base, permission: "read-only", plugins: [plugin] });
+    expect(readOnly.filter((_argument, index) => readOnly[index - 1] === "--extension")).toEqual(["pi.mjs", plugin]);
+    expect(readOnly[readOnly.indexOf("--tools") + 1]).toBe("*");
+    expect(readOnly[readOnly.indexOf("--exclude-tools") + 1]).toBe("write,edit,bash,powershell");
+    const writable = piArguments({ ...base, permission: "full-access", plugins: [plugin] });
+    expect(writable).not.toContain("--exclude-tools");
+    expect(piArguments({ ...base, permission: "read-only" })).not.toContain("--exclude-tools");
   });
 });

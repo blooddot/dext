@@ -321,6 +321,8 @@ export interface ExecutionMetadata {
   /** Skills enabled for this turn. The host loads each SKILL.md before the
    * provider call; unknown ids fail the turn instead of being ignored. */
   skills?: string[];
+  /** Pi packages this turn runs with. Absent means every installed package. */
+  piPlugins?: string[];
   /** An expanded `/command` prompt template. Injected after the skills and
    * before Plan's own instructions. */
   commandInstruction?: string;

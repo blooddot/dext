@@ -1137,6 +1137,58 @@ function renderModelMenu(
     elements.modelMenu.append(button);
   }
   if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu();
+  if (profile?.provider === "pi" && state.piPlugins?.length) appendPluginCategory(state);
+}
+
+/** The installed Pi packages this conversation runs with. An absent selection
+ * means every package, which is what a new conversation starts on. */
+function appendPluginCategory(state: SidebarState): void {
+  const installed = state.piPlugins ?? [];
+  const selected = state.agentSelection.piPlugins;
+  const count = selected ? selected.length : installed.length;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "composer-menu-option composer-menu-category";
+  button.tabIndex = -1;
+  const title = document.createElement("span");
+  title.textContent = "Plugins";
+  const value = document.createElement("span");
+  value.className = "composer-menu-category-value";
+  value.textContent = count === 0 ? "None" : count === installed.length ? `All (${count})` : `${count} of ${installed.length}`;
+  const chevron = document.createElement("i");
+  chevron.className = "codicon codicon-chevron-right";
+  button.append(title, value, chevron);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!composerSelectionLocked()) renderPluginChoices(state);
+  });
+  elements.modelMenu.append(button);
+}
+
+function renderPluginChoices(state: SidebarState): void {
+  const menu = elements.modelSubmenu;
+  renderModelChoices(menu, "Plugins", [], "", () => undefined);
+  const installed = state.piPlugins ?? [];
+  const selected = state.agentSelection.piPlugins ?? installed.map((plugin) => plugin.id);
+  for (const plugin of installed) {
+    const checked = selected.includes(plugin.id);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option";
+    button.tabIndex = -1;
+    button.setAttribute("role", "menuitemcheckbox");
+    button.setAttribute("aria-checked", String(checked));
+    const text = document.createElement("span");
+    text.textContent = plugin.label;
+    const check = document.createElement("i");
+    check.className = `codicon codicon-${checked ? "check" : "blank"}`;
+    button.append(text, check);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      submitAgentSelection({ piPlugins: checked ? selected.filter((id) => id !== plugin.id) : [...selected, plugin.id] });
+    });
+    menu.append(button);
+  }
 }
 
 function appendHarnessPresetManagementMenu(): void {
@@ -1317,6 +1369,9 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>, k
       serviceTier: change.serviceTier ?? selection?.serviceTier ?? "",
       ...(change.skills !== undefined || selection?.skills?.length
         ? { skills: change.skills ?? selection?.skills ?? [] }
+        : {}),
+      ...(change.piPlugins !== undefined || selection?.piPlugins
+        ? { piPlugins: change.piPlugins ?? selection?.piPlugins ?? [] }
         : {})
     }
   });

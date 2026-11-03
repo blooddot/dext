@@ -92,6 +92,9 @@ export interface AgentSelection {
   /** Skills enabled for this conversation. Empty or absent means none. A new
    * tab never inherits another tab's selection. */
   skills?: string[];
+  /** Pi packages enabled for this conversation, as their settings entries.
+   * Absent means every installed package; empty means none. */
+  piPlugins?: string[];
 }
 
 

@@ -236,13 +236,16 @@ export class AgentProfileStore {
       ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
       ...(selection.speed !== undefined ? { speed: selection.speed } : {}),
       ...(selection.serviceTier !== undefined ? { serviceTier: selection.serviceTier } : {}),
-      ...(selection.skills !== undefined ? { skills: [...selection.skills] } : {})
+      ...(selection.skills !== undefined ? { skills: [...selection.skills] } : {}),
+      ...(selection.piPlugins !== undefined ? { piPlugins: [...selection.piPlugins] } : {})
     };
     // Skills belong to one conversation, so they stay in memory and never leak
-    // into the global (new-tab) selection.
-    const { mode, skills, ...globalSelection } = this.selection;
+    // into the global (new-tab) selection. A Pi package list does the same: a
+    // new tab starts on every installed package.
+    const { mode, skills, piPlugins, ...globalSelection } = this.selection;
     void mode;
     void skills;
+    void piPlugins;
     void this.state?.update(SELECTION_KEY, globalSelection);
   }
 

@@ -122,6 +122,9 @@ export interface SidebarState {
   agentSelection: AgentSelection;
   /** Installed skills, grouped by pack id. Source paths stay host-side. */
   skills?: SkillSummary[];
+  /** Pi packages the user installed with `pi install`; the composer lists these
+   * as the conversation's plugin selection. */
+  piPlugins?: { id: string; label: string }[];
   /** Commands whose skill can be selected in the composer. */
   skillCommands?: SkillCommandSummary[];
   /** Skills are disabled outside a trusted local workspace. */

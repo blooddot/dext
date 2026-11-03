@@ -12,6 +12,7 @@ import { formatDiagnostics } from "../../../shared/protocol/resultBoundary.js";
 import { resultToolParameters } from "../domain/harnessResultTool.js";
 import { agentPayload, bootstrappedConversationInput, type AgentConversationRequest, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
 import { piArguments, piCommand, piPermission, piTools, checkPiVersion } from "./piCommand.js";
+import { installedPiPlugins, type PiPlugin } from "./piPlugins.js";
 import { piFetch } from "./piFetch.js";
 import { PiBridge } from "./piBridge.js";
 import { piQuestion, piUi } from "./piInteractions.js";
@@ -21,6 +22,8 @@ type TurnRequest = AgentConversationRequest & { contract?: AgentExecutionRequest
 export interface PiDiscovery { options: AgentModelOption[]; defaults: { model?: string; reasoningEffort?: string } }
 export interface PiRunnerOptions {
   extensionPath?: string; sessionDirectory?: string;
+  /** Installed Pi packages; absent means the user's real Pi settings. */
+  plugins?: () => readonly PiPlugin[];
   transportFactory?: (command: string, args: readonly string[], cwd: string, env: NodeJS.ProcessEnv) => PiRpcTransport;
   versionProbe?: (command: string, cwd: string, signal?: AbortSignal) => Promise<void>;
 }
@@ -61,6 +64,13 @@ export class PiAgentRunner implements AgentRunner {
     if (!extensionPath || !sessionDirectory) throw new Error("Pi runtime resources are not configured by the Dext host.");
     return { extensionPath, sessionDirectory };
   }
+  /** A turn's plugin selection is a list of settings entries; an absent list
+   * loads every installed package, which is the default a new tab starts on. */
+  private pluginPaths(request: TurnRequest): string[] {
+    const catalog = (this.options.plugins ?? installedPiPlugins)();
+    const selected = request.metadata.piPlugins;
+    return catalog.filter((plugin) => !selected || selected.includes(plugin.id)).map((plugin) => plugin.path);
+  }
   private async binding(request: TurnRequest, command: string): Promise<string> {
     const root = await realpath(request.cwd), home = resolve(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"));
     const files = [this.resources().extensionPath, ...["settings.json", "models.json", "mcp.json", "AGENTS.md"].map((name) => join(home, name))];
@@ -71,7 +81,7 @@ export class PiAgentRunner implements AgentRunner {
     }
     const digest = createHash("sha256");
     digest.update(JSON.stringify({ projectQuery: Boolean(request.projectQuery) }));
-    digest.update(JSON.stringify([root, request.workspaceTrusted === true, piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted), command, request.cliArguments ?? [], request.mcpServers ?? [], home]));
+    digest.update(JSON.stringify([root, request.workspaceTrusted === true, piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted), command, request.cliArguments ?? [], request.mcpServers ?? [], home, this.pluginPaths(request)]));
     const identity = await stat(command); digest.update(`${identity.size}:${identity.mtimeMs}`);
     for (const file of files) { try { digest.update(file).update(await readFile(file)); } catch { /* Optional Pi configuration or text context. */ } }
     return digest.digest("hex");
@@ -86,12 +96,14 @@ export class PiAgentRunner implements AgentRunner {
   private async open(request: TurnRequest, command: string, binding: string, signal: AbortSignal, resume?: string, ephemeral = false): Promise<Session> {
     const resources = this.resources(); await mkdir(resources.sessionDirectory, { recursive: true });
     const permission = piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted);
+    const plugins = this.pluginPaths(request);
     let session: Session | undefined;
     const bridge = new PiBridge({ permission, tools: piTools(permission, Boolean(request.contract), process.platform, request.workspaceTrusted === true, Boolean(request.projectQuery)), mcpServers: request.mcpServers ?? [], projectQuery: request.workspaceTrusted === true && Boolean(request.projectQuery),
+      ...(plugins.length ? { plugins: true } : {}),
       ...(request.contract ? { resultSchema: resultToolParameters(request.contract.outputJsonSchema) } : {}) }, (frame) => this.bridgeRequest(session, frame));
     let transport: PiRpcTransport | undefined;
     try {
-      const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral, projectQuery: Boolean(request.projectQuery),
+      const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral, projectQuery: Boolean(request.projectQuery), plugins,
         ...(resume ? { sessionPath: resume } : {}), ...(request.cliArguments ? { extra: request.cliArguments } : {}) });
       transport = (this.options.transportFactory ?? ((program, argv, cwd, env) => new PiRpcTransport(program, argv, cwd, env)))(command, args, request.cwd,
         { ...process.env, DEXT_PI_BRIDGE: bridge.endpoint, DEXT_PI_BRIDGE_TOKEN: bridge.token });
@@ -193,7 +205,8 @@ export class PiAgentRunner implements AgentRunner {
     const controller = new AbortController(), queued = { key: randomUUID(), controller }; this.controllers.add(queued);
     let session: Session | undefined;
     try {
-      const request: TurnRequest = { profile, cwd, mode: "ask", input: "", metadata: {}, allowWorkspaceWrite: false, workspaceTrusted: trusted, cliArguments: args };
+      // Model discovery loads no packages: it only asks Pi which models exist.
+      const request: TurnRequest = { profile, cwd, mode: "ask", input: "", metadata: { piPlugins: [] }, allowWorkspaceWrite: false, workspaceTrusted: trusted, cliArguments: args };
       const command = piCommand(profile); await (this.options.versionProbe ?? checkPiVersion)(command, cwd, controller.signal);
       const binding = await this.binding(request, command);
       session = await this.open(request, command, binding, controller.signal, undefined, true);
