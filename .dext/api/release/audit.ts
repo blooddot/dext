@@ -930,12 +930,22 @@ function alignmentHow(judgement: Judgement): string {
   return `${judgement.alignment.how}；${counts}`;
 }
 
-function reportSummary(version: string, ready: boolean, blockerCount: number): void {
-  if (ready) {
-    console.log(`release/audit：${version} 没有阻塞发布的问题。`);
-    return;
-  }
-  console.log(`release/audit：${version} 有 ${blockerCount} 个阻塞发布的问题。`);
+/** 返回值在对话里只是一段 JSON，所以报告同时写到 stdout，人才能直接读。 */
+function reportOutcome(report: Omit<AuditReport, "ready">, ready: boolean): void {
+  const headline = ready
+    ? `release/audit：${report.version} 没有阻塞发布的问题。`
+    : `release/audit：${report.version} 有 ${report.blockers.length} 个阻塞发布的问题。`;
+  const blockers = report.blockers.flatMap((blocker) => [
+    `- [${blocker.id}] ${blocker.title}（${blocker.file}:${blocker.line}）`,
+    `  后果：${blocker.consequence}`,
+    `  修复：${blocker.fix}`
+  ]);
+  const advisories = report.advisories.map((advisory) => {
+    const where = advisory.line > 0 ? `（${advisory.file}:${advisory.line}）` : "";
+    return `- 建议 [${advisory.id}] ${advisory.title}${where}`;
+  });
+  const verdicts = report.checked.map((item) => `${item.criterion}=${item.result}`).join("、");
+  console.log([headline, ...blockers, ...advisories, `检查项：${verdicts}`].join("\n"));
 }
 
 // ---------------------------------------------------------------- 组装
@@ -1030,6 +1040,6 @@ export async function audit(since: string, baselinePath?: string): Promise<Audit
     judgement
   });
   const ready = report.blockers.length === 0;
-  reportSummary(report.version, ready, report.blockers.length);
+  reportOutcome(report, ready);
   return { ready, ...report };
 }
