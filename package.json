@@ -319,7 +319,7 @@
         "command": "copyFilePath",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled && resourceScheme != webview-panel))"
       },
       {
         "command": "dext.triggerSuggest",

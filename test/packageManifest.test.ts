@@ -43,11 +43,14 @@ describe("Dext package manifest", () => {
     const value = await manifest();
     const bindings = value.contributes?.keybindings?.filter((item) => item.command === "copyFilePath");
     // Open Editors and the editor tab area have no copy shortcut of their own,
-    // so the path text replaces nothing there.
+    // so the path text replaces nothing there. An editor tab that is a webview
+    // panel does have one: VS Code forwards its Ctrl+C to the workbench, so
+    // claiming it here would copy the virtual `webview-panel:` path instead of
+    // the user's selection.
     expect(bindings).toEqual([
       {
         command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
-        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled && resourceScheme != webview-panel))"
       }
     ]);
     // The two copies VS Code owns: an Explorer copy keeps its file list, so the
