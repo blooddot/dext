@@ -1,6 +1,6 @@
 /// <reference types="node" />
-import { readFile } from "node:fs/promises";
 import { ask, terminal, type AskResult, type TerminalResult } from "dext";
+import { readFile } from "node:fs/promises";
 
 // 流程只有五段：定位起点 → 解析引用 → 取改动 → 跑一次判断 → 组装结论。
 // 每个 terminal/ask 各占一个具名 wrapper；其余都是不出现在执行流里的纯解析 helper。
@@ -17,14 +17,14 @@ const FILE_LIST_CHAR_LIMIT = 12_000;
 const BASELINE_CHAR_LIMIT = 12_000;
 const EVIDENCE_CHAR_LIMIT = 1_600;
 const SAFE_SINCE = /^[A-Za-z0-9._/@{}~^+-]+$/u;
-const SAFE_PATH = /^[A-Za-z0-9._/@+=,:;'()#&~^{}\[\] -]+$/u;
 const ANSI = /\u001b\[[0-9;]*[a-z]/giu;
 const STAT_ROW = /^(.+?)\s+\|\s+(?:(\d+)|Bin)\b/u;
 const STAT_SUMMARY = /^(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/u;
 const VERSION_HEADING = /^##\s+(.+?)\s*$/u;
 const VERSION_IN_HEADING = /^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)(?=$|[\s(])/u;
-const NON_SOURCE_DIRECTORIES = ["test/", "tests/", "docs/", ".dext/", "release/", "dist/", "media/", "node_modules/", "vendor/", ".vscode-test/"];
+const NON_SOURCE_DIRECTORIES = ["test", "tests", "docs", ".dext", "release", "dist", "media", "node_modules", "vendor", ".vscode-test"];
 const NON_SOURCE_FILES = ["package-lock.json", "npm-shrinkwrap.json", "CHANGELOG.md", "README.md", "README.zh-CN.md"];
+const NON_SOURCE_EXTENSIONS = ["md", "lock", "snap"];
 
 type Verdict = "pass" | "fail" | "skip";
 type SinceKind = "tag" | "branch" | "remote" | "commit";
@@ -230,17 +230,14 @@ function composeDiffCommand(commit: string): string {
   return `git --no-pager diff --stat --patch --no-color --unified=3 "${commit}...HEAD"`;
 }
 
-function quotePath(path: string): string | null {
-  const safe = SAFE_PATH.test(path);
-  return safe ? `"${path}"` : null;
-}
-
-/** 范围过大时只把源码文件的补丁交给判断步骤；路径不安全的文件只留在清单里。 */
-function composeSourceDiffCommand(commit: string, files: string[]): string {
-  const paths = files.filter(isSourceFile).map(quotePath).filter((path): path is string => path !== null);
-  const empty = paths.length === 0;
-  if (empty) return composeDiffCommand(commit);
-  return `git --no-pager diff --no-color --unified=2 "${commit}...HEAD" -- ${paths.join(" ")}`;
+/** 范围过大时只把源码文件的补丁交给判断步骤。排除式 pathspec：包含式要枚举上百条路径，超过 Windows 8191 字符的命令行上限，而且 --stat 里的长路径是缩写的（`.../x`），枚举出来根本匹配不到。 */
+function composeSourceDiffCommand(commit: string): string {
+  const excluded = [
+    ...NON_SOURCE_DIRECTORIES.map((directory) => `:(exclude)${directory}/**`),
+    ...NON_SOURCE_FILES.map((file) => `:(exclude)${file}`),
+    ...NON_SOURCE_EXTENSIONS.map((extension) => `:(exclude)**/*.${extension}`)
+  ];
+  return `git --no-pager diff --no-color --unified=2 "${commit}...HEAD" -- ${excluded.map((spec) => `"${spec}"`).join(" ")}`;
 }
 
 async function resolveSince(command: string): Promise<TerminalResult> {
@@ -367,15 +364,6 @@ function normalizeStatPath(value: string): string {
   const arrow = /^(.*?)\s+=>\s+(.*)$/u.exec(value);
   if (arrow !== null) return (arrow[2] ?? "").trim();
   return value;
-}
-
-function isSourceFile(file: string): boolean {
-  const excluded = NON_SOURCE_DIRECTORIES.some((directory) => file.startsWith(directory));
-  if (excluded) return false;
-  if (NON_SOURCE_FILES.includes(file)) return false;
-  const lower = file.toLowerCase();
-  if (lower.endsWith(".md") || lower.endsWith(".lock") || lower.endsWith(".snap")) return false;
-  return true;
 }
 
 function readDiffScope(stat: string): DiffScope {
@@ -1009,7 +997,7 @@ export async function audit(since: string, baselinePath?: string): Promise<Audit
   const wide = scope.fileCount > FILE_LIMIT || scope.changedLines > LINE_LIMIT;
   let detail = diffResult;
   if (wide) {
-    detail = await readSourceDiff(composeSourceDiffCommand(source.commit, scope.files));
+    detail = await readSourceDiff(composeSourceDiffCommand(source.commit));
   }
   const patch = wide ? detail.stdout : document.patch;
 
