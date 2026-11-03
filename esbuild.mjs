@@ -122,11 +122,6 @@ if (watch) {
   // entry instead of trusting that node_modules is hidden from the package.
   const manifest = {
     schemaVersion: 1,
-    outputs: Object.fromEntries([
-      ...Object.entries(results[0]).filter(([key]) => key !== "metafile"),
-      ...Object.entries(results[1]).filter(([key]) => key !== "metafile"),
-      ...Object.entries(results[2]).filter(([key]) => key !== "metafile")
-    ]),
     entryInputs: {
       extension: Object.keys(results[0].metafile.inputs).sort(),
       webview: Object.keys(results[1].metafile.inputs).sort(),
