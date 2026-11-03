@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": 49,
+  "version": 62,
   "knowledge": {
     "enabled": true,
     "initialized": true
@@ -34,5 +34,5 @@
     "model": "myproxy/deepseek-flash",
     "reasoningEffort": "high"
   },
-  "updatedAt": 1793156263978
+  "updatedAt": 1793709788467
 }
