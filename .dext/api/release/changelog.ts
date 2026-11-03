@@ -9,12 +9,16 @@ const PACKAGE_PATH = 'package.json';
 const HEAD_COMMAND = 'git rev-parse HEAD';
 const RULES = ['release-changelog.md'];
 const GIT_TIMEOUT_MS = 60000;
-const MAX_ENTRY_LENGTH = 200;
+const MAX_ENTRY_LENGTH = 150;
+const MAX_ENTRIES = 60;
+const MAX_REPORT_ENTRY = 200;
 const MAX_DIFF_LENGTH = 120000;
 const MAX_STAT_LENGTH = 20000;
 const LEAD_MARKER = 'all notable changes';
 const UNRELEASED_HEADING = '## Unreleased';
 const VERSION_HEADING = /^## [0-9]+[.][0-9]+[.][0-9]+(?: |$)/u;
+const VERSION_IN_HEADING = /^##\s+v?([0-9]+[.][0-9]+[.][0-9]+)/u;
+const TAG_COMMAND = 'git tag --list';
 const SAFE_SINCE = /^[A-Za-z0-9._/@{}~^+-]+$/u;
 
 type SinceKind = 'tag' | 'branch' | 'remote' | 'commit';
@@ -38,6 +42,8 @@ interface ChangelogReport {
   path: string;
   insertedSection: string;
   replacedUnreleased: boolean;
+  updatedExistingSection: boolean;
+  unchanged: boolean;
   absorbedOrphanSections: string[];
   previousVersionHeading: string;
   dropped: ReportEntry[];
@@ -64,9 +70,22 @@ interface Context {
 
 interface WritePlan {
   draft: Draft;
+  heading: string;
   section: string;
   nextText: string;
+  updated: boolean;
+  unchanged: boolean;
   problems: string[];
+}
+
+/** 一次写入的结论：写入、已是最新、或带着问题未写入。 */
+interface OutcomeReport {
+  heading: string;
+  section: string;
+  written: boolean;
+  unchanged: boolean;
+  problems: string[];
+  dryRun: boolean;
 }
 
 interface Draft {
@@ -84,10 +103,27 @@ interface ChangelogSection {
   text: string;
 }
 
+/** 一个 `## ` 段落正文，外加它是否落在引导行上方（引导行上方的段落本身是畸形数据）。 */
+interface RawSection extends ChangelogSection {
+  aboveLead: boolean;
+}
+
+/** 带版本号的段落：`## 0.1.2 - 2026-11-03` 与 `## 0.1.2` 都算同一个版本的段落。 */
+interface VersionSection extends ChangelogSection {
+  version: string;
+}
+
+/** 本版段落的定位结果：`count` 大于 1 表示文件里有重复的本版段落。 */
+interface VersionTarget {
+  section: VersionSection | null;
+  count: number;
+}
+
 interface ChangelogLayout {
   leadIndex: number;
   unreleased: ChangelogSection | null;
   orphans: ChangelogSection[];
+  versions: VersionSection[];
   firstVersionHeading: string;
   headings: string[];
 }
@@ -102,26 +138,43 @@ interface AskMaterial {
   diff: string;
   unreleased: string;
   orphans: string;
+  currentSection: string;
 }
 
 function composeCommitCommand(since: string): string {
-  return `git rev-parse --verify --quiet '${since}^{commit}'`;
+  return `git rev-parse --verify --quiet "${since}^{commit}"`;
 }
 
 function composeKindCommand(since: string): string {
-  return `git rev-parse --symbolic-full-name '${since}'`;
+  return `git rev-parse --symbolic-full-name "${since}"`;
 }
 
 function composeStatCommand(commit: string): string {
-  return `git --no-pager diff --stat --no-color '${commit}...HEAD'`;
+  return `git --no-pager diff --stat --no-color "${commit}...HEAD"`;
 }
 
 function composeDiffCommand(commit: string): string {
-  return `git --no-pager diff --no-color --unified=3 '${commit}...HEAD'`;
+  return `git --no-pager diff --no-color --unified=3 "${commit}...HEAD"`;
 }
 
 async function runTerminal(command: string): Promise<TerminalResult> {
   return terminal({ command, timeout_ms: GIT_TIMEOUT_MS });
+}
+
+async function listTags(): Promise<TerminalResult> {
+  return terminal({ command: TAG_COMMAND, timeout_ms: GIT_TIMEOUT_MS });
+}
+
+/** 本版是否已经打过 tag：已发布的段落不再改写，返回 tag 名，未发布返回空串。 */
+async function probeReleaseTag(version: string): Promise<string> {
+  const result = await listTags();
+  const unreadable = result.exit_code !== 0;
+  if (unreadable) {
+    const detail = result.stderr.trim();
+    throw new Error(`无法读取 tag 列表：${TAG_COMMAND} → 退出码 ${result.exit_code}${detail === '' ? '' : `；${detail}`}`);
+  }
+  const names = result.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+  return names.find((name) => name === version || name === `v${version}`) ?? '';
 }
 
 async function composeSection(input: string): Promise<AskResult> {
@@ -179,7 +232,12 @@ async function loadContext(): Promise<Context> {
   };
 }
 
-async function prepareWrite(context: Context, composedText: string): Promise<WritePlan> {
+async function prepareWrite(
+  context: Context,
+  composedText: string,
+  target: VersionTarget,
+  releasedTag: string,
+): Promise<WritePlan> {
   const draft = parseDraft(composedText);
   const problems = [...draft.problems, ...checkEntries(draft.entries)];
 
@@ -193,18 +251,38 @@ async function prepareWrite(context: Context, composedText: string): Promise<Wri
   const noEntries = draft.entries.length === 0;
   if (noEntries) problems.push('本次没有整理出可写入的条目，未生成段落。');
 
+  const ambiguous = target.count > 1;
+  if (ambiguous) problems.push(`CHANGELOG.md 含 ${target.count} 个 “${context.version}” 段落，拒绝自动处理，请先人工合并。`);
+
+  const newer = newerVersionHeading(context.layout, target);
+  if (newer !== '') {
+    problems.push(`CHANGELOG.md 中 “${newer}” 位于本版段落之前，package.json 的 version（${context.version}）疑似没有提升，拒绝改写旧段落。`);
+  }
+
+  const released = target.section !== null && releasedTag !== '';
+  if (released) {
+    problems.push(`本版段落已随 tag “${releasedTag}” 发布，拒绝改写已发布段落；请先提升 package.json 的 version。`);
+  }
+
+  const blocked = duplicateUnreleased || leadMissing || noEntries || ambiguous || newer !== '' || released;
+  const heading = target.section === null ? context.heading : target.section.heading;
   let section = '';
   let nextText = '';
-  const ready = !leadMissing && !noEntries && !duplicateUnreleased;
-  if (ready) {
-    section = buildSection(context.heading, draft.entries);
-    const headingExists = context.layout.headings.includes(context.heading);
-    if (headingExists) {
-      problems.push(`CHANGELOG.md 已存在本版标题 “${context.heading}”，拒绝重复写入。`);
-    } else {
+  let updated = false;
+  let unchanged = false;
+  if (!blocked) {
+    section = buildSection(heading, draft.entries);
+    const replacedHeading = context.layout.unreleased === null ? '' : UNRELEASED_HEADING;
+    if (target.section === null) {
       nextText = buildNextText(context.before.text, context.layout, section);
-      const replacedHeading = context.layout.unreleased === null ? '' : UNRELEASED_HEADING;
       problems.push(...checkHeadings(context.before.text, nextText, context.heading, replacedHeading));
+    } else {
+      unchanged = section.trimEnd() === target.section.text.trimEnd();
+      updated = !unchanged;
+      if (updated) {
+        nextText = buildUpdatedText(context.before.text, context.layout, target.section, section);
+        problems.push(...checkHeadings(context.before.text, nextText, '', replacedHeading));
+      }
     }
   }
 
@@ -212,7 +290,7 @@ async function prepareWrite(context: Context, composedText: string): Promise<Wri
   const drifted = currentHash !== context.before.hash;
   if (drifted) problems.push('CHANGELOG.md 在生成期间被改动（sha256 不一致），拒绝写入。');
 
-  return { draft, section, nextText, problems };
+  return { draft, heading, section, nextText, updated, unchanged, problems };
 }
 
 async function persist(text: string, problems: string[]): Promise<boolean> {
@@ -225,14 +303,16 @@ async function persist(text: string, problems: string[]): Promise<boolean> {
   }
 }
 
-function reportOutcome(heading: string, section: string, written: boolean, problems: string[], dryRun: boolean): void {
-  const failed = problems.length > 0;
-  if (written) console.log(`已写入 ${CHANGELOG_PATH}：${heading}`);
-  const quietDryRun = dryRun && !failed && section !== '';
+function reportOutcome(outcome: OutcomeReport): void {
+  const failed = outcome.problems.length > 0;
+  if (outcome.written) console.log(`已写入 ${CHANGELOG_PATH}：${outcome.heading}`);
+  const nothingToDo = outcome.unchanged && !failed;
+  if (nothingToDo) console.log(`未写入 ${CHANGELOG_PATH}：${outcome.heading} 已是最新，本次没有需要合并的变化。`);
+  const quietDryRun = outcome.dryRun && !failed && outcome.section !== '';
   if (quietDryRun) console.log(`dryRun：全部校验通过，未写入 ${CHANGELOG_PATH}。`);
   if (failed) {
-    console.error(`未写入 ${CHANGELOG_PATH}，发现 ${problems.length} 个问题：`);
-    for (const problem of problems) console.error(`- ${problem}`);
+    console.error(`未写入 ${CHANGELOG_PATH}，发现 ${outcome.problems.length} 个问题：`);
+    for (const problem of outcome.problems) console.error(`- ${problem}`);
   }
 }
 
@@ -268,7 +348,7 @@ function clip(value: string, limit: number): string {
 }
 
 function clipEntry(entry: string): string {
-  return entry.slice(0, MAX_ENTRY_LENGTH);
+  return entry.slice(0, MAX_REPORT_ENTRY);
 }
 
 function sha256(text: string): string {
@@ -351,33 +431,101 @@ function firstVersionAfter(lines: string[], anchor: number): string {
 function parseLayout(text: string): ChangelogLayout {
   const lines = text.split('\n');
   const leadIndex = lines.findIndex((line) => line.toLowerCase().includes(LEAD_MARKER));
-  let unreleased: ChangelogSection | null = null;
-  const orphans: ChangelogSection[] = [];
+  const sections = listSections(lines, leadIndex);
+  const unreleasedSection = sections.find((section) => section.heading === UNRELEASED_HEADING);
+  const unreleased = unreleasedSection === undefined ? null : asSection(unreleasedSection);
+  const orphans = sections
+    .filter((section) => section.aboveLead && section.heading !== UNRELEASED_HEADING)
+    .filter((section) => !VERSION_HEADING.test(section.heading))
+    .map(asSection);
+  const versions = sections
+    .filter((section) => VERSION_HEADING.test(section.heading))
+    .map((section) => ({ ...asSection(section), version: versionOf(section.heading) }));
+  const anchor = unreleased === null ? leadIndex : unreleased.start;
+  const firstVersionHeading = anchor < 0 ? '' : firstVersionAfter(lines, anchor);
+  return { leadIndex, unreleased, orphans, versions, firstVersionHeading, headings: headings(text) };
+}
+
+function listSections(lines: string[], leadIndex: number): RawSection[] {
+  const sections: RawSection[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const isSection = lines[index].startsWith('## ');
+    const line = lines[index] ?? '';
+    const isSection = line.startsWith('## ');
     if (!isSection) continue;
-    const heading = lines[index].trim();
+    const heading = line.trim();
     const aboveLead = leadIndex >= 0 && index < leadIndex;
     const naturalEnd = findSectionEnd(lines, index);
     const end = aboveLead ? Math.min(naturalEnd, leadIndex) : naturalEnd;
-    const section: ChangelogSection = {
-      heading,
-      start: index,
-      end,
-      text: lines.slice(index, end).join('\n').trimEnd(),
-    };
-    const isUnreleased = heading === UNRELEASED_HEADING;
-    if (isUnreleased && unreleased === null) unreleased = section;
-    const versioned = VERSION_HEADING.test(heading);
-    if (aboveLead && !isUnreleased && !versioned) orphans.push(section);
+    sections.push({ heading, start: index, end, text: lines.slice(index, end).join('\n').trimEnd(), aboveLead });
   }
-  const anchor = unreleased === null ? leadIndex : unreleased.start;
-  const firstVersionHeading = anchor < 0 ? '' : firstVersionAfter(lines, anchor);
-  return { leadIndex, unreleased, orphans, firstVersionHeading, headings: headings(text) };
+  return sections;
+}
+
+function asSection(section: RawSection): ChangelogSection {
+  return { heading: section.heading, start: section.start, end: section.end, text: section.text };
+}
+
+function versionOf(heading: string): string {
+  const match = VERSION_IN_HEADING.exec(heading.trim());
+  return match === null ? '' : (match[1] ?? '');
+}
+
+/** 本版段落：0 个就新建，1 个就地更新，多于 1 个拒绝自动处理。 */
+function locateVersion(layout: ChangelogLayout, version: string): VersionTarget {
+  const matches = layout.versions.filter((section) => section.version === version);
+  const single = matches.length === 1 ? matches[0] : undefined;
+  return { section: single ?? null, count: matches.length };
+}
+
+/** 比本版更新的版本段落若就在上面，说明 package.json 的 version 没提升。 */
+function newerVersionHeading(layout: ChangelogLayout, target: VersionTarget): string {
+  const section = target.section;
+  const absent = section === null;
+  if (absent) return '';
+  const newest = layout.versions[0];
+  const unknown = newest === undefined;
+  if (unknown) return '';
+  const isTarget = newest.start === section.start;
+  return isTarget ? '' : newest.heading;
 }
 
 function buildSection(heading: string, entries: string[]): string {
   return [heading, '', ...entries].join('\n');
+}
+
+/** 段目前后各留一个空行：插入与就地更新共用同一种接缝。 */
+function appendSection(sequence: string[], sectionLines: string[]): void {
+  while (sequence.length > 0 && (sequence[sequence.length - 1] ?? '').trim() === '') sequence.pop();
+  const empty = sequence.length === 0;
+  if (!empty) sequence.push('');
+  sequence.push(...sectionLines, '');
+}
+
+function joinLines(sequence: string[], trailingNewline: boolean): string {
+  const trimmed = [...sequence];
+  while (trimmed.length > 0 && (trimmed[trimmed.length - 1] ?? '').trim() === '') trimmed.pop();
+  const body = trimmed.join('\n');
+  return trailingNewline ? `${body}\n` : body;
+}
+
+/** 就地更新：保留原标题与位置，同时把 `## Unreleased` 折进本版段落。 */
+function buildUpdatedText(text: string, layout: ChangelogLayout, target: ChangelogSection, section: string): string {
+  const lines = text.split('\n');
+  const sectionLines = section.split('\n');
+  const dropped = layout.unreleased;
+  const merged: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const unreleasedLine = dropped !== null && index >= dropped.start && index < dropped.end;
+    if (unreleasedLine) continue;
+    const replacedLine = index >= target.start && index < target.end;
+    if (!replacedLine) {
+      merged.push(lines[index] ?? '');
+      continue;
+    }
+    const firstReplacedLine = index === target.start;
+    if (firstReplacedLine) appendSection(merged, sectionLines);
+  }
+  return joinLines(merged, text.endsWith('\n'));
 }
 
 function buildNextText(text: string, layout: ChangelogLayout, section: string): string {
@@ -400,8 +548,13 @@ function buildNextText(text: string, layout: ChangelogLayout, section: string): 
 function composeAskInput(material: AskMaterial): string {
   const unreleased = material.unreleased === '' ? '（不存在）' : material.unreleased;
   const orphans = material.orphans === '' ? '（不存在）' : material.orphans;
+  const updating = material.currentSection !== '';
+  const current = updating ? material.currentSection : '（不存在，本次新建段落）';
+  const goal = updating
+    ? `就地更新 ${material.version} 的 CHANGELOG 段落：段落已存在，标题与日期由调用方保留。`
+    : `整理 ${material.version}（${material.date}）的 CHANGELOG 新段落。`;
   return [
-    `整理 ${material.version}（${material.date}）的 CHANGELOG 段落。`,
+    goal,
     `对比范围：${material.since}...HEAD，类型 ${material.sinceKind}，起点 commit ${material.sinceCommit}。`,
     '## git diff --stat',
     material.stat,
@@ -412,7 +565,11 @@ function composeAskInput(material: AskMaterial): string {
     '## 来源二：All notable changes 引导行上方的无版本 ## 段落原文',
     orphans,
     '## 来源三',
-    '只出现在 diff 中、上面两个来源都没有提到的变化，请从 diff 自行识别。',
+    '只出现在 diff 中、上面来源都没有提到的变化，请从 diff 自行识别。',
+    '## 来源四：现有本版段落原文',
+    current,
+    '来源四非空时是就地更新：仍成立的旧条目保留它的事实，但措辞可以按预算压缩。',
+    `预算：entries 最多 ${MAX_ENTRIES} 条，每条正文不超过 ${MAX_ENTRY_LENGTH} 字符；超出会被拒绝。`,
     '按 rules/release-changelog.md 的分类与写法返回 JSON 对象，不要输出 JSON 以外的文字。',
   ].join('\n\n');
 }
@@ -467,8 +624,12 @@ function checkEntries(entries: string[]): string[] {
     if (!bullet) problems.push(`条目缺少 “- ” 列表标记：${clipEntry(entry)}`);
     if (empty) problems.push(`条目内容为空：${clipEntry(entry)}`);
     if (duplicate) problems.push(`条目重复出现：${clipEntry(entry)}`);
+    const tooLong = content.length > MAX_ENTRY_LENGTH;
+    if (tooLong) problems.push(`条目 ${content.length} 字符，超过 ${MAX_ENTRY_LENGTH} 字符预算，请删掉后两三个事实只留结论：${clipEntry(content)}`);
     seen.add(entry);
   }
+  const tooMany = entries.length > MAX_ENTRIES;
+  if (tooMany) problems.push(`本版整理了 ${entries.length} 条，超过 ${MAX_ENTRIES} 条预算；请把同一页面、同一标识符的变化合并成一条后重写。`);
   return problems;
 }
 
@@ -527,6 +688,8 @@ export async function changelog(since: string, dryRun = false): Promise<Changelo
 
   const range = await resolveRange(since);
   const context = await loadContext();
+  const target = locateVersion(context.layout, context.version);
+  const releasedTag = target.section === null ? '' : await probeReleaseTag(context.version);
   const material = composeAskInput({
     version: context.version,
     date: context.date,
@@ -537,17 +700,24 @@ export async function changelog(since: string, dryRun = false): Promise<Changelo
     diff: range.diff,
     unreleased: context.layout.unreleased === null ? '' : context.layout.unreleased.text,
     orphans: context.layout.orphans.map((section) => section.text).join('\n\n'),
+    currentSection: target.section === null ? '' : target.section.text,
   });
   const composed = await composeSection(material);
 
-  const plan = await prepareWrite(context, composed.text);
-  const clean = plan.problems.length === 0;
-  const ready = clean && plan.section !== '';
+  const plan = await prepareWrite(context, composed.text, target, releasedTag);
+  const ready = plan.problems.length === 0 && plan.nextText !== '';
   const shouldWrite = ready && !dryRun;
   let written = false;
   if (shouldWrite) written = await persist(plan.nextText, plan.problems);
 
-  reportOutcome(context.heading, plan.section, written, plan.problems, dryRun);
+  reportOutcome({
+    heading: plan.heading,
+    section: plan.section,
+    written,
+    unchanged: plan.unchanged,
+    problems: plan.problems,
+    dryRun,
+  });
 
   return {
     version: context.version,
@@ -558,6 +728,8 @@ export async function changelog(since: string, dryRun = false): Promise<Changelo
     path: CHANGELOG_PATH,
     insertedSection: plan.section,
     replacedUnreleased: context.layout.unreleased !== null,
+    updatedExistingSection: plan.updated && plan.problems.length === 0,
+    unchanged: plan.unchanged,
     absorbedOrphanSections: context.layout.orphans.map((section) => section.heading),
     previousVersionHeading: context.layout.firstVersionHeading,
     dropped: plan.draft.dropped,
