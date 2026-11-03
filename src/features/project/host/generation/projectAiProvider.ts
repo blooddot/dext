@@ -11,6 +11,17 @@ export interface ProjectAiDependencies {
   /** The interaction language the conversation turns use; Project text follows it. */
   language?(): ResolvedOutputLanguage | undefined;
 }
+/**
+ * Some Anthropic-compatible gateways reject a replayed assistant turn whose thinking text and
+ * signature both came back empty: the API then answers 400 "the `content[].thinking` in the
+ * thinking mode must be passed back". The block the API asks for was never produced, so no prompt
+ * change can repair the history. A Project call is a stateless read-only ask, which makes one
+ * retry without thinking both safe and sufficient: without thinking there is nothing to replay.
+ */
+const THINKING_REPLAY_FAILURE = /content\[\]\.thinking|thinking mode must be passed back/i;
+export function isThinkingReplayFailure(error: unknown): boolean {
+  return error instanceof Error && THINKING_REPLAY_FAILURE.test(error.message);
+}
 export function createProjectAiProvider(dependencies: ProjectAiDependencies): ProjectAiProvider { return new ProjectAiBridge(dependencies).projectAiProvider(); }
 class ProjectAiBridge {
   constructor(private readonly dependencies: ProjectAiDependencies) { }
@@ -32,14 +43,29 @@ class ProjectAiBridge {
           : this.dependencies.selection().model;
         const structured = await this.generateProjectStructured(request, signal);
         if (structured !== undefined) return { text: structured, ...(model ? { model } : {}) };
-        const response = await this.dependencies.runtime.executeConversation("ask", request.prompt, {
+        const ask = (reasoningEffort?: string) => this.dependencies.runtime.executeConversation("ask", request.prompt, {
           signal,
           ...(request.agent ? { agent: request.agent } : {}),
           ...(request.model ? { model: request.model } : {}),
-          ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+          ...(reasoningEffort ?? request.reasoningEffort ? { reasoningEffort: (reasoningEffort ?? request.reasoningEffort) } : {}),
           ...(request.speed ? { speed: request.speed } : {}),
           ...(request.onEvent ? { onAgentEvent: this.projectAiEventSink(request.onEvent) } : {})
         });
+        let response: Awaited<ReturnType<typeof ask>>;
+        try {
+          response = await ask();
+        } catch (error) {
+          // A cancellation is the caller's decision, and any other failure still belongs to the stage.
+          if (signal.aborted || !isThinkingReplayFailure(error)) throw error;
+          request.onEvent?.({
+            id: "project-ai-thinking-fallback",
+            phase: "status",
+            title: "Thinking could not be replayed",
+            text: `${error instanceof Error ? error.message : "The provider rejected the turn."} Dext retried this Project call without thinking.`,
+            done: true
+          });
+          response = await ask("off");
+        }
         const text = response.result.kind === "ask" ? response.result.text : JSON.stringify(response.result);
         return { text, ...(model ? { model } : {}) };
       }

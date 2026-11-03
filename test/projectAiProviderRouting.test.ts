@@ -92,6 +92,44 @@ describe("Project AI transport routing", () => {
     expect(executeConversation).toHaveBeenCalledTimes(1);
   });
 
+  it("retries once without thinking when the provider cannot replay the thinking it never returned", async () => {
+    const events: ProjectAiActivityEvent[] = [];
+    const calls: Metadata[] = [];
+    const { provider } = build({
+      provider: "pi",
+      conversation: async (_mode, _prompt, metadata) => {
+        calls.push(metadata);
+        if (calls.length === 1) {
+          throw new Error('400 {"error":{"type":"invalid_request_error","message":"The `content[].thinking` in the thinking mode must be passed back to the API."}}');
+        }
+        return { result: { kind: "ask", text: "retried" } };
+      }
+    });
+
+    const response = await provider.generate(projectRequest({ onEvent: (event) => events.push(event) }), new AbortController().signal);
+
+    expect(response.text).toBe("retried");
+    expect(calls).toHaveLength(2);
+    // Without thinking there is no block the provider could miss.
+    expect(calls[1]?.reasoningEffort).toBe("off");
+    expect(events.map((event) => event.title)).toEqual(["Thinking could not be replayed"]);
+    expect(events[0]?.text).toContain("must be passed back");
+  });
+
+  it("keeps a provider failure that is not about replayed thinking", async () => {
+    const calls: Metadata[] = [];
+    const { provider } = build({
+      provider: "pi",
+      conversation: async (_mode, _prompt, metadata) => {
+        calls.push(metadata);
+        throw new Error("400 invalid_request_error: the requested model does not exist.");
+      }
+    });
+
+    await expect(provider.generate(projectRequest(), new AbortController().signal)).rejects.toThrow("does not exist");
+    expect(calls).toHaveLength(1);
+  });
+
   it("falls back to the conversation transport when the native call fails", async () => {
     const events: ProjectAiActivityEvent[] = [];
     const { provider, executeConversation } = build({
