@@ -87,6 +87,23 @@ describe("VS Code terminal host", () => {
     expect(result.kind === "terminal" && result.stdout.trim()).toMatch(/^v\d+/);
   });
 
+  it("never tells a command it writes to a terminal", async () => {
+    // Forcing color changed what the child printed: `npm run check` inherited it and
+    // the kernel's console.log colored inspected values, so tests comparing exact
+    // output failed only when Dext ran the command.
+    const saved = [process.env.FORCE_COLOR, process.env.CLICOLOR_FORCE];
+    delete process.env.FORCE_COLOR;
+    delete process.env.CLICOLOR_FORCE;
+    try {
+      const result = await terminalRunHandler(invocation({
+        command: `"${process.execPath}" -e "console.log(require('node:util').inspect(1))"`
+      }));
+      expect(result.kind === "terminal" && result.stdout).toBe("1\n");
+    } finally {
+      [process.env.FORCE_COLOR, process.env.CLICOLOR_FORCE] = saved;
+    }
+  });
+
   it("hands the shell the on-disk spelling of the workspace path", async () => {
     // VS Code reports the folder from a file URI, which keeps the drive-letter
     // case the workspace was opened with (`c:\repo`). Vite keys its module graph

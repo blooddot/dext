@@ -101,8 +101,10 @@ function execute(command: string, cwd: string, timeoutMs: number, environmentOve
     const environment = {
       ...process.env,
       TERM: process.env.TERM ?? "xterm-256color",
-      FORCE_COLOR: process.env.FORCE_COLOR ?? "1",
-      CLICOLOR_FORCE: process.env.CLICOLOR_FORCE ?? "1",
+      // No FORCE_COLOR here: it made every spawned tool believe it writes to a
+      // terminal, so `npm run check` inside Dext colored `util.inspect` output and
+      // tests comparing exact kernel output failed only under Dext. Git keeps its
+      // color through the config below, which is the case that needs it.
       GIT_PAGER: "cat",
       ...environmentOverrides,
       ...( /^\s*git(?:\s|$)/i.test(command)
