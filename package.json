@@ -951,7 +951,7 @@
           "default": 600000,
           "minimum": 0,
           "maximum": 2147483647,
-          "description": "How long a turn may receive no process output while no tool is reported active before Dext aborts it. Output restarts this timer; tool start pauses it, and the last tool result starts a fresh interval. One continuous tool phase is separately capped by Dext at thirty minutes. Default: ten minutes. 0 disables this limit. Changes apply to new turns."
+          "description": "How long a turn may receive no process output while no tool is reported active before Dext aborts it. Output restarts this timer; tool start pauses it, and the last tool result starts a fresh interval. A tool that reports no result is separately cut off after thirty minutes without output from the turn, and any output restarts that interval; thirty minutes is Dext's fixed ceiling, not a setting. Default: ten minutes. 0 disables this limit. Changes apply to new turns."
         },
         "dext.terminal.defaultTimeoutMs": {
           "type": "integer",
