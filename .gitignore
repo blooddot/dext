@@ -1,10 +1,9 @@
 node_modules/
 dist/
+/release/
 *.vsix
 coverage/
 .vscode-test/
 .npm-cache
-.tmp-*
-# Transient Project initialization checkpoint; source paths and AI outlines, never published.
-.dext/project-initialization.checkpoint.json
+.tmp-* 
 .taste-skill
