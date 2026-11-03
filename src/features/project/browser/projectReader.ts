@@ -33,6 +33,22 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const previous = api.getState?.();
     api.setState?.({ ...previous, filters: { ...previous?.filters, topic: topic?.id ?? "", diagram: diagram?.id ?? "" } });
   };
+  /** A selected module is always visible: open every ancestor group on its path. */
+  const expandTopic = (id: string) => {
+    if (!id) return;
+    let node = root.querySelector<HTMLElement>(`[data-topic-node="${CSS.escape(id)}"]`);
+    while (node) {
+      const list = node.querySelector<HTMLElement>(":scope > [data-topic-children]");
+      if (list) list.hidden = false;
+      const toggle = node.querySelector<HTMLButtonElement>(":scope > .project-reader-tree-row [data-reader-toggle]");
+      if (toggle) {
+        toggle.setAttribute("aria-expanded", "true");
+        toggle.textContent = "−";
+        toggle.setAttribute("aria-label", `Collapse ${toggle.dataset.readerToggle ?? ""}`);
+      }
+      node = node.parentElement?.closest<HTMLElement>("[data-topic-node]") ?? null;
+    }
+  };
   const markDirectory = () => root.querySelectorAll<HTMLButtonElement>(".project-reader-directory button").forEach((button) => {
     // On the introduction no topic or diagram is selected: only that entry is current, never every
     // row whose topic or diagram id happens to be undefined.
@@ -42,6 +58,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     button.setAttribute("aria-current", active ? "page" : "false");
     const group = button.closest<HTMLDetailsElement>("[data-reader-area]");
     if (active && group) group.open = true;
+    if (active) expandTopic(button.dataset.readerTopic ?? "");
   });
   const setInteractiveControls = (enabled: boolean) => {
     root.querySelectorAll<HTMLButtonElement>("[data-reader-zoom], [data-reader-export]").forEach((button) => { button.disabled = !enabled; });
@@ -242,12 +259,19 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     const input = event.target;
     if (!(input instanceof HTMLInputElement) || !input.matches("[data-project-topic-search]")) return;
     const query = input.value.trim().toLowerCase();
-    let visible = 0;
-    root.querySelectorAll<HTMLButtonElement>("[data-topic-search]").forEach((button) => { button.hidden = !button.dataset.topicSearch?.includes(query); if (!button.hidden) visible++; });
+    const nodes = [...root.querySelectorAll<HTMLElement>("[data-topic-node]")];
+    for (const node of nodes) {
+      // A parent stays visible while any descendant matches, so the path is never cut.
+      const match = [...node.querySelectorAll<HTMLButtonElement>("[data-topic-search]")].some((button) => button.dataset.topicSearch?.includes(query));
+      node.hidden = Boolean(query) && !match;
+      const list = node.querySelector<HTMLElement>(":scope > [data-topic-children]");
+      if (query && !node.hidden && list) list.hidden = false;
+    }
     root.querySelectorAll<HTMLDetailsElement>("[data-reader-area]").forEach(group => {
-      group.hidden = !group.querySelector("[data-topic-search]:not([hidden])");
+      group.hidden = !group.querySelector("[data-topic-node]:not([hidden])");
       if (query && !group.hidden) group.open = true;
     });
+    const visible = root.querySelectorAll("[data-topic-search]:not([hidden])").length;
     root.querySelector<HTMLElement>("[data-project-topic-empty]")!.hidden = visible > 0;
   });
   root.addEventListener("change", (event) => {
@@ -263,6 +287,16 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     if (!button) return;
     if (button.dataset.projectNorm) api.postMessage({ type: "projectEditNorm", objectId: button.dataset.projectNorm });
     if (button.dataset.projectPlan) api.postMessage({ type: "projectPlan", topicId: button.dataset.projectPlan });
+    if (button.dataset.readerToggle) {
+      const node = button.closest<HTMLElement>("[data-topic-node]");
+      const list = node?.querySelector<HTMLElement>(":scope > [data-topic-children]");
+      const expanded = button.getAttribute("aria-expanded") !== "false";
+      button.setAttribute("aria-expanded", String(!expanded));
+      button.textContent = expanded ? "+" : "−";
+      button.setAttribute("aria-label", `${expanded ? "Expand" : "Collapse"} ${button.dataset.readerToggle ?? ""}`);
+      if (list) list.hidden = expanded;
+      return;
+    }
     if (button.hasAttribute("data-reader-inspector-close")) {
       root.querySelector<HTMLElement>("[data-reader-inspector]")!.hidden = true;
       highlight([]);

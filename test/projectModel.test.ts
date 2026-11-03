@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { projectIntentSchema } from "../src/features/project/contracts/projectIntent.js";
 import { projectModelNodeSchema, projectModelRelationSchema } from "../src/features/project/contracts/projectModel.js";
 import { parseProjectModel, projectModelIntent } from "../src/features/project/knowledge/projectModel.js";
 import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 import { replaceKnowledgeBody } from "../src/features/project/knowledge/projectKnowledge.js";
+import { reconcileNativeProject } from "../src/features/project/knowledge/projectModelEvolution.js";
 
 export const node = (id: string) => projectModelNodeSchema.parse({ id, kind: "contract", title: id, canonicalName: id, body: { kind: "inline", text: "norm" } });
 export const edge = (from: string, to: string, kind = "contains") => projectModelRelationSchema.parse({ id: `${from}:${to}`, from, to, kind });
@@ -22,6 +24,19 @@ describe("native Project model", () => {
   it("protects accepted bodies from generated replacements", () => {
     expect(() => replaceKnowledgeBody({ ...node("a"), review: "accepted" }, { kind: "inline", text: "new" }, "ai")).toThrow("proposal");
     expect(replaceKnowledgeBody(node("a"), { kind: "inline", text: "new" }, "user").review).toBe("edited");
+  });
+  it.each(["draft", "accepted", "edited"])("rejects cross-kind replacement of a %s node", review => {
+    const previous = parseProjectModel({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [],
+      nodes: [{ ...node("dext"), kind: "system", review }] });
+    const candidate = { ...previous, nodes: [node("dext")] };
+    expect(() => reconcileNativeProject(candidate, previous)).toThrow("Project node 'dext' cannot change kind from 'system' to 'contract'.");
+    expect(previous.nodes[0]?.kind).toBe("system");
+  });
+  it("rejects a root identity that would collide with another candidate node", () => {
+    const candidate = parseProjectModel({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [],
+      nodes: [{ ...node("product"), kind: "project" }, { ...node("project"), kind: "system" }] });
+    expect(() => reconcileNativeProject(candidate)).toThrow("Duplicate Project node 'project'");
+    expect(candidate.nodes[0]?.id).toBe("product");
   });
   it("reads indexed modules as responsibility topics with their own dependency diagram", () => {
     const module = (id: string, title: string, text: string) => projectModelNodeSchema.parse({ id, kind: "module", title, canonicalName: title, body: { kind: "inline", text }, paths: [`src/${id}.ts`] });
@@ -51,5 +66,24 @@ describe("native Project model", () => {
       ["core unit", "Core runtime", "拥有核心运行时"],
       ["ui unit", "Core runtime", "拥有核心运行时"]
     ]);
+  });
+  it("derives an optional parent from saved containment and keeps legacy models parentless", () => {
+    const module = (id: string) => projectModelNodeSchema.parse({ id, kind: "module", title: id, canonicalName: id, body: { kind: "inline", text: id }, paths: [`src/${id}.ts`] });
+    const model = parseProjectModel({ schemaVersion: 1, revision: 0, updatedAt: 0,
+      nodes: [module("module:src-core"), module("module:src-core-a-ts")],
+      relations: [projectModelRelationSchema.parse({ id: "parent", from: "module:src-core", to: "module:src-core-a-ts", kind: "contains" })] });
+    const intent = projectModelIntent(model);
+    expect(intent.contexts.map(context => [context.id, context.parentId])).toEqual([
+      ["module:src-core", undefined],
+      ["module:src-core-a-ts", "module:src-core"]
+    ]);
+    expect(buildProjectTopics(intent).map(topic => [topic.id, topic.parentId])).toEqual([
+      ["module:src-core", undefined],
+      ["module:src-core-a-ts", "module:src-core"]
+    ]);
+    const legacy = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Legacy" },
+      contexts: [{ id: "ctx.old", canonicalName: "Old", purpose: "Kept readable", evidence: [] }] });
+    expect(legacy.contexts[0]!.parentId).toBeUndefined();
+    expect(buildProjectTopics(legacy)[0]!.parentId).toBeUndefined();
   });
 });

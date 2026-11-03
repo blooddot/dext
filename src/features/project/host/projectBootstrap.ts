@@ -2,7 +2,7 @@ import { z } from "zod";
 import { projectModelRelationSchema, projectModelSchema, projectModelNodeSchema, type ProjectModel, type ProjectModelNode, type ProjectModelRelation } from "../contracts/projectModel.js";
 import { projectC4Schema } from "../contracts/projectIntent.js";
 import type { StructureSummary } from "./indexing/projectStructure.js";
-import { structureCandidates, validateOwnership } from "./indexing/projectStructureKnowledge.js";
+import { structureCandidates, deriveStructureHierarchy, mergeEvidence, validateEntryPoints, validateOwnership, validateStructureHierarchy, responsibilityDraftSchema, responsibilityMergeSchema, type StructureCandidate } from "./indexing/projectStructureKnowledge.js";
 import type { ProjectInitializationOutput, ProjectInitializationProgressListener } from "../contracts/lifecycle.js";
 import { parseProjectModel, projectModelIntent, validateProjectModel } from "../knowledge/projectModel.js";
 import { reconcileNativeProject } from "../knowledge/projectModelEvolution.js";
@@ -26,7 +26,7 @@ const DEFAULT_BUDGET: ProjectBootstrapBudget = { files: 600, chars: 600_000, fil
 const STAGE_CHARS = 30_000;
 
 /** Bumped with the stage plan: a checkpoint from another plan must not be resumed. */
-const PROMPT_VERSION = "project-bootstrap-10";
+const PROMPT_VERSION = "project-bootstrap-12";
 
 /** Guidance and build configuration define boundaries, so they are read before documentation and source. */
 const compareBootstrapPaths = (left: string, right: string): number =>
@@ -61,11 +61,11 @@ const guidancePath = (path: string): boolean => durable(path)
   || /(?:^|\/)(?:package\.json|pyproject\.toml|cargo\.toml|go\.mod|pom\.xml)$/i.test(path);
 
 /** One bounded model call. `module` marks a stage whose node identity and edges are already decided. */
-interface BootstrapStage { instructions: string; sources: Map<string, string>; module?: { id: string; paths: string[] }; areas?: true; c4?: true }
+interface BootstrapStage { instructions: string; sources: Map<string, string>; module?: { id: string; paths: string[] }; c4?: true }
 
-const ROOT_STAGE = "Draft the graph root only: one 'project' node stating purpose, scope and non-goals, and one 'architecture' node stating module boundaries, dependency edges and invariants, linked by a 'contains' relation. Create no module nodes yet; the directory list below is an overview, not a node per directory. Write each body as Markdown with '## Responsibility' (what it owns), '## Design' (the decisions and invariants behind the code) and '## Boundary' ('- Allowed:' and '- Forbidden:' dependencies).";
+const ROOT_STAGE = "Draft the graph root only: return exactly {\"project\":{\"title\":...,\"body\":...},\"architecture\":{\"title\":...,\"body\":...}}. The project states purpose, scope and non-goals; architecture states module boundaries, dependency edges and invariants. The host owns node ids, kinds and relationships. Create no module nodes yet; the directory list below is an overview, not a node per directory. Write each body as Markdown with '## Responsibility' (what it owns), '## Design' (the decisions and invariants behind the code) and '## Boundary' ('- Allowed:' and '- Forbidden:' dependencies).";
 const MODEL_GUIDANCE = "Build a native Project normative model: goals, then architecture, then modules/contracts and their explicit relationships. Do not mirror the directory tree. Read guidance before specifications, configuration and source evidence. Third-party sources are supporting evidence. All generated content is draft. Do not create Plan nodes. Adopt durable documents in place rather than copying them. Return a JSON object matching the supplied schema. Evidence outside this bounded package is unknown.";
-const PROSE_GUIDANCE = "Explain one responsibility the indexed structure already decided: what it owns and why it is shaped this way. Read guidance before source. All generated content is draft. Never invent module ids, files or relationships; the index owns those. Groups that belong to one responsibility share the same title so they merge into one node.";
+const PROSE_GUIDANCE = "Explain one responsibility the indexed structure already decided: what it owns and why it is shaped this way. Read guidance before source. All generated content is draft. Never invent module ids, files or relationships; the index owns those.";
 /**
  * One responsibility has one name per layer: what the interface calls it, what the code calls it, and
  * this record. The code name wins a conflict, so a title always lands on a real symbol.
@@ -73,7 +73,14 @@ const PROSE_GUIDANCE = "Explain one responsibility the indexed structure already
 const LABEL_LANGUAGE = "Every 'title' is a short English label of 2-5 words that already exists in the project, never a sentence and never a directory path. Prefer the code's own name for the responsibility (package, module, public type or entry symbol): when the interface calls it something else, the code name still wins the title and the interface name is documented in the body. Use the interface name only when the code has none, and never invent a product name, so a project without a UI is still mapped by its code name. Every body is written in Simplified Chinese.";
 const NAME_MAPPING = "Record the mapping once, in the first '## Responsibility' bullet of a node body or in an area 'description', as '**Names**: <interface name> → <public symbol or entry file>' (without an interface: '<code name> → <files>'); the title is the code name on that line, so the interface label, the code symbol and this record all name the same responsibility.";
 const PROSE_STAGE = "Return exactly {\"title\": \"<responsibility name>\", \"body\": \"<Markdown with ## Responsibility, ## Design and ## Boundary ('- Allowed:' / '- Forbidden:')>\"}. Name the responsibility, never the directory.";
-const STRUCTURE_GUIDANCE = "Group the known modules into developer-facing functional areas: 'areas', each with an English 'title', a Simplified Chinese 'description' and the exact 'moduleIds' it contains. Assign EVERY module id to exactly ONE area (usually 3-8 areas for a medium project, fewer for a small one). Grouping is navigation, not merging or a change of ownership: never invent module ids, never leave a module out, and do not repeat one area per module or use directory names as the taxonomy.";
+/** Candidates only schedule reads; the AI proposes responsibilities, the index decides what may merge. */
+const RESPONSIBILITY_GUIDANCE = "Identify developer-facing responsibilities from the complete file facts below. Return exactly {\"contexts\":[{\"canonicalName\",\"purpose\",\"uncertainties\",\"sourceFiles\",\"entryPoints\"}]}. Candidate groups are scheduling hints from names and static dependencies, NOT knowledge modules: split unrelated files inside a candidate and merge related files across candidates when the facts support it. Assign EVERY supplied path to exactly one context. A helper, contract or single function is not automatically its own topic; keep supporting code with the feature it serves. Do not merge unrelated files merely because they share a directory, a format or a suffix. Name responsibilities, never directories. Put open questions in uncertainties, not in the purpose.";
+const RESPONSIBILITY_MERGE_GUIDANCE = "Consolidate provisional responsibility outlines from different evidence batches. Return exactly {\"contexts\":[{\"canonicalName\",\"purpose\",\"uncertainties\",\"sourceFiles\",\"entryPoints\"}]}. Merge outlines only when they describe one coherent responsibility that a developer would study together; keep distinct capabilities separate. You may move a file between outlines when its declared consumers or dependencies support it. Assign EVERY supplied path to exactly one context and never claim a path outside them.";
+const RESPONSIBILITY_FALLBACK = "The proposal was rejected twice, so the candidate boundaries are kept as temporary responsibilities; the run reports them for review.";
+const responsibilitySchema = z.object({ id: z.string().min(1), name: z.string().trim().min(1).max(200), purpose: z.string().max(1000).default(""),
+  paths: z.array(z.string().min(1)).min(1), entryPoints: z.array(z.string().min(1)).default([]), uncertainties: z.array(z.string().min(1)).default([]) }).strict();
+interface BootstrapResponsibility { id: string; name: string; purpose: string; paths: string[]; entryPoints: string[]; uncertainties: string[] }
+
 /** Runtime boundaries are a separate interpretation of configuration and guidance, never of a directory tree. */
 const C4_STAGE = "Draft the runtime architecture only when the supplied build configuration, guidance and entry-point excerpts support it. Return {\"c4\":{\"systemId\":...,\"elements\":[...],\"relationships\":[...]}} or {} when no boundary is supported. The focal system is this project. An element is a 'person', an external 'system', or a runtime 'container' (UI/webview, host/server, worker/subprocess or data store). Use a short English 'name' and a Simplified Chinese 'description'. A directory, package or module is not a container. Set each container's 'parentId' to the focal system and its 'contextIds' to the exact module ids from 'known' that implement it. Give the focal system a relationship to each person and external system it exchanges data with, and connect each container to the system or another container it actually talks to. External systems require evidence of a separate ownership/deployment boundary. Cite a supplied path and, for read excerpts, a visible line in every element and relationship. Omit unsupported boundaries.";
 const c4EnvelopeSchema = z.object({ c4: projectC4Schema.optional() }).strict();
@@ -96,30 +103,63 @@ function bootstrapStages(sources: ReadonlyMap<string, string>): BootstrapStage[]
   return stages;
 }
 
-interface StructureGroup { id: string; paths: string[] }
+/** Candidates are scheduling hints with bounded facts; the AI proposes responsibilities from them. */
+const candidateFacts = (candidate: StructureCandidate): unknown => ({
+  candidate: candidate.id,
+  files: candidate.files.map(file => ({ path: file.path, declarations: file.symbols.slice(0, 8).map(symbol => symbol.name),
+    dependencies: file.dependencies.filter(edge => edge.to && !edge.typeOnly).map(edge => edge.to), consumers: file.consumers ?? [] }))
+});
 
-/** Indexed import neighborhoods are the deterministic module seed; the AI only names and explains them. */
-const structureGroups = (summary: StructureSummary): StructureGroup[] => structureCandidates(summary)
-  .map(candidate => ({ id: `module:${slug(candidate.files[0]!.path)}`, paths: candidate.files.map(file => file.path) }));
-
-function structureStages(groups: readonly StructureGroup[], sources: ReadonlyMap<string, string>): BootstrapStage[] {
-  return [
-    { instructions: `${MODEL_GUIDANCE} ${LABEL_LANGUAGE} ${ROOT_STAGE}`, sources: new Map([...sources].filter(([path]) => guidancePath(path))) },
-    ...groups.map(group => {
-      const staged = new Map<string, string>();
-      let size = 0;
-      for (const path of group.paths) {
-        const text = sources.get(path);
-        if (text === undefined) continue;
-        if (staged.size && size + text.length > STAGE_CHARS) break;
-        staged.set(path, text); size += text.length;
-      }
-      return { instructions: `${PROSE_GUIDANCE} ${LABEL_LANGUAGE} ${NAME_MAPPING} ${PROSE_STAGE}`, sources: staged, module: { id: group.id, paths: group.paths } };
-    }),
-    // Last, because it needs the finished module list; it authors no prose.
-    ...(groups.length ? [{ instructions: `${STRUCTURE_GUIDANCE} ${LABEL_LANGUAGE} ${NAME_MAPPING}`, sources: new Map<string, string>(), areas: true as const }] : [])
-  ];
+function candidateBatches(candidates: readonly StructureCandidate[]): StructureCandidate[][] {
+  const batches: StructureCandidate[][] = [];
+  let batch: StructureCandidate[] = [], size = 0;
+  for (const candidate of candidates) {
+    const chars = JSON.stringify(candidateFacts(candidate)).length;
+    if (batch.length && (batch.length >= 12 || size + chars > STAGE_CHARS)) { batches.push(batch); batch = []; size = 0; }
+    batch.push(candidate); size += chars;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
 }
+
+const responsibilityId = (paths: readonly string[]): string => `module:${slug([...paths].sort()[0]!)}`;
+const responsibilityOf = (value: { canonicalName: string; purpose?: string; sourceFiles: readonly string[]; entryPoints?: readonly string[]; uncertainties?: readonly string[] }): BootstrapResponsibility => ({
+  id: responsibilityId(value.sourceFiles), name: value.canonicalName, purpose: value.purpose ?? "",
+  paths: [...value.sourceFiles], entryPoints: [...(value.entryPoints ?? [])], uncertainties: [...(value.uncertainties ?? [])]
+});
+
+/** The index cap split or joined reads; a candidate is still the boundary when no evidence joins it to another. */
+const candidateFallback = (candidates: readonly StructureCandidate[]): BootstrapResponsibility[] => candidates.map(candidate => ({
+  id: responsibilityId(candidate.files.map(file => file.path)), name: candidate.files[0]!.path.split("/").pop()!.replace(/\.[^/.]+$/, ""),
+  purpose: RESPONSIBILITY_FALLBACK, paths: candidate.files.map(file => file.path), entryPoints: [candidate.files[0]!.path], uncertainties: [RESPONSIBILITY_FALLBACK]
+}));
+
+/** Prefer a previous module whose members still overlap this responsibility clearly. */
+function reusableIdentity(previous: ProjectModel | undefined, paths: readonly string[]): string | undefined {
+  let best: { id: string; score: number } | undefined, tied = false;
+  for (const node of previous?.nodes ?? []) {
+    if (node.kind !== "module" || !node.paths.length) continue;
+    const shared = node.paths.filter(path => paths.includes(path)).length;
+    const score = shared / new Set([...node.paths, ...paths]).size;
+    if (!shared || score < 0.5) continue;
+    if (!best || score > best.score) { best = { id: node.id, score }; tied = false; }
+    else if (score === best.score) tied = true;
+  }
+  return best && !tied ? best.id : undefined;
+}
+
+/** Parent modules are directory products, not AI output; their bodies say what they group. */
+function hierarchyNodes(hierarchy: ReturnType<typeof deriveStructureHierarchy>, titles: ReadonlyMap<string, string>): ProjectModelNode[] {
+  const children = new Map<string, string[]>();
+  for (const [child, parent] of hierarchy.parentOf) children.set(parent, [...children.get(parent) ?? [], titles.get(child) ?? child]);
+  return hierarchy.parents.map(parent => {
+    const members = children.get(parent.id) ?? [];
+    return projectModelNodeSchema.parse({ id: parent.id, kind: "module", title: parent.title, canonicalName: parent.title,
+      body: { kind: "inline", text: `## Responsibility\n\nDirectory grouping for ${members.length} module(s): ${members.join(", ")}.\n\n## Boundary\n\n- Allowed: the modules it contains.\n- Forbidden: owning source files directly; every file has one leaf owner.` },
+      paths: [], properties: { overview: true } });
+  });
+}
+
 
 /** The root, module and area stages explain code; only guidance and build configuration define a runtime boundary. */
 const runtimeBoundarySource = (path: string): boolean => guidancePath(path) || PROJECT_BUILD_CONFIG_PATH.test(path);
@@ -174,15 +214,21 @@ function c4Relations(model: ProjectModel): ProjectModelRelation[] {
 }
 
 /** `contains` and `depends_on` come from the index, never from the model, so a module edge cannot dangle. */
-function structureRelations(summary: StructureSummary, nodes: readonly ProjectModelNode[]): ProjectModelRelation[] {
+function structureRelations(summary: StructureSummary, nodes: readonly ProjectModelNode[], parentOf: ReadonlyMap<string, string> = new Map()): ProjectModelRelation[] {
   const present = new Set(nodes.map(node => node.id)), owner = new Map<string, string>(), edges: ProjectModelRelation[] = [];
   const add = (from: string, to: string, kind: "contains" | "depends_on"): void => {
     if (from === to || !present.has(from) || !present.has(to) || edges.some(edge => edge.from === from && edge.to === to && edge.kind === kind)) return;
     edges.push(projectModelRelationSchema.parse({ id: `${from}--${kind}--${to}`, from, to, kind, origin: "detected", review: "draft", freshness: "needs_verification" }));
   };
-  add("project", "architecture", "contains");
+  const root = nodes.find(node => node.kind === "project")?.id;
+  const architecture = nodes.find(node => node.kind === "architecture")?.id;
+  if (root && architecture) add(root, architecture, "contains");
   // Ownership comes from the nodes, so a responsibility merged across groups keeps its edges.
-  for (const node of nodes) if (node.kind === "module") { add("project", node.id, "contains"); for (const path of node.paths) owner.set(path, node.id); }
+  for (const node of nodes) if (node.kind === "module" && node.id !== "architecture") {
+    const parent = parentOf.get(node.id) ?? root;
+    if (parent) add(parent, node.id, "contains");
+    for (const path of node.paths) owner.set(path, node.id);
+  }
   for (const file of summary.modules.flatMap(module => module.members)) {
     const from = owner.get(file.path); if (!from) continue;
     for (const dependency of file.dependencies) { const to = dependency.to ? owner.get(dependency.to) : undefined; if (to) add(from, to, "depends_on"); }
@@ -283,6 +329,20 @@ function sanitizeDraft(model: ProjectModel): string[] {
 
 /** One stage's prose: the id, files and edges already exist, only the explanation is missing. */
 const proseSchema = z.object({ title: z.string().trim().min(1).max(200), body: z.string().trim().min(1) }).strict();
+const rootDraftSchema = z.object({ project: proseSchema, architecture: proseSchema }).strict();
+
+/** AI writes root prose; the host preserves identities and builds the graph. */
+function readRoot(text: string, sources: ReadonlyMap<string, string>, previous?: ProjectModel): Pick<ProjectModel, "nodes" | "relations"> {
+  const draft = rootDraftSchema.parse(parseJsonObject(text));
+  const nodes = (["project", "architecture"] as const).map(kind => {
+    const saved = previous?.nodes.find(node => node.kind === kind);
+    return projectModelNodeSchema.parse({ id: saved?.id ?? kind, kind, title: draft[kind].title, canonicalName: draft[kind].title,
+      body: { kind: "inline", text: draft[kind].body }, properties: saved?.properties ?? {},
+      evidence: [...sources].map(([path, text]) => ({ path, contentHash: projectContentHash(text) })) });
+  });
+  const project = nodes[0]!, architecture = nodes[1]!;
+  return { nodes, relations: [projectModelRelationSchema.parse({ id: `${project.id}--contains--${architecture.id}`, from: project.id, to: architecture.id, kind: "contains" })] };
+}
 
 /**
  * A prose stage answers JSON, but a model that replies with the Markdown body alone has still done
@@ -310,20 +370,8 @@ function reusableModule(previous: ProjectModel | undefined, stage: BootstrapStag
 }
 
 /** The grouping is unchanged while the saved areas cover exactly these modules under the same titles. */
-function reusableAreas(previous: ProjectModel | undefined, candidate: ProjectModel): ProjectModelNode[] | undefined {
-  if (!previous) return undefined;
-  const areas = previous.nodes.filter((node) => node.kind === "capability");
-  const covered = new Set(areas.flatMap((node) => (node.properties.moduleIds as string[] | undefined) ?? []));
-  const modules = candidate.nodes.filter((node) => node.kind === "module");
-  if (!areas.length || covered.size !== modules.length) return undefined;
-  return modules.every((module) => covered.has(module.id) && previous.nodes.some((node) => node.id === module.id && node.title === module.title)) ? areas : undefined;
-}
 
 /** Functional areas: navigation over modules whose ids and ownership the index already decided. */
-const areaSchema = z.object({ areas: z.array(z.object({
-  title: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500),
-  moduleIds: z.array(z.string().min(1)).min(1)
-}).strict()).min(1).max(12) }).strict();
 
 /** Revision and timestamps belong to the host; a stage only authors the graph, and extra keys are ignored. */
 const draftModelSchema = projectModelSchema.omit({ schemaVersion: true, revision: true, updatedAt: true }).loose();
@@ -338,7 +386,8 @@ function parseJsonObject(text: string): unknown {
   throw new Error(`Project AI response did not contain a JSON object${shown ? `: ${shown}` : " (empty response)."}`);
 }
 
-const checkpointSchema = z.object({ version: z.literal(1), fingerprint: z.string(), route: z.enum(["existing", "legacy", "documents", "code", "empty"]), stage: z.enum(["candidate", "committed"]), completed: z.number().int().nonnegative(), candidate: projectModelSchema }).strict();
+const checkpointSchema = z.object({ version: z.literal(1), fingerprint: z.string(), route: z.enum(["existing", "legacy", "documents", "code", "empty"]), stage: z.enum(["candidate", "committed"]), completed: z.number().int().nonnegative(), candidate: projectModelSchema,
+  responsibilities: z.array(responsibilitySchema).optional(), prose: z.number().int().nonnegative().optional(), c4: z.boolean().optional() }).strict();
 export const PROJECT_BOOTSTRAP_CHECKPOINT_PATH = ".dext/project/bootstrap.checkpoint.json";
 
 export async function readBootstrapCheckpoint(host: ProjectFileHost): Promise<{ stage: string; fraction: number } | undefined> {
@@ -379,34 +428,42 @@ export async function bootstrapProject(options: {
   // Updating an existing model re-drafts it the same way an import does; accepted norms are protected by reconciliation.
   const drafting = route === "code" || route === "existing" && options.paths.some(path => SOURCE_FILE.test(path));
   const structure = drafting ? await options.structure?.().catch(() => undefined) : undefined;
-  // A module whose files were not read cannot be explained, and a stub named after its path is noise.
-  const groups = structure ? structureGroups(structure).filter(group => group.paths.some(path => sources.has(path))) : [];
-  const stages = !drafting ? [] : groups.length ? structureStages(groups, sources) : bootstrapStages(sources);
+  // Candidate groups schedule reads only; files outside the read budget cannot be explained or owned.
+  const candidates: StructureCandidate[] = structure ? structureCandidates(structure)
+    .map(candidate => ({ ...candidate, files: candidate.files.filter(file => sources.has(file.path)) }))
+    .filter(candidate => candidate.files.length) : [];
+  const structured = Boolean(drafting && structure && candidates.length);
+  const stages = !drafting || structured ? [] : bootstrapStages(sources);
   // shortcut: C4 is drafted only while the model has none, so an update cannot create a second set;
   // delete the runtime-boundary nodes to refresh them.
-  if (drafting && !model?.nodes.some(runtimeKind)) stages.push(runtimeBoundaryStage(sources, structure));
-  // The stage plan is part of the identity: a checkpoint drafted by a different batching or prompt
-  // must not be resumed, or the same responsibility gets drafted (and merged) twice.
-  const fingerprint = projectContentHash(JSON.stringify({ route, revision: model?.revision ?? null, documents: [...sources].map(([path, text]) => [path, projectContentHash(text)]), stages: stages.map(stage => [stage.module?.id ?? "", ...[...stage.sources.keys()]]), prompt: PROMPT_VERSION, schema: 1, ai: options.ai }));
+  if (drafting && !structured && !model?.nodes.some(runtimeKind)) stages.push(runtimeBoundaryStage(sources, structure));
+  // The read plan is part of the identity: a checkpoint drafted from different boundaries or prompts
+  // must not be resumed, or the same responsibility gets drafted twice.
+  const fingerprint = projectContentHash(JSON.stringify({ route, revision: model?.revision ?? null,
+    documents: [...sources].map(([path, text]) => [path, projectContentHash(text)]),
+    plan: structured ? candidates.map(candidate => candidate.files.map(file => file.path)) : stages.map(stage => [...stage.sources.keys()]),
+    prompt: PROMPT_VERSION, schema: 2, ai: options.ai }));
   const rawCheckpoint = await (host.readFileStrict ? host.readFileStrict(PROJECT_BOOTSTRAP_CHECKPOINT_PATH) : host.readFile(PROJECT_BOOTSTRAP_CHECKPOINT_PATH));
-  let resumed: { model: ProjectModel; completed: number } | undefined;
+  let resumed: { model: ProjectModel; completed: number; responsibilities?: BootstrapResponsibility[]; prose?: number; c4?: boolean } | undefined;
   if (rawCheckpoint) {
     try {
       const saved = checkpointSchema.parse(JSON.parse(rawCheckpoint));
-      if (saved.fingerprint === fingerprint && saved.stage === "candidate") resumed = { model: parseProjectModel(saved.candidate), completed: saved.completed };
+      if (saved.fingerprint === fingerprint && saved.stage === "candidate") resumed = { model: parseProjectModel(saved.candidate), completed: saved.completed,
+        ...(saved.responsibilities ? { responsibilities: saved.responsibilities } : {}), prose: saved.prose ?? 0, c4: saved.c4 ?? false };
     } catch { /* Invalid candidate is never promoted. */ }
   }
-  const writeCheckpoint = async (candidate: ProjectModel, completed: number): Promise<void> => {
-    await host.writeFile(PROJECT_BOOTSTRAP_CHECKPOINT_PATH, JSON.stringify({ version: 1, route, fingerprint, stage: "candidate", completed, candidate }));
+  const writeCheckpoint = async (value: ProjectModel, progressCount: number, extra: { responsibilities?: BootstrapResponsibility[]; prose?: number; c4?: boolean } = {}): Promise<void> => {
+    await host.writeFile(PROJECT_BOOTSTRAP_CHECKPOINT_PATH, JSON.stringify({ version: 1, route, fingerprint, stage: "candidate", completed: progressCount, candidate: value,
+      ...(extra.responsibilities ? { responsibilities: extra.responsibilities } : {}), ...(extra.prose ? { prose: extra.prose } : {}), ...(extra.c4 ? { c4: true } : {}) }));
   };
   let candidate = resumed?.model;
   let completed = resumed?.completed ?? 0;
   let dropped: string[] = [];
-  /** Set when the functional grouping was rejected twice, so the flat tree is explained instead of silent. */
-  let ungrouped: string | undefined;
+  /** Boundary and runtime decisions the run could not establish, reported instead of looking successful. */
+  const boundaryNotes: string[] = [];
   /** Why the optional C4 pass produced nothing, so the run reports it instead of looking successful. */
   let c4Note = "";
-  if (!candidate) {
+  if (!candidate || drafting) {
     if (!drafting) {
       candidate = { schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [projectModelNodeSchema.parse({ id: "project", kind: "project", title: options.name, canonicalName: options.name, body: { kind: "inline", text: "Project intent needs definition and review." }, review: "draft", freshness: "needs_verification" })] };
       if (route !== "empty") for (const [path, content] of sources) if (durable(path)) candidate.nodes.push(projectModelNodeSchema.parse({ id: `document:${projectContentHash(path).slice(0, 20)}`, kind: "contract", title: path, canonicalName: path, body: { kind: "document", path, contentHash: projectContentHash(content) }, origin: "detected", review: "draft", freshness: "needs_verification" }));
@@ -414,132 +471,220 @@ export async function bootstrapProject(options: {
     } else {
       if (!options.provider) throw new Error("Choose an available Project AI provider before importing code.");
       const provider = options.provider;
-      candidate = { schemaVersion: 1, revision: 0, updatedAt: 0, nodes: [], relations: [] };
-      // A resumed run continues after its last checkpointed stage instead of starting over.
-      let reused = 0;
+      candidate ??= { schemaVersion: 1, revision: 0, updatedAt: 0, nodes: [], relations: [] };
+      if (structured) {
+        let responsibilities = resumed?.responsibilities;
+        const proseDone = resumed?.prose ?? 0;
+        const c4Done = resumed?.c4 ?? false;
+        let reused = 0;
+        const total = responsibilities ? responsibilities.length + 2 : candidates.length + 2;
+        const ask = async (instructions: string, payload: unknown, schema: Readonly<Record<string, unknown>>, position: { completed: number; total: number }, label: string, attempt = 1) => {
+          progress({ phase: "generating", completed: position.completed, total: position.total, message: label });
+          let reported = "";
+          return provider.generate({ prompt: [instructions, JSON.stringify(payload)].join("\n\n"), responseSchema: schema, inputHash: fingerprint,
+            promptVersion: PROMPT_VERSION, attempt, maxOutputTokens: 32_000, onEvent: event => {
+              const activity = event.title?.trim() || event.text.trim().slice(0, 160);
+              if (!activity || activity === reported) return;
+              reported = activity;
+              progress({ phase: "generating", completed: position.completed, total: position.total, message: activity });
+            } }, signal);
+        };
+        const payload = (extra: Record<string, unknown>) => ({ known: candidate!.nodes.map(node => ({ id: node.id, kind: node.kind, title: node.title })), omitted: options.paths.length - sources.size, ...extra });
+        const readProposals = (text: string, inventory: ReadonlySet<string>, fallback: BootstrapResponsibility[]): { responsibilities: BootstrapResponsibility[]; errors: string[] } => {
+          let value: unknown;
+          try { value = parseJsonObject(text); } catch (error) { return { responsibilities: fallback, errors: [error instanceof Error ? error.message : String(error)] }; }
+          const parsed = responsibilityDraftSchema.safeParse(value);
+          if (!parsed.success) return { responsibilities: fallback, errors: parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join(".")}: ${issue.message}`) };
+          const errors = [...validateOwnership(parsed.data.contexts.map(context => ({ name: context.canonicalName, members: context.sourceFiles })), inventory),
+            ...validateEntryPoints(parsed.data.contexts.map(context => ({ name: context.canonicalName, members: context.sourceFiles, entryPoints: context.entryPoints })))];
+          return errors.length ? { responsibilities: fallback, errors } : { responsibilities: parsed.data.contexts.map(responsibilityOf), errors: [] };
+        };
+        const candidateOf = new Map<string, number>();
+        candidates.forEach((candidate, index) => candidate.files.forEach(file => candidateOf.set(file.path, index)));
+        /** Keep candidate boundaries when a proposed merge has no static evidence. */
+        const gated = (proposals: BootstrapResponsibility[], fallback: BootstrapResponsibility[]): BootstrapResponsibility[] => {
+          const accepted: BootstrapResponsibility[] = [];
+          for (const proposal of proposals) {
+            const indices = [...new Set(proposal.paths.map(path => candidateOf.get(path)).filter((index): index is number => index !== undefined))];
+            if (indices.length < 2) { accepted.push(proposal); continue; }
+            const groups = indices.map(index => candidates[index]!.files.map(file => file.path).filter(path => proposal.paths.includes(path)));
+            if (mergeEvidence(structure!, groups).allowed) { accepted.push(proposal); continue; }
+            boundaryNotes.push(`merge rejected without structural evidence: ${proposal.name}`);
+            accepted.push(...fallback.filter(item => item.paths.some(path => proposal.paths.includes(path))));
+          }
+          return accepted;
+        };
+        if (!responsibilities) {
+          if (!resumed?.model.nodes.some(node => node.kind === "project")) {
+            const rootSources = new Map([...sources].filter(([path]) => guidancePath(path)));
+            const response = await ask(`${MODEL_GUIDANCE} ${LABEL_LANGUAGE} ${ROOT_STAGE}`,
+              { inventory: [...sources.keys()].slice(0, 400), sources: [...rootSources], omitted: options.paths.length - sources.size },
+              z.toJSONSchema(rootDraftSchema), { completed: 0, total }, "Drafting goals and architecture…");
+            mergeProjectModel(candidate, { ...candidate, ...readRoot(response.text, rootSources, model) });
+            completed = 1;
+            await writeCheckpoint(candidate, completed);
+          }
+          const batches = candidateBatches(candidates);
+          let provisional: BootstrapResponsibility[] = [];
+          for (const [index, batch] of batches.entries()) {
+            const inventory = new Set(batch.flatMap(group => group.files.map(file => file.path)));
+            const fallback = candidateFallback(batch);
+            const request = async (attempt: number, errors: readonly string[] = []) => ask(`${RESPONSIBILITY_GUIDANCE} ${LABEL_LANGUAGE} ${NAME_MAPPING}`,
+              payload({ candidates: batch.map(candidateFacts), inventory: [...inventory], ...(errors.length ? { rejected: errors.slice(0, 6) } : {}) }),
+              z.toJSONSchema(responsibilityDraftSchema), { completed: 1, total }, `Identifying responsibilities in batch ${index + 1} of ${batches.length}…`, attempt);
+            let read = readProposals((await request(1)).text, inventory, fallback);
+            if (read.errors.length) read = readProposals((await request(2, read.errors)).text, inventory, fallback);
+            if (read.errors.length) boundaryNotes.push(`responsibility batch ${index + 1}: ${read.errors[0]}`);
+            provisional.push(...gated(read.responsibilities, fallback));
+          }
+          if (batches.length > 1 && provisional.length > 1) {
+            const inventory = new Set(provisional.flatMap(item => item.paths));
+            const request = async (attempt: number, errors: readonly string[] = []) => ask(`${RESPONSIBILITY_MERGE_GUIDANCE} ${LABEL_LANGUAGE} ${NAME_MAPPING}`,
+              payload({ responsibilities: provisional.map(({ name, purpose, paths, entryPoints, uncertainties }) => ({ canonicalName: name, purpose, paths, entryPoints, uncertainties })),
+                ...(errors.length ? { rejected: errors.slice(0, 6) } : {}) }), z.toJSONSchema(responsibilityMergeSchema), { completed: 1, total }, "Consolidating responsibilities across batches…", attempt);
+            const readMerge = (text: string): { responsibilities: BootstrapResponsibility[]; errors: string[] } => {
+              let value: unknown;
+              try { value = parseJsonObject(text); } catch (error) { return { responsibilities: provisional, errors: [error instanceof Error ? error.message : String(error)] }; }
+              const parsed = responsibilityMergeSchema.safeParse(value);
+              if (!parsed.success) return { responsibilities: provisional, errors: parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join(".")}: ${issue.message}`) };
+              const errors = [...validateOwnership(parsed.data.contexts.map(context => ({ name: context.canonicalName, members: context.sourceFiles })), inventory),
+                ...validateEntryPoints(parsed.data.contexts.map(context => ({ name: context.canonicalName, members: context.sourceFiles, entryPoints: context.entryPoints })))];
+              return errors.length ? { responsibilities: provisional, errors } : { responsibilities: parsed.data.contexts.map(responsibilityOf), errors: [] };
+            };
+            let merged = readMerge((await request(1)).text);
+            if (merged.errors.length) merged = readMerge((await request(2, merged.errors)).text);
+            if (merged.errors.length) boundaryNotes.push(`responsibility consolidation: ${merged.errors[0]}`);
+            else provisional = gated(merged.responsibilities, provisional);
+          }
+          responsibilities = provisional;
+          const inventory = new Set(candidates.flatMap(group => group.files.map(file => file.path)));
+          const ownership = validateOwnership(responsibilities.map(item => ({ name: item.name, members: item.paths })), inventory);
+          if (ownership.length) throw new Error(`The drafted responsibility boundaries are inconsistent: ${ownership.slice(0, 5).join(" ")}`);
+          // A reused id must stay unique, or two responsibilities would become one node.
+          const ids = new Set<string>();
+          responsibilities = responsibilities.map(item => {
+            const preferred = reusableIdentity(model, item.paths) ?? item.id;
+            const id = ids.has(preferred) ? item.id : preferred;
+            ids.add(id);
+            return { ...item, id };
+          });
+          await writeCheckpoint(candidate, 1, { responsibilities });
+        }
+        const hierarchy = deriveStructureHierarchy(responsibilities.map(item => ({ id: item.id, paths: item.paths })));
+        const hierarchyErrors = validateStructureHierarchy(hierarchy, responsibilities.map(item => ({ id: item.id, paths: item.paths })));
+        if (hierarchyErrors.length) throw new Error(`The drafted module hierarchy is inconsistent: ${hierarchyErrors.slice(0, 5).join(" ")}`);
+        const totalStages = responsibilities.length + 2;
+        const names = new Map(responsibilities.map(item => [item.id, item.name]));
+        const parentTitle = new Map(hierarchy.parents.map(parent => [parent.id, parent.title]));
+        for (let index = proseDone; index < responsibilities.length; index += 1) {
+          const item = responsibilities[index]!;
+          const staged = new Map<string, string>(); let size = 0;
+          for (const path of item.paths) {
+            const text = sources.get(path);
+            if (text === undefined) continue;
+            if (staged.size && size + text.length > STAGE_CHARS) break;
+            staged.set(path, text); size += text.length;
+          }
+          const stage: BootstrapStage = { instructions: "", sources: staged, module: { id: item.id, paths: item.paths } };
+          const saved = reusableModule(model, stage);
+          if (saved) {
+            candidate.nodes.push(saved); reused += 1;
+            progress({ phase: "generating", completed: 1 + index + 1, total: totalStages, message: `Reusing ${saved.title} — its sources are unchanged…` });
+          } else {
+            const parent = hierarchy.parentOf.get(item.id);
+            const children = [...hierarchy.parentOf].filter(([, parentId]) => parentId === item.id).map(([child]) => names.get(child) ?? child);
+            const response = await ask(`${PROSE_GUIDANCE} ${LABEL_LANGUAGE} ${NAME_MAPPING} ${PROSE_STAGE}`,
+              payload({ purpose: item.purpose, ...(parent ? { parent: parentTitle.get(parent) } : {}), ...(children.length ? { children } : {}), paths: item.paths,
+                uncertainties: item.uncertainties, sources: [...staged] }),
+              z.toJSONSchema(proseSchema), { completed: 1 + index, total: totalStages }, `Drafting ${item.name}…`);
+            const prose = readProse(response.text, item.name);
+            candidate.nodes.push(projectModelNodeSchema.parse({ id: item.id, kind: "module", title: prose.title, canonicalName: prose.title,
+              body: { kind: "inline", text: prose.body }, paths: item.paths, evidence: stageEvidence(stage) }));
+          }
+          completed = 1 + index + 1;
+          await writeCheckpoint(candidate, completed, { responsibilities, prose: index + 1 });
+        }
+        const titles = new Map(candidate.nodes.filter(node => node.kind === "module").map(node => [node.id, node.title]));
+        for (const parent of hierarchyNodes(hierarchy, titles)) if (!candidate.nodes.some(node => node.id === parent.id)) candidate.nodes.push(parent);
+        if (!c4Done) {
+          if (!model?.nodes.some(runtimeKind) && !candidate.nodes.some(runtimeKind)) {
+            const stage = runtimeBoundaryStage(sources, structure);
+            const response = await ask(stage.instructions, payload({ sources: [...stage.sources] }), z.toJSONSchema(c4EnvelopeSchema), { completed: totalStages - 1, total: totalStages }, "Drafting runtime boundaries…");
+            try {
+              const c4 = c4EnvelopeSchema.parse(parseJsonObject(response.text)).c4;
+              if (c4) {
+                const cited = (entries: ProjectModelRelation["evidence"]): ProjectModelRelation["evidence"] => entries.filter(entry => {
+                  const text = sources.get(entry.path);
+                  return text !== undefined && (entry.line === undefined || entry.line <= text.split("\n").length);
+                });
+                const elements = c4.elements.map(element => ({ ...element, evidence: cited(element.evidence) })).filter(element => element.evidence.length);
+                const ids = new Set(elements.map(element => element.id));
+                const relationships = c4.relationships.filter(relation => ids.has(relation.from) && ids.has(relation.to))
+                  .map(relation => ({ ...relation, evidence: cited(relation.evidence) })).filter(relation => relation.evidence.length);
+                mergeProjectC4(candidate, { ...c4, elements, relationships });
+                c4Note = elements.length ? `runtime boundaries: ${elements.length} nodes` : "runtime boundaries: no supported evidence";
+              } else c4Note = "runtime boundaries: no supported boundary";
+            } catch (error) {
+              c4Note = `runtime boundaries skipped: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`;
+            }
+          }
+          await writeCheckpoint(candidate, completed, { responsibilities, prose: responsibilities.length, c4: true });
+        }
+        // The index owns modules, hierarchy and dependency edges; C4 interactions are not in it and must survive.
+        candidate.relations = [...structureRelations(structure!, candidate.nodes, hierarchy.parentOf), ...c4Relations(candidate)];
+        progress({ phase: "generating", completed: totalStages, total: totalStages,
+          message: `Drafted ${candidate.nodes.length} nodes from ${candidates.length} candidate group(s)${reused ? `, reusing ${reused} unchanged module(s)` : ""}.${boundaryNotes.length ? ` Review boundaries: ${boundaryNotes.slice(0, 3).join("; ")}` : ""}${c4Note ? ` ${c4Note}.` : ""}` });
+      } else {
+      // Fallback without an import index: the AI drafts bounded batches; no structure merge is claimed.
       for (let index = completed; index < stages.length; index += 1) {
         const stage = stages[index]!;
-        // Zero change is not re-drafted: a module whose files still hash the same keeps its prose and its
-        // review state, and an unchanged grouping keeps its areas. Only what changed reaches the provider.
-        const saved = reusableModule(model, stage);
-        const savedAreas = stage.areas ? reusableAreas(model, candidate) : undefined;
-        if (saved || savedAreas) {
-          if (saved) candidate.nodes.push(saved);
-          for (const node of savedAreas ?? []) candidate.nodes.push(node);
-          reused += 1;
-          progress({ phase: "generating", completed: index, total: stages.length, message: saved ? `Reusing ${saved.title} — its sources are unchanged…` : "Reusing the saved functional areas — the modules are unchanged…" });
-          completed = index + 1;
-          await writeCheckpoint(candidate, completed);
-          continue;
-        }
-        const label = stage.module ? `Drafting ${stage.module.id}…` : stage.areas ? "Grouping modules into functional areas…" : stage.c4 ? "Drafting runtime boundaries…" : index === 0 ? "Drafting goals and architecture…" : `Drafting responsibility batch ${index} of ${stages.length - 1}…`;
+        const label = stage.c4 ? "Drafting runtime boundaries…" : index === 0 ? "Drafting goals and architecture…" : `Drafting responsibility batch ${index} of ${stages.length - 1}…`;
         progress({ phase: "generating", completed: index, total: stages.length, message: label });
         // Every drafted id, so a later batch cannot re-invent a responsibility one character off.
         const known = candidate.nodes.map(node => ({ id: node.id, kind: node.kind, title: node.title }));
         let reported = "";
         const response = await provider.generate({ prompt: [
           stage.instructions,
-          JSON.stringify({ ...(stage.c4 ? {} : { existing: model }), known, ...(stage.module ? { paths: stage.module.paths } : {}), inventory: index === 0 ? [...sources.keys()].slice(0, 400) : undefined, sources: [...stage.sources], omitted: options.paths.length - sources.size })
-        ].join("\n\n"), responseSchema: z.toJSONSchema(stage.module ? proseSchema : stage.areas ? areaSchema : stage.c4 ? c4EnvelopeSchema : draftModelSchema), inputHash: fingerprint, promptVersion: PROMPT_VERSION, attempt: 1, maxOutputTokens: 32_000, onEvent: event => {
+          JSON.stringify({ ...(stage.c4 ? {} : { existing: model }), known, inventory: index === 0 ? [...sources.keys()].slice(0, 400) : undefined, sources: [...stage.sources], omitted: options.paths.length - sources.size })
+        ].join("\n\n"), responseSchema: z.toJSONSchema(stage.c4 ? c4EnvelopeSchema : index === 0 ? rootDraftSchema : draftModelSchema), inputHash: fingerprint, promptVersion: PROMPT_VERSION, attempt: 1, maxOutputTokens: 32_000, onEvent: event => {
           const activity = event.title?.trim() || event.text.trim().slice(0, 160);
           if (!activity || activity === reported) return;
           reported = activity;
           progress({ phase: "generating", completed: index, total: stages.length, message: activity });
         } }, signal);
-        // Relations are checked across all stages at the end, so a batch may safely mention a node
-        // another batch owns; only the committed graph has to be closed.
-        if (stage.areas) {
-          // Navigation, not ownership: a response that drops or duplicates a module leaves the model ungrouped.
-          const modules = candidate.nodes.filter(node => node.kind === "module").map(node => ({ id: node.id, title: node.title }));
-          // The prompt lists every module with its title, so a model may copy the label instead of the id.
-          const titles = new Map<string, string[]>();
-          for (const module of modules) titles.set(module.title.toLowerCase(), [...(titles.get(module.title.toLowerCase()) ?? []), module.id]);
-          const readAreas = (text: string): { areas: z.infer<typeof areaSchema>["areas"]; errors: string[] } => {
-            // A prose answer is a rejected grouping, not a fatal error: the repair round below exists for it.
-            let value: unknown;
-            try { value = parseJsonObject(text); } catch (error) { return { areas: [], errors: [error instanceof Error ? error.message : String(error)] }; }
-            const parsed = areaSchema.safeParse(value);
-            if (!parsed.success) return { areas: [], errors: parsed.error.issues.slice(0, 5).map(issue => `${issue.path.join(".")}: ${issue.message}`) };
-            const areas = parsed.data.areas.map(area => ({ ...area, moduleIds: area.moduleIds.map(member => {
-              const match = titles.get(member.trim().toLowerCase());
-              return match?.length === 1 ? match[0]! : member;
-            }) }));
-            return { areas, errors: validateOwnership(areas.map(area => ({ name: area.title, members: area.moduleIds })), new Set(modules.map(module => module.id))) };
-          };
-          let grouping = readAreas(response.text);
-          if (grouping.errors.length) {
-            // One repair round: naming the mistake and the exact ids is cheaper than drafting every module again.
-            progress({ phase: "generating", completed: index, total: stages.length, message: "Repairing the functional grouping…" });
-            const retry = await provider.generate({ prompt: [
-              `${STRUCTURE_GUIDANCE} ${LABEL_LANGUAGE} ${NAME_MAPPING}`,
-              `The previous grouping was rejected: ${grouping.errors.slice(0, 6).join(" ")}`,
-              `Assign every one of these module ids exactly once: ${JSON.stringify(modules)}`
-            ].join("\n\n"), responseSchema: z.toJSONSchema(areaSchema), inputHash: fingerprint, promptVersion: PROMPT_VERSION, attempt: 2, maxOutputTokens: 32_000 }, signal);
-            grouping = readAreas(retry.text);
-          }
-          if (grouping.errors.length) ungrouped = grouping.errors[0];
-          else for (const area of grouping.areas) candidate.nodes.push(projectModelNodeSchema.parse({
-            id: `area:${slug(area.title)}`, kind: "capability", title: area.title, canonicalName: area.title,
-            body: { kind: "inline", text: area.description }, properties: { moduleIds: area.moduleIds }
-          }));
-        } else if (stage.module) {
-          // The previous run already accepted a name for this module, so it beats a file name.
-          const savedTitle = model?.nodes.find(node => node.id === stage.module!.id || node.paths.some(path => stage.module!.paths.includes(path)))?.title;
-          const prose = readProse(response.text, savedTitle ?? stage.module.paths[0]!.split("/").pop()!.replace(/\.[^/.]+$/, ""));
-          // The index cap split one responsibility across groups, not the design: the same title is one node.
-          const existing = candidate.nodes.find(node => node.kind === "module" && node.title.toLowerCase() === prose.title.toLowerCase());
-          if (existing) {
-            existing.paths = [...new Set([...existing.paths, ...stage.module.paths])];
-            // One responsibility split by the index cap still reads from every one of its files.
-            existing.evidence = [...new Map([...existing.evidence, ...stageEvidence(stage)].map((entry) => [entry.path, entry])).values()];
-          } else candidate.nodes.push(projectModelNodeSchema.parse({ id: stage.module.id, kind: "module", title: prose.title, canonicalName: prose.title, body: { kind: "inline", text: prose.body }, paths: stage.module.paths, evidence: stageEvidence(stage) }));
-        } else if (stage.c4) {
-          // Runtime boundaries are optional: a malformed or unsupported answer never discards the model.
-          try {
-            const c4 = c4EnvelopeSchema.parse(parseJsonObject(response.text)).c4;
-            if (c4) {
-              // Keep every evidence entry this run actually read; a stale reference alone never drops the boundary.
-              const cited = (entries: ProjectModelRelation["evidence"]): ProjectModelRelation["evidence"] => entries.filter(entry => {
-                const text = sources.get(entry.path);
-                return text !== undefined && (entry.line === undefined || entry.line <= text.split("\n").length);
-              });
-              const elements = c4.elements.map(element => ({ ...element, evidence: cited(element.evidence) })).filter(element => element.evidence.length);
-              const ids = new Set(elements.map(element => element.id));
-              const relationships = c4.relationships.filter(relation => ids.has(relation.from) && ids.has(relation.to))
-                .map(relation => ({ ...relation, evidence: cited(relation.evidence) })).filter(relation => relation.evidence.length);
-              mergeProjectC4(candidate, { ...c4, elements, relationships });
-              c4Note = elements.length ? `runtime boundaries: ${elements.length} nodes` : "runtime boundaries: no supported evidence";
-            } else c4Note = "runtime boundaries: no supported boundary";
-          } catch (error) {
-            c4Note = `runtime boundaries skipped: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`;
-          }
+        // Runtime boundaries are optional: a malformed or unsupported answer never discards the model.
+        if (stage.c4) try {
+          const c4 = c4EnvelopeSchema.parse(parseJsonObject(response.text)).c4;
+          if (c4) {
+            // Keep every evidence entry this run actually read; a stale reference alone never drops the boundary.
+            const cited = (entries: ProjectModelRelation["evidence"]): ProjectModelRelation["evidence"] => entries.filter(entry => {
+              const text = sources.get(entry.path);
+              return text !== undefined && (entry.line === undefined || entry.line <= text.split("\n").length);
+            });
+            const elements = c4.elements.map(element => ({ ...element, evidence: cited(element.evidence) })).filter(element => element.evidence.length);
+            const ids = new Set(elements.map(element => element.id));
+            const relationships = c4.relationships.filter(relation => ids.has(relation.from) && ids.has(relation.to))
+              .map(relation => ({ ...relation, evidence: cited(relation.evidence) })).filter(relation => relation.evidence.length);
+            mergeProjectC4(candidate, { ...c4, elements, relationships });
+            c4Note = elements.length ? `runtime boundaries: ${elements.length} nodes` : "runtime boundaries: no supported evidence";
+          } else c4Note = "runtime boundaries: no supported boundary";
+        } catch (error) {
+          c4Note = `runtime boundaries skipped: ${(error instanceof Error ? error.message : String(error)).slice(0, 160)}`;
+        } else if (index === 0) {
+          mergeProjectModel(candidate, { ...candidate, ...readRoot(response.text, stage.sources, model) });
         } else {
           const part: ProjectModel = { ...candidate, ...draftModelSchema.parse(normalizeBodies(parseJsonObject(response.text), sources)) };
-          // With an index, this stage only contributes the root: module identity belongs to the index.
-          mergeProjectModel(candidate, structure && groups.length
-            ? { ...part, nodes: part.nodes.filter(node => node.kind === "project" || node.kind === "architecture"), relations: [] }
-            : part);
+          // Relations are checked at the end, so a batch may safely mention a node another batch owns.
+          mergeProjectModel(candidate, part);
         }
         completed = index + 1;
         await writeCheckpoint(candidate, completed);
       }
-      if (!candidate.nodes.length) throw new Error("Project AI returned no nodes; nothing was saved.");
-      // The index owns module edges once it exists; model-proposed edges would only duplicate it.
-      if (structure && groups.length) {
-        // The index owns module edges; C4 interactions are not in the index and must survive.
-        candidate.relations = [...structureRelations(structure, candidate.nodes), ...c4Relations(candidate)];
-        // Area membership is authored, so its edges are rebuilt from the nodes and survive a resume.
-        for (const node of candidate.nodes) {
-          if (node.kind !== "capability") continue;
-          for (const id of (node.properties.moduleIds as string[] | undefined) ?? []) {
-            if (!candidate.nodes.some(item => item.id === id)) continue;
-            candidate.relations.push(projectModelRelationSchema.parse({ id: `${node.id}--maps_to--${id}`, from: node.id, to: id, kind: "maps_to", origin: "inferred", review: "draft", freshness: "needs_verification" }));
-          }
-        }
+      progress({ phase: "generating", completed: stages.length, total: stages.length, message: `Drafted ${candidate.nodes.length} nodes in ${stages.length} stages${c4Note ? ` ${c4Note}.` : ""}` });
       }
-      progress({ phase: "generating", completed: stages.length, total: stages.length, message: `Drafted ${candidate.nodes.length} nodes in ${stages.length} stages${reused ? `, reusing ${reused} unchanged stage(s)` : ""}.${ungrouped ? ` Modules stay ungrouped: ${ungrouped}` : ""}${c4Note ? ` ${c4Note}.` : ""}` });
+      if (!candidate.nodes.length) throw new Error("Project AI returned no nodes; nothing was saved.");
     }
-    if (!resumed) await writeCheckpoint(candidate, completed);
+    if (!resumed && !drafting) await writeCheckpoint(candidate, completed);
   }
   if (drafting) {
     // Drafting errors are repaired rather than fatal, including on a run resumed after every stage.
@@ -562,9 +707,14 @@ export async function bootstrapProject(options: {
     if (node.paths.length && !owned.length) stale.add(node.id);
     node.paths = owned;
   }
-  // A grouping is navigation the run re-authors, so areas this run did not draft leave with their edges.
+  // Areas are no longer generated: a draft grouping this run did not author leaves with its edges.
   const authored = new Set(candidate.nodes.map(node => node.id));
-  if (!ungrouped) for (const node of merged.nodes) if (node.kind === "capability" && !authored.has(node.id) && node.review === "draft") stale.add(node.id);
+  for (const node of merged.nodes) {
+    if (node.review !== "draft" || authored.has(node.id)) continue;
+    if (node.kind === "capability") stale.add(node.id);
+    // An overview module this run did not author has no files to keep it in scope.
+    if (node.kind === "module" && !node.paths.length) stale.add(node.id);
+  }
   // A module that lost every file, or an area the run re-authored, has nothing left to explain.
   if (stale.size) {
     merged.nodes = merged.nodes.filter(node => !stale.has(node.id));

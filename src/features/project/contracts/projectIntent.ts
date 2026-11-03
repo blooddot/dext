@@ -53,6 +53,8 @@ export const projectArchitectureContextSchema = z.object({
   entryPoints: z.array(z.string().min(1)).default([]),
   /** Exact primary file ownership of a structure-backed responsibility; absent on legacy models. */
   sourceFiles: z.array(z.string().min(1)).optional(),
+  /** Parent module/context derived from a saved containment relation; absent on legacy models. */
+  parentId: z.string().min(1).optional(),
   /** Historical boundaries with overlapping member files; never proof of equivalent behavior. */
   previousContextIds: z.array(z.string().min(1)).optional(),
   uncertainties: z.array(z.string().min(1)).optional(),

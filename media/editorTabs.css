@@ -495,6 +495,15 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-reader-directory [data-reader-area] summary:hover { background: var(--vscode-list-hoverBackground); }
 .project-reader-directory [data-reader-area] .project-help { margin: 4px 10px 8px; font-size: 12px; }
 .project-reader-directory [data-reader-area] button { padding-left: 14px; }
+/* Module tree: depth is a reading hint, so the row stays one clickable line and the
+   disclosure is a separate control beside it. */
+.project-reader-directory .project-reader-tree,
+.project-reader-directory .project-reader-tree ul { list-style: none; margin: 0; padding: 0; }
+.project-reader-directory .project-reader-tree ul { padding-left: 14px; }
+.project-reader-directory .project-reader-tree-row { display: flex; align-items: flex-start; gap: 2px; padding-left: calc(var(--reader-depth, 0) * 8px); }
+.project-reader-directory .project-reader-tree-row > button[data-reader-topic] { flex: 1; min-width: 0; }
+.project-reader-directory .project-reader-tree-toggle { width: auto; min-width: 28px; padding: 7px 4px; text-align: center; }
+.project-reader-directory .project-reader-review { display: block; padding-top: 9px; color: var(--vscode-editorWarning-foreground); font-size: 11px; white-space: nowrap; }
 .project-reader-directory button[aria-current="page"] { color: var(--vscode-foreground); background: var(--vscode-list-inactiveSelectionBackground, var(--vscode-editor-inactiveSelectionBackground, var(--vscode-input-background))); font-weight: 600; }
 .project-reader-gallery { margin-top: 24px; font-size: 12px; }
 .project-reader-gallery summary, .project-reader-support summary, .project-reader-source summary { cursor: pointer; padding: 8px 0; color: var(--vscode-descriptionForeground); }

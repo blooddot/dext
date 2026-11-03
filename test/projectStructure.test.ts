@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { buildStructureIndex, structureCacheSchema } from "../src/features/project/host/indexing/projectStructure.js";
 import { projectModelCheckpointSchema, type ProjectInitializationCheckpointStore, type ProjectModelCheckpoint } from "../src/features/project/host/generation/projectModelCheckpoint.js";
-import { structureCandidates, type StructureCandidate } from "../src/features/project/host/indexing/projectStructureKnowledge.js";
+import { structureCandidates, deriveStructureHierarchy, mergeEvidence, validateEntryPoints, validateOwnership, validateStructureHierarchy, type StructureCandidate } from "../src/features/project/host/indexing/projectStructureKnowledge.js";
+import type { StructureSummary } from "../src/features/project/host/indexing/projectStructure.js";
 import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
 const inputs = (files: Record<string, string>) => Object.entries(files).map(([path, content]) => ({ path, content }));
@@ -604,4 +605,92 @@ it.each(["supported", "empty", "invented", "unread", "timeout", "cancel"])("boun
     }
     expect(reviews).toBe(1);
   } finally { service.dispose(); }
+});
+
+const structureMember = (path: string, dependencies: Array<{ specifier: string; to?: string; typeOnly?: boolean }> = []) => ({ path, hash: `h-${path}`, language: "typescript", lines: 1, symbols: [], dependencies });
+const structureModule = (id: string, pkg: string, members: Array<ReturnType<typeof structureMember>>) => ({ id, path: `src/${id}`, package: pkg, languages: ["typescript"], files: members.length, entryPoints: [], symbols: [], evidence: [], references: [], dependsOn: [], dependencyCount: 0, unresolved: 0, hash: `h-${id}`, members });
+const structureSummary = (modules: Array<ReturnType<typeof structureModule>>): StructureSummary => ({ version: 2, hash: "index", files: modules.reduce((sum, module) => sum + module.files, 0), parsed: 0, cached: 0, failed: 0, unsupported: 0, issues: [], modules });
+
+describe("structure evidence and directory hierarchy", () => {
+  it("accepts a merge only when the index connects the groups", () => {
+    const summary = structureSummary([
+      structureModule("core", "app", [structureMember("src/core/a.ts", [{ specifier: "../ui/b", to: "src/ui/b.ts" }])]),
+      structureModule("ui", "app", [structureMember("src/ui/b.ts")]),
+      structureModule("other", "app", [structureMember("src/other/c.ts")]),
+      structureModule("foreign", "lib", [structureMember("lib/d.ts")])
+    ]);
+    const related = mergeEvidence(summary, [["src/core/a.ts"], ["src/ui/b.ts"]]);
+    expect(related.allowed).toBe(true);
+    // Same package is the only remaining reason when no edge exists.
+    expect(mergeEvidence(summary, [["src/ui/b.ts"], ["src/other/c.ts"]]).allowed).toBe(true);
+    expect(mergeEvidence(summary, [["src/other/c.ts"], ["lib/d.ts"]])).toMatchObject({ allowed: false, components: [[0], [1]] });
+  });
+  it("does not treat a type-only import or a shared name as shared responsibility", () => {
+    const summary = structureSummary([
+      structureModule("core", "app", [structureMember("src/core/a.ts", [{ specifier: "../ui/b", to: "src/ui/b.ts", typeOnly: true }])]),
+      structureModule("ui", "lib", [structureMember("src/ui/b.ts")])
+    ]);
+    expect(mergeEvidence(summary, [["src/core/a.ts"], ["src/ui/b.ts"]]).allowed).toBe(false);
+  });
+  it("connects groups that one outside file consumes", () => {
+    const summary = structureSummary([
+      structureModule("core", "app", [structureMember("src/core/a.ts")]),
+      structureModule("ui", "app", [structureMember("src/ui/b.ts")]),
+      structureModule("root", "app", [structureMember("src/app.ts", [{ specifier: "./core/a", to: "src/core/a.ts" }, { specifier: "./ui/b", to: "src/ui/b.ts" }])])
+    ]);
+    // Same package already connects them, so use separate packages to prove the shared consumer.
+    const split = structureSummary([
+      structureModule("core", "core", [structureMember("src/core/a.ts")]),
+      structureModule("ui", "ui", [structureMember("src/ui/b.ts")]),
+      structureModule("root", "root", [structureMember("src/app.ts", [{ specifier: "./core/a", to: "src/core/a.ts" }, { specifier: "./ui/b", to: "src/ui/b.ts" }])])
+    ]);
+    expect(mergeEvidence(summary, [["src/core/a.ts"], ["src/ui/b.ts"]]).allowed).toBe(true);
+    expect(mergeEvidence(split, [["src/core/a.ts"], ["src/ui/b.ts"]])).toMatchObject({ allowed: true, components: [[0, 1]] });
+  });
+  it("folds one responsibility per directory and creates a parent only where responsibilities split", () => {
+    const single = deriveStructureHierarchy([
+      { id: "module:src-core-a-ts", paths: ["src/core/a.ts"] },
+      { id: "module:src-core-b-ts", paths: ["src/core/b.ts"] }
+    ]);
+    expect(single.parents.map(parent => [parent.id, parent.dir, parent.parentId])).toEqual([["module:src-core", "src/core", undefined]]);
+    expect([...single.parentOf]).toEqual([["module:src-core-a-ts", "module:src-core"], ["module:src-core-b-ts", "module:src-core"]]);
+
+    const nested = deriveStructureHierarchy([
+      { id: "module:src-core-a-ts", paths: ["src/core/a.ts"] },
+      { id: "module:src-core-b-ts", paths: ["src/core/b.ts"] },
+      { id: "module:src-ui-c-ts", paths: ["src/ui/c.ts"] },
+      { id: "module:src-shared-d-ts", paths: ["src/shared/d.ts"] }
+    ]);
+    expect(nested.parents.map(parent => [parent.id, parent.dir, parent.parentId])).toEqual([
+      ["module:src-core", "src/core", undefined]
+    ]);
+    expect(nested.parentOf.get("module:src-ui-c-ts")).toBeUndefined();
+    // A cross-directory merge gets the nearest common directory, not one of its members' directories.
+    const merged = deriveStructureHierarchy([
+      { id: "module:src-core-a-ts", paths: ["src/core/a.ts", "src/ui/b.ts"] },
+      { id: "module:src-core-c-ts", paths: ["src/core/c.ts"] }
+    ]);
+    expect(merged.parentOf.get("module:src-core-a-ts")).toBe("module:src");
+  });
+  it("rejects duplicate ids, missing parents, cycles and parents outside the child path", () => {
+    const groups = [{ id: "module:a", paths: ["src/core/a.ts"] }];
+    expect(validateStructureHierarchy({ parents: [{ id: "module:a", title: "A", dir: "src/core" }], parentOf: new Map() }, groups))
+      .toContain("Duplicate module id 'module:a'.");
+    expect(validateStructureHierarchy({ parents: [], parentOf: new Map([["module:a", "module:missing"]]) }, groups))
+      .toContain("Parent 'module:missing' of 'module:a' is missing.");
+    const cycle = { parents: [{ id: "module:x", title: "X", dir: "src", parentId: "module:y" }, { id: "module:y", title: "Y", dir: "src", parentId: "module:x" }],
+      parentOf: new Map([["module:x", "module:y"], ["module:y", "module:x"]]) };
+    expect(validateStructureHierarchy(cycle, groups).some(error => error.includes("cycle"))).toBe(true);
+    expect(validateStructureHierarchy({ parents: [{ id: "module:ui", title: "UI", dir: "src/ui" }], parentOf: new Map([["module:a", "module:ui"]]) }, groups))
+      .toContain("Parent 'module:ui' is not an ancestor of 'module:a'.");
+  });
+  it("keeps ownership and entry-point claims inside the indexed inventory", () => {
+    expect(validateOwnership([{ name: "Core", members: ["src/a.ts", "src/a.ts", "src/ghost.ts"] }], new Set(["src/a.ts", "src/b.ts"]))).toEqual([
+      "Core: Duplicate source ownership 'src/a.ts'.",
+      "Core: Unknown source member 'src/ghost.ts'.",
+      "Missing source ownership 'src/b.ts'."
+    ]);
+    expect(validateEntryPoints([{ name: "Core", members: ["src/a.ts"], entryPoints: ["src/a.ts", "src/b.ts"] }]))
+      .toEqual(["Core: Entry point 'src/b.ts' is not owned by this module."]);
+  });
 });

@@ -100,10 +100,11 @@ try {
   const intent = ui.projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 10, brief: { name: 'Dext', summary: 'Understand execution from the editor to the kernel.' },
     capabilities: [
       { id: 'area.editing', canonicalName: 'Editing', description: 'Prepare code for execution.', contextIds: ['editor'] },
-      { id: 'area.execution', canonicalName: 'Workflow execution', description: 'Execute reusable workflows.', contextIds: ['kernel'] }
+      { id: 'area.execution', canonicalName: 'Workflow execution', description: 'Execute reusable workflows.', contextIds: ['runtime', 'kernel'] }
     ], contexts: [
     { id: 'editor', canonicalName: 'Code editor', purpose: 'Collect code and submit a run.', dependsOn: ['kernel'], evidence },
-    { id: 'kernel', canonicalName: 'Execution kernel', purpose: 'Execute TypeScript and await tracked calls.', evidence }
+    { id: 'runtime', canonicalName: 'Runtime modules', purpose: 'Groups the executable modules.', evidence },
+    { id: 'kernel', canonicalName: 'Execution kernel', purpose: 'Execute TypeScript and await tracked calls.', parentId: 'runtime', evidence }
   ], flows: [{ id: 'run', canonicalName: 'Run TypeScript', description: 'Follow a submitted module until its tracked calls settle.', trigger: 'Submit Code', evidence, steps: [
     { id: 'submit', label: 'Submit code', description: 'The editor sends the current module.', contextId: 'editor', nextStepIds: ['execute'], evidence },
     { id: 'execute', label: 'Execute module', description: 'The kernel loads the module and runs its exports.', contextId: 'kernel', nextStepIds: ['settle'], evidence },
@@ -321,6 +322,13 @@ try {
       await ready();
       assert.equal(await evaluate(`document.querySelector('[data-reader-article] h2').textContent`), 'Execution kernel');
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.execution"]').open`), true, 'navigation opens the selected module area');
+      assert.equal(await evaluate(`document.querySelector('[data-topic-node="runtime"] [data-topic-children]')?.hidden`), false, 'selecting a child opens its ancestor group');
+      assert.equal(await evaluate(`document.querySelector('[data-topic-review]')?.hidden`), false, 'a draft module says its structure needs review');
+      await click('.project-reader-directory [data-reader-topic="runtime"]');
+      await wait(`document.querySelector('[data-reader-article] h2')?.textContent === 'Runtime modules'`, 'parent overview');
+      assert.equal(await evaluate(`!!document.querySelector('[data-reader-article] [data-reader-topic="kernel"]')`), true, 'a parent overview links to its saved children');
+      await click('.project-reader-directory [data-reader-topic="kernel"]');
+      await ready();
       await click('[data-reader-home]');
       assert.equal(await evaluate(`(()=>{const a=[...document.querySelectorAll('.project-reader-directory [aria-current="page"]')];return a.length===1&&a[0].hasAttribute('data-reader-home')})()`), true, 'the introduction marks only its own entry current');
       assert.equal(await evaluate(`!!document.querySelector('[data-project-freshness]')`), true, 'the introduction summarizes how fresh the saved explanations are');
@@ -339,7 +347,7 @@ try {
       await evaluate(`document.querySelector('[data-project-topic-search]').value='';document.querySelector('[data-project-topic-search]').dispatchEvent(new Event('input',{bubbles:true}))`);
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.editing"]').hidden`), false, 'clearing search restores areas');
       await evaluate(`document.querySelector('[data-project-topic-search]').value='Run TypeScript';document.querySelector('[data-project-topic-search]').dispatchEvent(new Event('input',{bubbles:true}))`);
-      assert.equal(await evaluate(`document.querySelectorAll('[data-topic-search]:not([hidden])').length`), 1);
+      assert.equal(await evaluate(`document.querySelectorAll('[data-topic-search]').length > 0 && [...document.querySelectorAll('[data-topic-search]')].filter(button => button.getClientRects().length && button.closest('[data-topic-node]')?.hidden !== true).length`), 1);
       assert.deepEqual(await evaluate('violations'), [], 'reader respects CSP');
     }
   }

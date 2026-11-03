@@ -55,6 +55,7 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
     + (topic.kind === "context" ? ` <button type="button" data-project-plan="${esc(topic.id)}">Plan a change</button>` : "")
     + `<p data-topic-check="${esc(topic.id)}" class="project-reader-warning"${warning ? "" : " hidden"}>${warning ? "Sources changed or disappeared. This explanation and its diagrams need review." : ""}</p></header>`
     + (topic.kind === "context" || topic.kind === "flow" ? `<section class="project-reader-analysis"><p data-reader-analysis-state>${topic.analysisState === "outline" ? "Not analyzed · module outline only" : warning ? "Needs update · saved analysis remains available" : "Generated · saved explanation"}</p><button type="button" data-topic-diagram="${esc(topic.id)}">${topic.analysisState === "outline" ? "Analyze this module" : "Update module analysis"}</button><p class="project-help">Read this module's sources to generate its explanation and diagram together. Selecting a module does not start AI.</p></section>` : "")
+    + (topic.review === "draft" ? '<p class="project-reader-warning" data-topic-review>Draft structure · this boundary still needs review.</p>' : "")
     // Review signals belong to the module they question, above its diagram rather than below it.
     + (topic.qualityIssues?.length ? renderProjectQuality(topic.qualityIssues, topic) : (topic.qualityWarnings?.length ? '<details class="project-reader-warning" open><summary>Review warnings' + qualityCopyButton('Copy', topic.qualityWarnings.join('\n\n'), 'Review warnings', topic.title) + '</summary>' + list(topic.qualityWarnings) + '</details>' : ''))
     + `</div>`
@@ -65,6 +66,7 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
     + (topic.uncertainties?.length ? `<details class="project-reader-support"><summary>Questions to verify</summary>${list(topic.uncertainties)}</details>` : "")
     + (topic.previousAnalyses?.length ? `<section class="project-reader-related"><h3>Earlier module analyses</h3><p class="project-help">Module boundaries changed. These saved analyses overlap this module and need review; they do not describe the new boundary yet.</p>${topic.previousAnalyses.map(item => `<button type="button" data-reader-diagram="${esc(item.id)}">${esc(item.title)}</button>`).join("")}</section>` : "")
     + (topic.responsibilities.length || topic.constraints.length ? `<details class="project-reader-support"><summary>${topic.kind === "flow" ? "Outcomes and constraints" : "Responsibilities and constraints"}</summary>${list(topic.responsibilities)}${topic.constraints.length ? `<h4>Constraints</h4>${list(topic.constraints)}` : ""}</details>` : "")
+    + (data.topics.some((item) => item.parentId === topic.id) ? `<section class="project-reader-related"><h3>Grouped modules · ${data.topics.filter((item) => item.parentId === topic.id).length}</h3><div>${data.topics.filter((item) => item.parentId === topic.id).map((item) => `<button type="button" data-reader-topic="${esc(item.id)}">${esc(item.title)} →</button>`).join(" ")}</div></section>` : "")
     + `<details class="project-reader-support"><summary>Sources and freshness · ${topic.evidence.length} references</summary><p class="project-help">${check ? `Last checked ${esc(new Date(check.checkedAt).toLocaleString())} · ${esc(check.state)}. Unchanged files do not establish semantic correctness.` : "These are saved source references. Check them against the current files before relying on the explanation."}</p><button type="button" data-project-check-knowledge>Check sources</button><p data-project-check-status role="status"></p><ul class="project-topic-evidence">${topic.evidence.map((entry, index) => `<li><button type="button" data-topic-evidence="${esc(topic.id)}" data-evidence-index="${index}">${esc(entry.path)}${entry.line ? `:${entry.line}` : ""}${entry.symbol ? ` · ${esc(entry.symbol)}` : ""}</button>${entry.note ? `<small>${esc(entry.note)}</small>` : ""}<small data-topic-file="${esc(topic.id)}" data-file-index="${index}">${esc(check?.files[index]?.state ?? "")}</small></li>`).join("")}</ul></details>`
     + (topic.relatedTopics?.length ? `<section class="project-reader-related"><h3>Continue exploring</h3>${topic.relatedTopics.map((related) => `<button type="button" data-reader-topic="${esc(related.id)}">${esc(related.title)} →</button>`).join("")}</section>` : "")
     + `</div>`;
@@ -101,10 +103,27 @@ export function renderProjectTopics(topics: readonly ProjectTopic[], checks: rea
   /** Authored functional areas; the index already assigned each module, so no path fallback. */
   const directory = (kind: ProjectTopic["kind"], title: string) => {
     const entries = topics.filter((topic) => topic.kind === kind);
-    const buttons = (items: readonly ProjectTopic[]) => items.map(topic => `<button type="button" data-reader-topic="${esc(topic.id)}" data-topic-search="${esc([topic.area?.title ?? "", topic.title, topic.description, ...topic.entryPoints].join(" ").toLowerCase())}">${esc(topic.title)}</button>`).join("");
-    const groups = new Map(entries.flatMap(topic => topic.area ? [[topic.area.id, topic.area] as const] : []));
-    const content = groups.size ? [...groups.values()].map(area => `<details data-reader-area="${esc(area.id)}"${entries.some(topic => topic.area?.id === area.id && topic.id === first?.id) ? " open" : ""}><summary>${esc(area.title)} <small>(${entries.filter(topic => topic.area?.id === area.id).length})</small></summary>${buttons(entries.filter(topic => topic.area?.id === area.id))}</details>`).join("") + buttons(entries.filter(topic => !topic.area)) : buttons(entries);
-    return entries.length ? `${title ? `<h3>${title}</h3>` : ""}${content}` : "";
+    if (!entries.length) return "";
+    const known = new Set(entries.map((topic) => topic.id));
+    const children = new Map<string, ProjectTopic[]>();
+    for (const topic of entries) if (topic.parentId && known.has(topic.parentId)) children.set(topic.parentId, [...(children.get(topic.parentId) ?? []), topic]);
+    const roots = entries.filter((topic) => !topic.parentId || !known.has(topic.parentId));
+    const search = (topic: ProjectTopic) => esc([topic.area?.title ?? "", topic.title, topic.description, ...topic.entryPoints].join(" ").toLowerCase());
+    const row = (topic: ProjectTopic, depth: number): string => {
+      const nested = children.get(topic.id) ?? [];
+      const button = `<button type="button" data-reader-topic="${esc(topic.id)}" data-topic-search="${search(topic)}">${esc(topic.title)}</button>`;
+      const review = topic.review === "draft" ? '<small class="project-reader-review">Needs review</small>' : "";
+      if (!nested.length) return `<li role="treeitem" data-topic-node="${esc(topic.id)}"><div class="project-reader-tree-row" style="--reader-depth:${depth}">${button}${review}</div></li>`;
+      const toggle = `<button type="button" class="project-reader-tree-toggle" data-reader-toggle="${esc(topic.id)}" aria-expanded="true" aria-label="Collapse ${esc(topic.title)}">−</button>`;
+      return `<li role="treeitem" aria-expanded="true" data-topic-node="${esc(topic.id)}"><div class="project-reader-tree-row" style="--reader-depth:${depth}">${button}${review}${toggle}</div><ul role="group" data-topic-children="${esc(topic.id)}">${nested.map((child) => row(child, depth + 1)).join("")}</ul></li>`;
+    };
+    const tree = (items: readonly ProjectTopic[]) => `<ul class="project-reader-tree" role="tree">${items.map((topic) => row(topic, 0)).join("")}</ul>`;
+    const groups = new Map(entries.flatMap((topic) => topic.area ? [[topic.area.id, topic.area] as const] : []));
+    const rootsIn = (areaId: string) => roots.filter((topic) => topic.area?.id === areaId);
+    const content = groups.size
+      ? [...groups.values()].map((area) => `<details data-reader-area="${esc(area.id)}"${rootsIn(area.id).some((topic) => topic.id === first?.id) ? " open" : ""}><summary>${esc(area.title)} <small>(${entries.filter((topic) => topic.area?.id === area.id).length})</small></summary>${tree(rootsIn(area.id))}</details>`).join("") + tree(roots.filter((topic) => !topic.area))
+      : tree(roots);
+    return `${title ? `<h3>${title}</h3>` : ""}${content}`;
   };
   return `<section class="project-reader" data-project-reader><template data-project-reader-data>${esc(JSON.stringify(data))}</template>`
     + `<aside class="project-reader-directory"><details class="project-directory-disclosure" open><summary>Browse knowledge</summary><div><label>Explore project<input type="search" data-project-topic-search placeholder="Find a topic…"></label><button type="button" data-reader-home>Project introduction</button>${directory("system_context", "Architecture")}${directory("containers", "")}${directory("structure", "Structure")}${directory("types", "Types")}${directory("context", "Responsibilities")}${directory("flow", "Flows")}<p data-project-topic-empty hidden>No matching topics.</p>`

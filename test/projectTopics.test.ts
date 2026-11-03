@@ -111,4 +111,22 @@ describe("Project topics", () => {
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
   });
+  it("renders a saved module tree, its overview children and the pending-review marker", () => {
+    const saved = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" },
+      contexts: [
+        { id: "ctx.group", canonicalName: "Runtime modules", purpose: "Groups executable modules", responsibilities: [], entryPoints: [], evidence: [] },
+        { id: "ctx.code", canonicalName: "Code execution", purpose: "Run TypeScript", parentId: "ctx.group", responsibilities: [], entryPoints: [], evidence: [] }
+      ] });
+    const topics = buildProjectTopics(saved);
+    expect(topics.map(topic => [topic.id, topic.parentId])).toEqual([["ctx.group", undefined], ["ctx.code", "ctx.group"]]);
+    const html = renderProjectTopics(topics);
+    expect(html).toContain('data-topic-node="ctx.group"');
+    expect(html).toContain('data-topic-children="ctx.group"');
+    expect(html).toContain('data-reader-toggle="ctx.group"');
+    expect(html).toContain('data-reader-topic="ctx.code"');
+    // The parent article is a readable overview that links to its saved children.
+    expect(html).toContain("Grouped modules · 1");
+    expect(html).toContain("data-topic-review");
+    expect(html).toContain("Draft structure");
+  });
 });

@@ -126,7 +126,8 @@ export function setupProject(options: ProjectSetupOptions): ProjectEditorProvide
           paths: [...files.values()].map(uri => vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/")), ...(provider ? { provider } : {}), ai: JSON.stringify(definition.ai), signal, progress,
           // The reading depth the user chose in Project settings governs how much a module can explain.
           budget: { files: budget.maxFiles, chars: budget.maxEvidenceChars, fileChars: budget.maxFileChars },
-          // Indexed imports decide module identity and dependency edges; the AI only writes prose.
+          // The index supplies candidate groups and edges; the AI proposes responsibilities and prose, and a
+          // deterministic evidence gate decides which proposals may merge.
           structure: async () => (await readStructureIndex(signal, progress)).structure });
       },
       store: {

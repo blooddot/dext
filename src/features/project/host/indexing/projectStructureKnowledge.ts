@@ -7,6 +7,7 @@ import type { StructureFile, StructureMember, StructureSummary } from "./project
 import { buildStructureGraphFromMembers, buildStructureGraphFromSummary, structureConsumers, structureDependencies, structureDependencyEdges, structureConsumerEdges } from "./projectStructureGraph.js";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
 const stem = (path: string) => posix.basename(path).replace(/\.[^.]+$/, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[\s_.-]+/)[0]!;
 
 /** Read literal browser entry declarations without importing or executing a build script. */
@@ -171,6 +172,151 @@ export function validateOwnership(groups: readonly { name: string; members: read
   return errors;
 }
 
+/** An entry point outside its own module is a claim the index cannot support. */
+export function validateEntryPoints(groups: readonly { name: string; members: readonly string[]; entryPoints?: readonly string[] }[]): string[] {
+  return groups.flatMap(group => (group.entryPoints ?? []).filter(path => !group.members.includes(path))
+    .map(path => `${group.name}: Entry point '${path}' is not owned by this module.`));
+}
+
+/**
+ * A merge is a claim the static index can support: a non-type-only import between the groups, a
+ * consumer both groups share, or one package. Similar names and directories are not evidence.
+ */
+export function evidenceComponents(summary: StructureSummary, groups: readonly (readonly string[])[]): number[][] {
+  const graph = buildStructureGraphFromSummary(summary);
+  const groupOf = new Map<string, number>(), packageOf = new Map<string, string>();
+  for (const module of summary.modules) for (const member of module.members) {
+    packageOf.set(member.path, module.package);
+  }
+  groups.forEach((members, index) => members.forEach(path => groupOf.set(path, index)));
+  const consumers = new Map<string, Set<string>>();
+  for (const path of groupOf.keys()) consumers.set(path, new Set(structureConsumers(graph, path, { typeOnly: false })));
+  const parent = groups.map((_, index) => index);
+  const find = (index: number): number => parent[index] === index ? index : (parent[index] = find(parent[index]!));
+  const packages = groups.map(members => new Set(members.map(path => packageOf.get(path)).filter((pkg): pkg is string => pkg !== undefined)));
+  const sharedConsumers = (left: number, right: number): boolean => {
+    const rightConsumers = new Set(groups[right]!.flatMap(path => [...consumers.get(path) ?? []]));
+    return groups[left]!.some(path => [...consumers.get(path) ?? []].some(consumer => rightConsumers.has(consumer)
+      && groupOf.get(consumer) !== left && groupOf.get(consumer) !== right));
+  };
+  for (let left = 0; left < groups.length; left++) for (let right = left + 1; right < groups.length; right++) {
+    const connected = packages[left]!.size > 0 && [...packages[left]!].some(pkg => packages[right]!.has(pkg))
+      || sharedConsumers(left, right) || sharedConsumers(right, left)
+      || groups[left]!.some(path => structureDependencies(graph, path, { typeOnly: false }).some(target => groupOf.get(target) === right))
+      || groups[right]!.some(path => structureDependencies(graph, path, { typeOnly: false }).some(target => groupOf.get(target) === left));
+    if (!connected) continue;
+    const a = find(left), b = find(right);
+    if (a !== b) parent[Math.max(a, b)] = Math.min(a, b);
+  }
+  const components = new Map<number, number[]>();
+  groups.forEach((_, index) => { const root = find(index); components.set(root, [...components.get(root) ?? [], index]); });
+  return [...components.values()].map(component => component.sort((a, b) => a - b));
+}
+
+/** A proposed responsibility may only span groups the index connects. */
+export function mergeEvidence(summary: StructureSummary, groups: readonly (readonly string[])[]): { allowed: boolean; components: number[][] } {
+  const components = evidenceComponents(summary, groups);
+  return { allowed: components.length <= 1, components };
+}
+
+export interface StructureHierarchyNode { id: string; title: string; parentId?: string; dir: string }
+export interface StructureHierarchy { parents: StructureHierarchyNode[]; parentOf: Map<string, string> }
+
+/** The deepest directory that contains every file of one responsibility. */
+function commonDirectory(paths: readonly string[]): string {
+  const dirs = paths.map(path => posix.dirname(path)).filter(dir => dir !== ".");
+  if (!dirs.length) return "";
+  let common = dirs[0]!.split("/");
+  for (const dir of dirs.slice(1)) {
+    const parts = dir.split("/");
+    let index = 0;
+    while (index < common.length && index < parts.length && common[index] === parts[index]) index += 1;
+    common = common.slice(0, index);
+  }
+  return common.join("/");
+}
+
+interface DirectoryNode { segment: string; dir: string; direct: number[]; children: Map<string, DirectoryNode>; id?: string }
+interface DirectoryEntry { group?: number; id?: string }
+
+/**
+ * Directory depth is not hierarchy: a directory with one responsibility folds into it, two or more
+ * entries make a parent node. No AI decides this, so the tree can be checked against file paths.
+ */
+export function deriveStructureHierarchy(groups: readonly { id: string; paths: readonly string[] }[]): StructureHierarchy {
+  const root: DirectoryNode = { segment: "", dir: "", direct: [], children: new Map() };
+  groups.forEach((group, index) => {
+    const dir = commonDirectory(group.paths);
+    let node = root;
+    for (const segment of dir ? dir.split("/") : []) {
+      const child = node.children.get(segment) ?? { segment, dir: node.dir ? `${node.dir}/${segment}` : segment, direct: [], children: new Map() };
+      node.children.set(segment, child); node = child;
+    }
+    node.direct.push(index);
+  });
+  const used = new Set(groups.map(group => group.id));
+  const parents: StructureHierarchyNode[] = [], parentOf = new Map<string, string>();
+  const idOf = (node: DirectoryNode): string => {
+    if (node.id) return node.id;
+    const base = `module:${slug(node.dir)}`;
+    let id = base, suffix = 1;
+    while (used.has(id)) id = `${base}-${++suffix}`;
+    used.add(id); node.id = id; return id;
+  };
+  const collect = (node: DirectoryNode): DirectoryEntry[] => {
+    const entries: DirectoryEntry[] = node.direct.map(group => ({ group }));
+    for (const child of node.children.values()) {
+      const folded = collect(child);
+      // A single entry is not a hierarchy level; it belongs to the nearest branching directory.
+      if (folded.length > 1) entries.push({ id: idOf(child) });
+      else entries.push(...folded);
+    }
+    // A single-entry directory is not a hierarchy level. Only a directory that owns at least one
+    // responsibility itself becomes a parent, so plain nesting never invents a level.
+    if (entries.length < 2 || !node.dir || node.direct.length === 0) return entries;
+    const id = idOf(node);
+    for (const entry of entries) {
+      if (entry.group !== undefined) parentOf.set(groups[entry.group]!.id, id);
+      else if (entry.id) { parents.find(parent => parent.id === entry.id)!.parentId = id; parentOf.set(entry.id, id); }
+    }
+    parents.push({ id, title: node.segment, dir: node.dir });
+    return [{ id }];
+  };
+  collect(root);
+  return { parents, parentOf };
+}
+
+/** Parent ids must exist once, form no cycle, and still enclose their children's files. */
+export function validateStructureHierarchy(hierarchy: StructureHierarchy, groups: readonly { id: string; paths: readonly string[] }[]): string[] {
+  const errors: string[] = [], known = new Set(groups.map(group => group.id));
+  const dirs = new Map(groups.map(group => [group.id, commonDirectory(group.paths)]));
+  for (const parent of hierarchy.parents) {
+    if (known.has(parent.id)) errors.push(`Duplicate module id '${parent.id}'.`);
+    known.add(parent.id); dirs.set(parent.id, parent.dir);
+  }
+  for (const parent of hierarchy.parents) {
+    if (parent.parentId) {
+      const owner = hierarchy.parents.find(item => item.id === parent.parentId);
+      if (!owner) errors.push(`Parent '${parent.parentId}' of '${parent.id}' is missing.`);
+      else if (owner.dir && !(parent.dir === owner.dir || parent.dir.startsWith(`${owner.dir}/`))) errors.push(`Parent '${owner.id}' does not enclose '${parent.id}'.`);
+    }
+  }
+  for (const [child, parent] of hierarchy.parentOf) {
+    if (!known.has(parent)) errors.push(`Parent '${parent}' of '${child}' is missing.`);
+    const childDir = dirs.get(child), parentDir = dirs.get(parent);
+    if (childDir !== undefined && parentDir !== undefined && parentDir && !(childDir === parentDir || childDir.startsWith(`${parentDir}/`))) errors.push(`Parent '${parent}' is not an ancestor of '${child}'.`);
+  }
+  for (const start of [...new Set([...hierarchy.parentOf.keys(), ...hierarchy.parents.map(parent => parent.id)])]) {
+    const seen = new Set<string>(); let cursor: string | undefined = start;
+    while (cursor && hierarchy.parentOf.has(cursor)) {
+      if (seen.has(cursor)) { errors.push(`Containment cycle at '${cursor}'.`); break; }
+      seen.add(cursor); cursor = hierarchy.parentOf.get(cursor);
+    }
+  }
+  return [...new Set(errors)];
+}
+
+/** Every indexed file has one primary owner. Dependencies provide cross-module references. */
 export function responsibilityContext(name: string, purpose: string, members: readonly StructureMember[], entryPoints: readonly string[], uncertainties: readonly string[] = []): ProjectContext {
   const sorted = [...members].sort((a, b) => a.path.localeCompare(b.path));
   const sourceFiles = sorted.map(file => file.path);

@@ -56,6 +56,22 @@ import type { ProjectModel } from "../contracts/projectModel.js";
 
 /** Merge validated candidates; the persistence boundary validates the resulting graph before commit. */
 export function reconcileNativeProject(candidate: ProjectModel, previous?: ProjectModel): ProjectModel {
+  // A resumed draft follows the same root identities as a fresh generation.
+  const aliases = new Map(candidate.nodes.filter(node => node.kind === "project" || node.kind === "architecture")
+    .map(node => [node.id, previous?.nodes.find(saved => saved.kind === node.kind)?.id ?? node.kind]));
+  candidate = { ...candidate, nodes: candidate.nodes.map(node => ({ ...node, id: aliases.get(node.id) ?? node.id })),
+    relations: candidate.relations.map(edge => {
+      const from = aliases.get(edge.from) ?? edge.from, to = aliases.get(edge.to) ?? edge.to;
+      return from === edge.from && to === edge.to ? edge : { ...edge, id: `${from}--${edge.kind}--${to}`, from, to };
+    }) };
+  const kinds = new Map(previous?.nodes.map(node => [node.id, node.kind]));
+  const seen = new Set<string>();
+  for (const node of candidate.nodes) {
+    if (seen.has(node.id)) throw new Error(`Duplicate Project node '${node.id}' after root identity normalization.`);
+    const kind = kinds.get(node.id);
+    if (kind && kind !== node.kind) throw new Error(`Project node '${node.id}' cannot change kind from '${kind}' to '${node.kind}'.`);
+    seen.add(node.id);
+  }
   if (!previous) return candidate;
   const reviewed = (item: { review: string }) => item.review === "accepted" || item.review === "edited";
   const nodes = new Map(previous.nodes.map(node => [node.id, node]));

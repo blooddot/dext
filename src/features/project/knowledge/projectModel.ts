@@ -50,6 +50,9 @@ export function projectModelIntent(model: ProjectModel, documents: ReadonlyMap<s
   };
   // Preserve normative Markdown for the reader; presentation owns rendering.
   const text = (node: ProjectModel["nodes"][number]) => knowledgeText(node, documents) ?? "Document unavailable; review required.";
+  // Module/context containment is the saved hierarchy; project/runtime containment is not a module parent.
+  const parentOf = (id: string) => model.relations.find(edge => edge.kind === "contains" && edge.to === id
+    && model.nodes.some(item => item.id === edge.from && (item.kind === "module" || item.kind === "context")))?.from;
   const root = model.nodes.find(node => node.kind === "project");
   // Indexed modules are responsibilities too, so they read as bounded contexts in Knowledge and Plan.
   const contexts = model.nodes.filter(node => node.kind === "context" || node.kind === "module");
@@ -66,7 +69,7 @@ export function projectModelIntent(model: ProjectModel, documents: ReadonlyMap<s
       relationships: model.relations.filter(edge => edge.kind === "communicates").map(edge => ({ id: edge.id, from: edge.from, to: edge.to, description: edge.description, evidence: edge.evidence }))
     } } : {}),
     brief: { name: root?.title ?? "Project", summary: root ? text(root) : "", goals: root?.properties.goals ?? [], runtime: root?.properties.runtime ?? [], audiences: root?.properties.audiences ?? [], origin: root?.origin ?? "inferred", review: root?.review ?? "draft", freshness: root?.freshness ?? "current" },
-    contexts: contexts.map(node => ({ ...domain(node), purpose: text(node), sourceFiles: node.paths, dependsOn: outgoing(node.id, "depends_on"), relatedContextIds: outgoing(node.id, "related_to") })),
+    contexts: contexts.map(node => ({ ...domain(node), ...(parentOf(node.id) ? { parentId: parentOf(node.id) } : {}), purpose: text(node), sourceFiles: node.paths, dependsOn: outgoing(node.id, "depends_on"), relatedContextIds: outgoing(node.id, "related_to") })),
     capabilities: model.nodes.filter(node => node.kind === "capability").map(node => ({ ...domain(node), description: text(node), contextIds: outgoing(node.id, "maps_to") })),
     terms: model.nodes.filter(node => node.kind === "term").map(node => ({ ...domain(node), definition: text(node), contextIds: outgoing(node.id, "maps_to") })),
     constraints: model.nodes.filter(node => node.kind === "constraint" && node.properties.legacyScope !== "architecture").map(node => ({ id: node.id, statement: text(node), rationale: node.properties.rationale ?? "", scope: node.properties.scope ?? [], origin: node.origin, review: node.review, freshness: node.freshness, evidence: node.evidence })),
