@@ -3,6 +3,12 @@ import { builtinCliFields, CLI_BUILTIN_IDS } from "../../agents/domain/builtinCl
 
 const CONTEXTS = ["selection", "activeFile", "file", "symbol"] as const;
 
+/** The display option every model-backed call accepts: Dext still returns the
+ * result, it just stays out of Output. Absent means show it, like everywhere else. */
+function quietField(): FieldDefinition {
+  return { name: "quiet", type: "boolean", default: false, description: "Set true to keep this call's result out of Output. The caller still receives it." };
+}
+
 const METHODS: readonly CallableDefinition[] = [
   {
     id: "ask",
@@ -14,7 +20,8 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "input", type: "string", required: true, description: "Question or analysis request. Use @workspace/path tokens for attached code references." },
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Ask call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Ask call." },
-      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
+      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
+      quietField()
     ],
     output: { kind: "ask" },
     context: [...CONTEXTS],
@@ -31,6 +38,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Plan call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Plan call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
+      quietField()
     ],
     output: { kind: "plan" },
     context: [...CONTEXTS],
@@ -48,7 +56,8 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "patch", type: "boolean", default: true, description: "Include a patch in the result. Set false to report conclusions as text without producing a patch." },
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Agent call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Agent call." },
-      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
+      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
+      quietField()
     ],
     output: {
       kind: "agent",
@@ -69,7 +78,8 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "values", type: "object", default: {}, description: "Field values Dext supplies itself. Those fields are excluded from the model contract and always win over the model's output." },
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this template call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this template call." },
-      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
+      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
+      quietField()
     ],
     output: {
       kind: "template",
@@ -113,7 +123,8 @@ const METHODS: readonly CallableDefinition[] = [
     input: [
       { name: "skill", type: "string", required: true, description: "Discovered skill identifier." },
       { name: "input", type: "string", required: true, description: "Direct task input for the skill." },
-      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." }
+      { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
+      quietField()
     ],
     output: { kind: "skill" },
     executor: { kind: "deterministic", handler: "runSkill" }

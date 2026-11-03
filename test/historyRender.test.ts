@@ -231,8 +231,42 @@ describe("Dext history rendering", () => {
       }
     };
     const html = renderHistoryRecord(record);
-    expect(html).toContain('<span class="ansi-green">ok</span>');
-    expect(html).toContain('class="terminal-text terminal-stderr"');
+    expect(html).not.toContain('<section class="history-execution execution-result"></section>');
+    expect(html).not.toContain('class="ansi-green"');
+    expect(html).not.toContain('terminal-stderr');
+  });
+
+  it("keeps a quiet step out of history Output", () => {
+    const record: DextHistoryRecord = {
+      id: "quiet-step",
+      createdAt: 1,
+      input: "ask(\"judge\")",
+      process: [],
+      output: "",
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "judged" },
+          durationMs: 1
+        }],
+        steps: [{
+          method: "ask",
+          state: "success",
+          quiet: true,
+          response: {
+            invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+            method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+            result: { kind: "ask", text: "judged" },
+            durationMs: 1
+          }
+        }]
+      }
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).not.toContain("judged");
+    expect(html).not.toContain('<section class="history-execution execution-result">');
   });
 
   it("renders structured output instead of a raw workflow JSON block", () => {

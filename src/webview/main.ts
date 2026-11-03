@@ -1676,6 +1676,11 @@ function renderResult(response: InputExecutionResponse): void {  const target = 
   // another instead of pretending they were a sequence.
   let fanOut: HTMLElement | undefined;
   for (const [index, step] of entries.entries()) {
+    // `quiet: true` — the call asked Dext to keep its own result out of Output.
+    if (step.quiet) {
+      if (step.branch === undefined) fanOut = undefined;
+      continue;
+    }
     const item = document.createElement("section");
     item.className = "execution-result";
     if (step.response) item.append(renderExecution(step.response));
@@ -1717,6 +1722,7 @@ function renderResult(response: InputExecutionResponse): void {  const target = 
     fanOut.append(item);
   }
   const outputCopy = entries.flatMap((step) => {
+    if (step.quiet) return [];
     if (step.response) return [resultCopyText(step.response.result)];
     if (step.stream) return [step.stream.text];
     return [];

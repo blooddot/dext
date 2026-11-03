@@ -130,6 +130,7 @@ export const executionStateSchema = z.enum(["success", "failed", "cancelled"]);
 export const dextWireStepSchema = z.object({
   method: z.string().min(1),
   state: executionStateSchema,
+  quiet: z.boolean().optional(),
   response: z.unknown().optional(),
   stream: z.object({
     channel: z.enum(["stdout", "stderr"]),

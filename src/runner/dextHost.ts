@@ -140,6 +140,7 @@ function errorMessage(error: unknown): string {
 function toStep(wire: DextWireStep): WorkflowStepResponse {
   const parsed = dextWireStepSchema.parse(wire);
   const step: WorkflowStepResponse = { method: parsed.method, state: parsed.state };
+  if (parsed.quiet) step.quiet = true;
   if (parsed.response !== undefined) step.response = parsed.response as RuntimeResponse;
   if (parsed.stream) step.stream = parsed.stream;
   if (parsed.error) step.error = parsed.error;

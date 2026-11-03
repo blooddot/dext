@@ -457,6 +457,9 @@ export interface WorkflowStepResponse {
   assignment?: string;
   method: string;
   state: ExecutionState;
+  /** Set for a call that passed `quiet: true`: the result reaches the caller, but
+   *  the step is kept out of Output. */
+  quiet?: boolean;
   response?: RuntimeResponse;
   /** Process output written by user code (`console.log` / `console.error`). It is
    * not an API result, so it never carries `invocation` or `durationMs` and is

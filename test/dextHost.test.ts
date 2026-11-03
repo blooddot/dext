@@ -99,6 +99,23 @@ describe("Dext kernel host", () => {
     expect(response.executions).toEqual([ask?.response]);
   });
 
+  it("marks only the call that asked for quiet as quiet", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const kernel = host(root, async (invocation) => askResponse(invocation));
+    const response = await kernel.runSource([
+      'import { ask } from "dext";',
+      'const judged = await ask({ input: "x", quiet: true });',
+      'const shown = await ask({ input: "y" });',
+      'console.log(judged.text + shown.text);',
+      ""
+    ].join("\n"));
+    const asks = response.steps?.filter((step) => step.method === "ask") ?? [];
+    expect(asks.map((step) => step.quiet === true)).toEqual([true, false]);
+    // Quiet only hides the step: the caller still gets the same result.
+    expect(asks[0]?.response?.result).toEqual({ kind: "ask", text: "x" });
+    expect(response.steps?.some((step) => step.stream?.text === "xy\n")).toBe(true);
+  });
+
   it("renders a logged object as JSON instead of util.inspect's [Object]", { timeout: 30000 }, async () => {
     // `console.log(obj)` is how a payload reaches Output, so the object has to arrive
     // whole: `util.inspect` stops at depth 2, which is what a nested payload used to hit.

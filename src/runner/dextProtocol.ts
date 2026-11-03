@@ -38,6 +38,9 @@ export type DextStepState = "success" | "failed" | "cancelled";
 export interface DextWireStep {
   method: string;
   state: DextStepState;
+  /** The call passed `quiet: true`: its result still reaches the caller, but it is
+   * kept out of Output. */
+  quiet?: boolean;
   response?: unknown;
   stream?: DextStreamStep;
   error?: string;

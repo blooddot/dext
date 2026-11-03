@@ -153,9 +153,12 @@ async function invoke(method, options) {
     throw new Error(`${method}() takes one object of named arguments, for example ${method}({ input: "..." }).`);
   }
   const recorded = replay(method, args);
+  // A call that asked for `quiet: true` keeps its own result out of Output; the step
+  // still reaches the caller, so resume and history keep the full record.
+  const quiet = args.quiet === true ? { quiet: true } : {};
   if (recorded !== undefined) {
     flushStreams();
-    process.send({ type: "step", step: { method, state: "success", response: recorded } });
+    process.send({ type: "step", step: { method, state: "success", response: recorded, ...quiet } });
     return recorded.result;
   }
   const id = ++sequence;
@@ -190,7 +193,7 @@ async function invoke(method, options) {
     throw new Error(reply.error);
   }
   flushStreams();
-  process.send({ type: "step", step: { method, state: "success", response: reply.response } });
+  process.send({ type: "step", step: { method, state: "success", response: reply.response, ...quiet } });
   return reply.response.result;
 }
 

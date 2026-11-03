@@ -170,6 +170,7 @@ function steps(response: InputExecutionResponse): WorkflowStepResponse[] {
 
 function output(response: InputExecutionResponse): string {
   return steps(response).map((step) => {
+    if (step.quiet) return "";
     if (step.stream) {
       return `<pre class="history-process-output process-output-${step.stream.channel}">${escapeHtml(step.stream.text)}</pre>`;
     }
@@ -180,7 +181,10 @@ function output(response: InputExecutionResponse): string {
 }
 
 function outputText(response: InputExecutionResponse): string {
-  return response.executions.map((item) => resultCopyText(item.result)).filter(Boolean).join("\n\n");
+  return steps(response)
+    .filter((step) => !step.quiet && step.response)
+    .map((step) => resultCopyText(step.response!.result))
+    .filter(Boolean).join("\n\n");
 }
 
 function processMessage(text: string): string {
