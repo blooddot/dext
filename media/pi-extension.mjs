@@ -73,6 +73,6 @@ export default async function dextPiExtension(pi) {
     return undefined;
   });
   pi.on("session_shutdown", () => { active = false; socket.destroy(); });
-  if (config.permission === "full-access") for (const server of config.mcpServers) pi.registerMcpServer(`dext_${token.slice(0, 8)}_${server.name}`, { command: server.command, args: server.args, env: server.env, exposure: "direct" });
+  if (config.permission === "full-access") for (const server of config.mcpServers) pi.registerMcpServer(`dext_${server.name}`, { command: server.command, args: server.args, env: server.env, exposure: "direct" });
   send({ type: "ready" });
 }
