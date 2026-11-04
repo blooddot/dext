@@ -27,6 +27,9 @@
   --resource-button-foreground: #121212;
 }
 
+/* Radius scale, the only two numbers: 4px for controls and chips, 6px for
+   surfaces; 999px is reserved for pills and dots. */
+
 body.vscode-light {
   --dext-plan-label: #806b00;
 }
@@ -353,7 +356,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border));
-  border-radius: 7px;
+  border-radius: 6px;
   color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   box-shadow: 0 18px 48px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.45));
@@ -409,7 +412,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   color: var(--vscode-input-foreground);
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
-  border-radius: 3px;
+  border-radius: 4px;
   font: inherit;
 }
 
@@ -423,7 +426,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   max-width: none;
   padding: 0;
   border: 1px solid var(--vscode-editorWidget-border, var(--vscode-widget-border));
-  border-radius: 7px;
+  border-radius: 6px;
   color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   box-shadow: 0 18px 48px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.45));
@@ -486,7 +489,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   min-height: 30px;
   padding: 6px 8px;
   border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--vscode-input-foreground);
   background: var(--vscode-input-background);
   font: inherit;
@@ -510,7 +513,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   min-height: 28px;
   padding: 4px 12px;
   border: 1px solid var(--vscode-button-border, transparent);
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--vscode-button-foreground);
   background: var(--vscode-button-background);
   cursor: pointer;
@@ -616,7 +619,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   gap: 4px 7px;
   align-items: start;
   padding: 4px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
 }
 .mcp-tool-choice:hover { background: var(--vscode-list-hoverBackground); }
@@ -766,7 +769,7 @@ main {
   display: flex;
   align-items: center;
   gap: 5px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   user-select: none;
   position: relative;
@@ -831,7 +834,7 @@ main {
   gap: 2px;
   padding: 2px 4px;
   border: 1px solid var(--vscode-contrastBorder, var(--vscode-widget-border, color-mix(in srgb, var(--vscode-foreground) 25%, transparent)));
-  border-radius: 5px;
+  border-radius: 4px;
   /* Theme hover colors can be translucent. Composite the widget surface onto
      an opaque base so timestamps and counts never show through the buttons. */
   background: linear-gradient(
@@ -1162,7 +1165,7 @@ main {
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--vscode-editor-background);
 }
 
@@ -1215,7 +1218,7 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
     var(--vscode-textLink-foreground, #3794ff) 58%,
     var(--vscode-widget-border, #454545)
   );
-  border-radius: 3px;
+  border-radius: 4px;
   background: color-mix(
     in srgb,
     var(--vscode-textLink-foreground, #3794ff) 15%,
@@ -1328,7 +1331,7 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   gap: 5px;
   align-items: center;
   border: 1px solid var(--vscode-widget-border, #454545);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #1e1e1e));
   color: var(--vscode-textLink-foreground, #3794ff);
   font-size: 12px;
@@ -1508,7 +1511,7 @@ body.image-page {
   min-height: 24px;
   padding: 0 8px;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: 4px;
   background: transparent;
   color: var(--vscode-foreground);
   font-size: 12px;
@@ -1625,7 +1628,7 @@ body.image-page {
 .image-annotator-index {
   min-width: 16px;
   padding: 0 5px;
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--vscode-editorWarning-foreground, #d7ba7d);
   color: #1e1e1e;
   font-size: 12px;
@@ -1731,7 +1734,7 @@ body.image-page {
   min-width: 0;
   padding: 6px 8px;
   border: 1px solid var(--vscode-widget-border, #454545);
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 .fan-out-branch::before {
@@ -1750,7 +1753,7 @@ body.image-page {
   padding: 8px;
   overflow: auto;
   border: 1px solid color-mix(in srgb, var(--vscode-editorError-foreground) 55%, var(--vscode-widget-border));
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--vscode-errorForeground);
   background: color-mix(in srgb, var(--vscode-editorError-background, transparent) 30%, var(--vscode-textCodeBlock-background));
   font-family: var(--vscode-editor-font-family);
@@ -1975,7 +1978,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.
   padding-right: 5px;
   padding-left: 5px;
   border-color: transparent;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
 }
 
@@ -2098,7 +2101,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.
   min-width: 0;
   max-height: 310px;
   overflow: auto;
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
 .composer-menu:last-child .composer-model-submenu {
@@ -2127,7 +2130,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.
   gap: 6px;
   align-items: center;
   border: 0;
-  border-radius: 2px;
+  border-radius: 4px;
   color: inherit;
   background: transparent;
   font: inherit;
@@ -2416,7 +2419,7 @@ button.primary.executing::after,
 .running-process > summary {
   position: relative;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 .running-process > summary::after {
@@ -2481,7 +2484,7 @@ button.primary.plan-build.executing > .codicon::before {
   display: block;
   width: 8px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: 4px;
   background: currentColor;
 }
 
@@ -2570,7 +2573,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode
 .collapsible-heading {
   cursor: pointer;
   user-select: none;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 .collapsible-heading:hover {
@@ -2883,7 +2886,7 @@ button.primary.stopping {
   display: flex;
   align-items: center;
   gap: 6px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   list-style: none;
   user-select: none;
@@ -3375,7 +3378,7 @@ pre {
   gap: 4px;
   min-height: 26px;
   padding: 3px 4px;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
 .agent-trace-group-body {
@@ -3410,7 +3413,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 4px;
-  border-radius: 3px;
+  border-radius: 4px;
 }.agent-trace-event > .agent-stream-text {
   margin-left: 16px;
 }
@@ -3431,7 +3434,7 @@ pre {
   align-items: center;
   gap: 5px;
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: 4px;
   color: var(--vscode-descriptionForeground);
   cursor: pointer;
   list-style: none;
@@ -3708,7 +3711,7 @@ pre {
   align-items: center;
   text-align: left;
   border: 0;
-  border-radius: 3px;
+  border-radius: 4px;
   background: transparent;
   color: inherit;
 }
@@ -3775,7 +3778,7 @@ button.method-row:hover {
   font-weight: 600;
   cursor: pointer;
   list-style: none;
-  border-radius: 3px;
+  border-radius: 4px;
   transition: background-color 80ms ease;
 }
 
@@ -3903,7 +3906,7 @@ details[open] > summary > .disclosure-chevron {
 .agent-inputs[hidden] { display: none; }
 /* Reports and code blocks must not set the grid's intrinsic column width. */
 .agent-inputs { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 10px; margin: 10px 0; }
-.agent-input-card { position: relative; min-width: 0; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background); }
+.agent-input-card { position: relative; min-width: 0; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-editor-background); }
 .agent-input-disclosure > summary { display: flex; align-items: baseline; gap: 6px; min-width: 0; cursor: pointer; list-style: none; }
 .agent-input-disclosure > summary::-webkit-details-marker { display: none; }
 .agent-input-disclosure > summary:hover { color: var(--vscode-textLink-foreground); }
@@ -3925,7 +3928,7 @@ details[open] > summary > .disclosure-chevron {
 .agent-input-status { font-size: 12px; color: var(--vscode-descriptionForeground); }
 .agent-input-question { min-width: 0; margin: 0 0 12px; padding: 0; border: 0; }
 .agent-input-question legend { padding: 0; margin-bottom: 8px; font-weight: 500; white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-input-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px; margin: 4px 0; border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
+.agent-input-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px; margin: 4px 0; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
 .agent-input-option:hover { background: var(--vscode-list-hoverBackground); }
 .agent-input-option:has(input:checked) { border-color: var(--vscode-focusBorder); background: var(--vscode-list-inactiveSelectionBackground); }
 .agent-input-option input { flex: 0 0 auto; margin-top: 2px; accent-color: var(--vscode-focusBorder); }
@@ -3986,11 +3989,11 @@ details[open] > summary > .disclosure-chevron {
 .interaction-actions .interaction-primary:disabled:hover { background: var(--vscode-button-background); }
 .interaction-error { padding: 7px 10px; border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); border-radius: 6px; background: var(--vscode-inputValidation-errorBackground, transparent); color: var(--vscode-errorForeground); font-size: 12px; }
 .interaction-error:empty { display: none; }
-.interaction-dialog { position: fixed; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--vscode-widget-border); border-radius: 10px; background: var(--vscode-editor-background); color: var(--vscode-foreground); box-shadow: 0 16px 40px rgb(0 0 0 / 36%); overflow: hidden; }
+.interaction-dialog { position: fixed; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 1px solid var(--vscode-widget-border); border-radius: 6px; background: var(--vscode-editor-background); color: var(--vscode-foreground); box-shadow: 0 16px 40px rgb(0 0 0 / 36%); overflow: hidden; }
 /* The form scrolls, not the dialog, so the close button stays pinned to the corner. */
 .interaction-dialog .interaction-form { box-sizing: border-box; max-height: calc(100vh - 32px); padding: 18px 20px 16px; overflow: auto; }
 .interaction-dialog::backdrop { background: rgb(0 0 0 / 45%); }
-.interaction-close { position: absolute; top: 10px; right: 10px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 16px; line-height: 1; }
+.interaction-close { position: absolute; top: 10px; right: 10px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 16px; line-height: 1; }
 .interaction-close:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-foreground); }
 .interaction-select { display: flex; gap: 6px; }
 .interaction-select > button:first-child { min-width: 0; flex: 1; text-align: left; }
@@ -4165,3 +4168,4 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
 .input-section.resource-import #attachment-bar {
   display: none !important;
 }
+

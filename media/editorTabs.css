@@ -86,7 +86,7 @@ html:has(.project-panel) { scrollbar-gutter: stable; }
 .resource-icon-button { width: 26px; height: 26px; padding: 0; border: 0; background: transparent; display: inline-flex; align-items: center; justify-content: center; color: var(--vscode-foreground); flex-shrink: 0; }
 .resource-icon-button:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
 .resource-icon-button svg { display: block; width: 16px; height: 16px; }
-.resource-scope-switch { display: inline-flex; gap: 2px; margin-left: auto; padding: 2px; border: 1px solid var(--vscode-panel-border); border-radius: 5px; }
+.resource-scope-switch { display: inline-flex; gap: 2px; margin-left: auto; padding: 2px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
 .resource-scope-switch button { border: 0; padding: 3px 9px; background: transparent; }
 .resource-scope-switch button.is-active { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: var(--vscode-list-activeSelectionBackground); }
 [data-resource-type="api"] { --resource-accent: var(--resource-api-accent); }
@@ -94,7 +94,7 @@ html:has(.project-panel) { scrollbar-gutter: stable; }
 [data-resource-type="rule"] { --resource-accent: var(--resource-rule-accent); }
 [data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
 .resource-group[data-resource-type] h2 { color: var(--resource-accent); }
-.resource-group[data-resource-type] h2::before { content: ""; width: 3px; height: 14px; border-radius: 2px; background: var(--resource-accent); }
+.resource-group[data-resource-type] h2::before { content: ""; width: 3px; height: 14px; border-radius: 4px; background: var(--resource-accent); }
 .resource-create { color: var(--resource-accent); border-color: var(--resource-accent); background: transparent; }
 .resource-create:hover { background: color-mix(in srgb, var(--resource-accent) 12%, var(--vscode-editor-background)); }
 body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .resource-create { border-color: var(--vscode-contrastBorder, var(--resource-accent)); }
@@ -104,7 +104,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-navigation-home { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: transparent; }
 .resource-group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; }
 .resource-count, .resource-source { color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 400; }
-.resource-count { border-radius: 10px; padding: 0 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.resource-count { border-radius: 6px; padding: 0 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .resource-group ul, .project-objects { list-style: none; padding: 0; margin: 0; }
 .resource-api-node > ul { padding-left: 16px; }
 .resource-api-node > summary { font-size: 14px; }
@@ -113,7 +113,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-entry > button:focus-visible { outline-offset: -1px; }
 .resource-entry { position: relative; }
 .resource-entry:has(.resource-entry-actions) > button { padding-right: 112px; }
-.resource-entry-actions { position: absolute; top: 4px; right: 6px; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 5px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); opacity: 0; pointer-events: none; }
+.resource-entry-actions { position: absolute; top: 4px; right: 6px; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 4px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); opacity: 0; pointer-events: none; }
 .resource-entry:hover > .resource-entry-actions, .resource-entry:focus-within > .resource-entry-actions { opacity: 1; pointer-events: auto; }
 .resource-entry-actions .resource-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 3px; border: 0; background: transparent; color: var(--vscode-icon-foreground, var(--vscode-foreground)); }
 .resource-entry-actions .resource-icon-button:hover { background: var(--vscode-toolbar-hoverBackground); }
@@ -182,7 +182,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-ai-cli, .project-ai-model { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 12px 0; color: var(--vscode-foreground); }
 .project-ai-cli select, .project-ai-model select {
   min-width: 220px; max-width: min(100%, 420px); min-height: 30px; padding: 4px 28px 4px 9px;
-  border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border)); border-radius: 5px;
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border)); border-radius: 4px;
   color: var(--vscode-dropdown-foreground, var(--vscode-foreground)); background: var(--vscode-dropdown-background, var(--vscode-input-background));
 }
 .project-ai-model-details { flex-basis: 100%; margin-left: 0; color: var(--vscode-descriptionForeground); font-size: 12px; }
@@ -247,12 +247,12 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--project-card-border);
-  border-radius: 7px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--vscode-editor-background) 92%, var(--vscode-input-background));
 }
 .project-nav button {
   border: 0;
-  border-radius: 5px;
+  border-radius: 4px;
   padding: 7px 14px;
   line-height: 1.25;
   transition: color 100ms ease, background 100ms ease;
@@ -384,13 +384,13 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-model-popover[hidden], .project-model-submenu[hidden] { display: none; }
 .project-model-category, .project-model-choice {
   width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(56px, auto) 14px; align-items: center; gap: 6px;
-  min-height: 27px; padding: 3px 6px; border: 0; border-radius: 2px; color: var(--vscode-menu-foreground); background: transparent; text-align: left; font-size: 12px;
+  min-height: 27px; padding: 3px 6px; border: 0; border-radius: 4px; color: var(--vscode-menu-foreground); background: transparent; text-align: left; font-size: 12px;
 }
 .project-model-category:hover:not(:disabled), .project-model-choice:hover { background: var(--vscode-list-hoverBackground); }
 .project-model-category:disabled { opacity: .55; cursor: default; }
 .project-model-category > span { color: var(--vscode-descriptionForeground); }
 .project-model-category-value { color: var(--vscode-descriptionForeground); font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-model-submenu { position: absolute; top: 0; left: calc(100% + 4px); width: min(216px, calc(100vw - 24px)); max-height: 310px; overflow: auto; padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: 8px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); box-shadow: 0 4px 14px var(--vscode-widget-shadow, rgba(0,0,0,.35)); }
+.project-model-submenu { position: absolute; top: 0; left: calc(100% + 4px); width: min(216px, calc(100vw - 24px)); max-height: 310px; overflow: auto; padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: 6px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); box-shadow: 0 4px 14px var(--vscode-widget-shadow, rgba(0,0,0,.35)); }
 .project-model-submenu[data-submenu-side="left"] { right: calc(100% + 4px); left: auto; }
 .project-model-submenu[data-submenu-side="above"] { top: auto; bottom: calc(100% + 4px); left: 0; }
 .project-model-submenu-heading { min-height: 28px; padding: 3px 6px; display: flex; align-items: center; border-bottom: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border)); color: var(--vscode-descriptionForeground); font-size: 12px; }
@@ -535,7 +535,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-markdown li > p { margin-bottom: 6px; }
 .project-markdown h1, .project-markdown h2 { font-size: 18px; margin: 28px 0 12px; line-height: 1.4; }
 .project-markdown h3, .project-markdown h4, .project-markdown h5, .project-markdown h6 { font-size: 16px; margin: 24px 0 10px; line-height: 1.4; }
-.project-markdown code { font-size: 1em; padding: 2px 4px; background: var(--vscode-textCodeBlock-background, var(--vscode-input-background)); border-radius: 3px; overflow-wrap: anywhere; }
+.project-markdown code { font-size: 1em; padding: 2px 4px; background: var(--vscode-textCodeBlock-background, var(--vscode-input-background)); border-radius: 4px; overflow-wrap: anywhere; }
 .project-markdown pre { max-width: 100%; padding: 16px; overflow: auto; background: var(--vscode-textCodeBlock-background, var(--vscode-input-background)); }
 .project-markdown pre code { padding: 0; white-space: pre; }
 .project-markdown blockquote { margin: 16px 0; padding: 12px 16px; background: var(--vscode-textBlockQuote-background, var(--vscode-input-background)); }
