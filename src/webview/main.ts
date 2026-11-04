@@ -159,6 +159,10 @@ const elements = {
 
 const browser = new ConversationBrowser();
 const drafts = new ComposerDraftStore();
+/** The turn the turn-stepping controls treat as current. It follows explicit
+ * navigation or an expansion the reader performs, and falls back to the active
+ * turn after a conversation is rebuilt. */
+let turnAnchorId: string | undefined;
 const jumpToLatest = document.createElement("button");
 jumpToLatest.type = "button";
 jumpToLatest.className = "stream-jump-latest";
@@ -179,15 +183,43 @@ jumpToTop.append(jumpToTopIcon);
 jumpToTop.setAttribute("aria-label", "Jump to top");
 jumpToTop.title = "Jump to top";
 jumpToTop.hidden = true;
+const jumpToPrevTurn = document.createElement("button");
+jumpToPrevTurn.type = "button";
+jumpToPrevTurn.className = "stream-jump-prev-turn";
+const jumpToPrevTurnIcon = document.createElement("i");
+jumpToPrevTurnIcon.className = "codicon codicon-fold-up";
+jumpToPrevTurnIcon.setAttribute("aria-hidden", "true");
+jumpToPrevTurn.append(jumpToPrevTurnIcon);
+jumpToPrevTurn.setAttribute("aria-label", "Jump to previous turn");
+jumpToPrevTurn.title = "Jump to previous turn";
+jumpToPrevTurn.hidden = true;
+const jumpToNextTurn = document.createElement("button");
+jumpToNextTurn.type = "button";
+jumpToNextTurn.className = "stream-jump-next-turn";
+const jumpToNextTurnIcon = document.createElement("i");
+jumpToNextTurnIcon.className = "codicon codicon-fold-down";
+jumpToNextTurnIcon.setAttribute("aria-hidden", "true");
+jumpToNextTurn.append(jumpToNextTurnIcon);
+jumpToNextTurn.setAttribute("aria-label", "Jump to next turn");
+jumpToNextTurn.title = "Jump to next turn";
+jumpToNextTurn.hidden = true;
 const scroll = new OutputScrollController({
-  viewport: { body: elements.resultBody, result: elements.result, section: elements.resultSection, jumpToLatest, jumpToTop },
+  viewport: {
+    body: elements.resultBody, result: elements.result, section: elements.resultSection,
+    jumpToLatest, jumpToPrevTurn, jumpToNextTurn, jumpToTop
+  },
   conversation: { activeId: () => browser.activeId, renderedId: () => browser.renderedId },
   canFollow: () => resultFollowAllowed(),
+  currentTurn: () => navigationTurn(),
+  adjacentTurn: (offset) => neighboringTurn(offset),
+  activateTurn: (turn) => activateNavigationTurn(turn),
   onDiagnostic: (message) => renderInputError(message)
 });
-// Keep the control in the result panel's viewport layer instead of inside the
-// scrollable output. This keeps it visible while the reader inspects history.
+// Keep the controls in the result panel's viewport layer instead of inside the
+// scrollable output. This keeps them visible while the reader inspects history.
 elements.resultSection.append(jumpToTop);
+elements.resultSection.append(jumpToPrevTurn);
+elements.resultSection.append(jumpToNextTurn);
 elements.resultSection.append(jumpToLatest);
 syncResultScrollGutter();
 window.addEventListener("resize", syncResultScrollGutter, { passive: true });
@@ -417,8 +449,11 @@ function clearVisibleConversation(): void {
   elements.result.replaceChildren();
   transcript.clear();
   transcript.active = undefined;
+  turnAnchorId = undefined;
   browser.clearRendered();
   jumpToLatest.hidden = true;
+  jumpToPrevTurn.hidden = true;
+  jumpToNextTurn.hidden = true;
   elements.resultBody.dataset.loading = "true";
   elements.resultBody.setAttribute("aria-busy", "true");
   syncResultToggle();
@@ -1772,6 +1807,50 @@ function renderError(message: unknown): void {
   renderInputError(message);
 }
 
+/** The turn the stepping controls start from: the turn the reader last expanded
+ * or navigated to, otherwise the active turn. */
+function navigationTurn(): HTMLElement | undefined {
+  const anchored = turnAnchorId ? transcript.get(turnAnchorId)?.disclosure : undefined;
+  return anchored ?? transcript.active?.disclosure;
+}
+
+/** The visible row before or after the current turn, in transcript order. */
+function neighboringTurn(offset: -1 | 1): HTMLElement | undefined {
+  const rows = [...elements.result.querySelectorAll<HTMLElement>("details.output-turn")];
+  const current = navigationTurn();
+  if (!current) return undefined;
+  const index = rows.indexOf(current);
+  return index < 0 ? undefined : rows[index + offset];
+}
+
+/** Make one exchange the current view: collapse every other turn, then reveal
+ * the target's Input and Output instead of its Process timeline. The navigation
+ * anchor moves here too, so repeated presses keep stepping in that direction. */
+function activateNavigationTurn(target: HTMLElement): void {
+  const turnId = target.dataset.turnId;
+  if (!turnId) return;
+  const turn = transcript.get(turnId);
+  if (!turn) return;
+  turnAnchorId = turnId;
+  for (const row of elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")) {
+    if (row !== target) row.open = false;
+  }
+  turn.disclosure.open = true;
+  const input = turn.input?.closest<HTMLDetailsElement>("details.output-turn-section");
+  if (input) input.open = true;
+  turn.outputDisclosure.open = true;
+  syncResultToggle();
+}
+
+/** Expanding a row by hand is also a navigation choice; it becomes the turn the
+ * stepping controls move around. */
+function rememberNavigationTurn(event: Event): void {
+  const target = event.target;
+  if (target instanceof HTMLDetailsElement && target.open && target.classList.contains("output-turn")) {
+    turnAnchorId = target.dataset.turnId;
+  }
+}
+
 function syncJumpToLatest(): void {
   scroll.syncJumpControls();
 }
@@ -2048,6 +2127,9 @@ function renderOutputSession(session: DextHistorySession): void {
     transcript.clear();
     for (const [turnId, turn] of cached.turns) transcript.set(turnId, turn);
     transcript.active = cached.activeTurnId ? transcript.get(cached.activeTurnId) : [...transcript.values()].at(-1);
+    // The anchor is intentionally not cached: a restored conversation starts its
+    // stepping controls from the active turn, like a fresh render does.
+    turnAnchorId = undefined;
     conversationViewCache.put(session.id, cached);
     browser.renderedId = session.id;
     browser.renderedSignature = signature;
@@ -2068,6 +2150,7 @@ function renderOutputSession(session: DextHistorySession): void {
   elements.result.replaceChildren();
   transcript.clear();
   transcript.active = undefined;
+  turnAnchorId = undefined;
   const renderGeneration = browser.beginRender();
   let latestTurn: OutputTurnElements | undefined;
   for (const [index, record] of session.turns.entries()) {
@@ -2133,6 +2216,7 @@ function renderOutputSessionRef(sessionId: string, signature: string, switchId?:
   transcript.clear();
   for (const [turnId, turn] of cached.turns) transcript.set(turnId, turn);
   transcript.active = cached.activeTurnId ? transcript.get(cached.activeTurnId) : [...transcript.values()].at(-1);
+  turnAnchorId = undefined;
   conversationViewCache.put(sessionId, cached);
   browser.renderedId = sessionId;
   browser.renderedSignature = signature;
@@ -2232,6 +2316,10 @@ elements.resultToggle.addEventListener("click", (event) => {
   toggleResultDetails();
 });
 elements.result.addEventListener("toggle", hydrateOutputTurnOnOpen, true);
+elements.result.addEventListener("toggle", rememberNavigationTurn, true);
+// Opening or closing a turn can move the navigation anchor or change which
+// exchange is adjacent, so the stepping controls are refreshed with it.
+elements.result.addEventListener("toggle", syncJumpToLatest, true);
 elements.result.addEventListener("toggle", syncResultToggle, true);
 // Expanding a command's output or a stored turn changes the height under the
 // reader. A following reader keeps the newest output in view; one who scrolled
@@ -2292,6 +2380,12 @@ jumpToLatest.addEventListener("click", () => {
 });
 jumpToTop.addEventListener("click", () => {
   scroll.jumpToTop();
+});
+jumpToPrevTurn.addEventListener("click", () => {
+  scroll.jumpToPreviousTurn();
+});
+jumpToNextTurn.addEventListener("click", () => {
+  scroll.jumpToNextTurn();
 });
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.mcpAssistantClose.addEventListener("click", () => mcp.requestClose());
@@ -2660,6 +2754,9 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
         resetAgentTrace();
         startAgentProgress(message.startedAt);
       }
+      // A new or resumed live turn becomes the turn the stepping controls move
+      // around; transcript.create already collapsed the exchange before it.
+      turnAnchorId = message.turnId;
       transcript.active?.todos.setRunning(true);
       transcript.active?.questions?.setRunning(true);
       elements.resultSection.classList.remove("hidden");

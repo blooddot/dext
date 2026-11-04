@@ -79,7 +79,14 @@ describe("ComposerDraftStore", () => {
 });
 
 describe("OutputScrollController", () => {
-  function harness() {
+  interface TurnState {
+    current?: HTMLElement;
+    previous?: HTMLElement;
+    next?: HTMLElement;
+    activated: HTMLElement[];
+  }
+
+  function harness(state: Partial<TurnState> = {}) {
     const frames = new Map<number, FrameRequestCallback>();
     const cancelled: number[] = [];
     let nextHandle = 1;
@@ -90,7 +97,7 @@ describe("OutputScrollController", () => {
     };
     const body = {
       scrollTop: 0, scrollHeight: 1000, clientHeight: 400, offsetWidth: 200, clientWidth: 190,
-      getBoundingClientRect: () => ({ bottom: 400, right: 100 }),
+      getBoundingClientRect: () => ({ top: 0, bottom: 400, right: 100 }),
       focus: () => undefined
     };
     const result = {
@@ -107,16 +114,23 @@ describe("OutputScrollController", () => {
       style: { setProperty: () => undefined },
       classList: { remove: () => undefined }
     };
+    const jumpToLatest = { hidden: true };
+    const jumpToPrevTurn = { hidden: true };
+    const jumpToNextTurn = { hidden: true };
+    const jumpToTop = { hidden: true };
     const viewport = {
       body, result, section,
-      jumpToLatest: { hidden: true },
-      jumpToTop: { hidden: true }
+      jumpToLatest, jumpToPrevTurn, jumpToNextTurn, jumpToTop
     } as unknown as ScrollViewport;
     const diagnostics: string[] = [];
+    const navigation: TurnState = { activated: [], ...state };
     const controller = new OutputScrollController({
       viewport,
       conversation: { activeId: () => "a", renderedId: () => "a" },
       canFollow: () => true,
+      currentTurn: () => navigation.current,
+      adjacentTurn: (offset) => (offset < 0 ? navigation.previous : navigation.next),
+      activateTurn: (turn) => { navigation.activated.push(turn); },
       onDiagnostic: (message) => { diagnostics.push(message); },
       requestFrame: (callback) => {
         const handle = nextHandle++;
@@ -128,12 +142,159 @@ describe("OutputScrollController", () => {
         frames.delete(handle);
       }
     });
+    // A rendered turn moves up the port exactly as far as the port scrolls, so
+    // its document offset stays at the supplied top in this fixture. Turns are
+    // 200px tall, which lets the visibility check distinguish a title that is
+    // on screen from one that has scrolled entirely past either edge.
+    const turnAt = (top: number): HTMLElement =>
+      ({
+        getBoundingClientRect: () => ({
+          top: top - body.scrollTop,
+          bottom: top + 200 - body.scrollTop
+        })
+      } as unknown as HTMLElement);
     return {
-      controller, body, diagnostics, cancelled,
+      controller, body, diagnostics, cancelled, navigation, turnAt,
+      jumpToPrevTurn, jumpToNextTurn, jumpToTop,
       frameCount: () => frames.size,
       flush
     };
   }
+
+  it("returns to the current turn before stepping to the previous one", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(250);
+    h.navigation.previous = h.turnAt(0);
+    h.body.scrollTop = 600;
+    h.controller.syncJumpControls();
+    expect(h.jumpToPrevTurn.hidden).toBe(false);
+
+    // The first press restores the current exchange without leaving it.
+    h.controller.jumpToPreviousTurn();
+    expect(h.body.scrollTop).toBe(250);
+    expect(h.navigation.activated).toEqual([]);
+    expect(h.controller.following).toBe(false);
+    // Arriving at the title must not hide the persistent control.
+    expect(h.jumpToPrevTurn.hidden).toBe(false);
+
+    // The second press steps to the earlier exchange and reveals it.
+    h.controller.jumpToPreviousTurn();
+    expect(h.navigation.activated).toEqual([h.navigation.previous]);
+    expect(h.body.scrollTop).toBe(0);
+  });
+
+  it("steps forward and reveals the next exchange", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(100);
+    h.navigation.next = h.turnAt(400);
+    h.body.scrollTop = 100;
+    h.controller.syncJumpControls();
+    expect(h.jumpToNextTurn.hidden).toBe(false);
+
+    h.controller.jumpToNextTurn();
+    expect(h.navigation.activated).toEqual([h.navigation.next]);
+    expect(h.body.scrollTop).toBe(400);
+    expect(h.controller.following).toBe(false);
+    // The control stays available at its target, unlike the old single jump.
+    expect(h.jumpToNextTurn.hidden).toBe(false);
+  });
+
+  it("returns to the current exchange before stepping forward when it is below the port", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(500);
+    h.navigation.next = h.turnAt(900);
+    // At the very top of the transcript the open exchange is entirely below
+    // the port. Pressing next must reveal it instead of activating a turn far
+    // below the reader's current position.
+    h.body.scrollTop = 0;
+    h.controller.jumpToNextTurn();
+    expect(h.body.scrollTop).toBe(500);
+    expect(h.navigation.activated).toEqual([]);
+    expect(h.controller.following).toBe(false);
+
+    // With the exchange now visible, the next press steps forward.
+    h.controller.jumpToNextTurn();
+    expect(h.navigation.activated).toEqual([h.navigation.next]);
+    expect(h.body.scrollTop).toBe(600);
+  });
+
+  it("returns to a current exchange that scrolled above the port", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(100);
+    h.navigation.next = h.turnAt(700);
+    h.body.scrollTop = 600;
+    h.controller.jumpToNextTurn();
+    expect(h.body.scrollTop).toBe(100);
+    expect(h.navigation.activated).toEqual([]);
+  });
+
+  it("steps forward while the current exchange is visible but not at its title", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(300);
+    h.navigation.next = h.turnAt(700);
+    // The exchange's body fills the port but its title is above the top edge.
+    // Next only restores an exchange that is fully out of view; a visible one
+    // steps forward, while prev would realign the title in this same state.
+    h.body.scrollTop = 100;
+    h.controller.jumpToNextTurn();
+    expect(h.navigation.activated).toEqual([h.navigation.next]);
+    expect(h.body.scrollTop).toBe(600);
+  });
+
+  it("hides an empty direction while its exchange is on screen", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(250);
+    h.body.scrollTop = 250;
+    h.controller.syncJumpControls();
+    expect(h.jumpToPrevTurn.hidden).toBe(true);
+    expect(h.jumpToNextTurn.hidden).toBe(true);
+
+    h.navigation.previous = h.turnAt(0);
+    h.navigation.next = h.turnAt(500);
+    h.controller.syncJumpControls();
+    expect(h.jumpToPrevTurn.hidden).toBe(false);
+    expect(h.jumpToNextTurn.hidden).toBe(false);
+  });
+
+  it("keeps the next control available to return to a last exchange that scrolled away", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(900);
+    h.body.scrollTop = 0;
+    h.controller.syncJumpControls();
+    // The last exchange is below the port, so the forward control still has a
+    // job: bring the reader back to the conversation they left open.
+    expect(h.jumpToNextTurn.hidden).toBe(false);
+
+    h.controller.jumpToNextTurn();
+    expect(h.body.scrollTop).toBe(600);
+    expect(h.navigation.activated).toEqual([]);
+
+    // Back at the visible last exchange there is nowhere further to step.
+    h.controller.syncJumpControls();
+    expect(h.jumpToNextTurn.hidden).toBe(true);
+  });
+
+  it("ignores previous-turn requests when no turn is rendered", () => {
+    const h = harness();
+    h.body.scrollTop = 120;
+    h.controller.syncJumpControls();
+    expect(h.jumpToPrevTurn.hidden).toBe(true);
+    expect(h.jumpToNextTurn.hidden).toBe(true);
+    h.controller.jumpToPreviousTurn();
+    h.controller.jumpToNextTurn();
+    expect(h.body.scrollTop).toBe(120);
+  });
+
+  it("clamps a next-turn title that cannot reach the top edge", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(0);
+    h.navigation.next = h.turnAt(900);
+    // The turn ends 400px below its title, shorter than the port, so the
+    // furthest reachable position is the port's current end.
+    h.body.scrollTop = 0;
+    h.controller.jumpToNextTurn();
+    expect(h.body.scrollTop).toBe(600);
+  });
 
   it("releases following on the reader's gesture and resumes at the end", () => {
     const h = harness();

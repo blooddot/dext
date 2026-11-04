@@ -22,6 +22,10 @@ export interface ScrollViewport {
   /** The section that positions the floating jump controls. */
   section: HTMLElement;
   jumpToLatest: HTMLElement;
+  /** Returns to the previous turn's title, stepping through the exchange. */
+  jumpToPrevTurn: HTMLElement;
+  /** Moves to the next turn's title. */
+  jumpToNextTurn: HTMLElement;
   jumpToTop: HTMLElement;
 }
 
@@ -32,6 +36,14 @@ export interface OutputScrollOptions {
   /** A running turn follows its Process timeline only while that timeline is
    * visible; keeping the disclosure closed is an explicit reader choice. */
   canFollow: () => boolean;
+  /** The turn the turn-stepping controls treat as current. It is resolved at
+   * call time because navigation can move the anchor. */
+  currentTurn?: () => HTMLElement | undefined;
+  /** The turn before or after the current one, absent at either end. */
+  adjacentTurn?: (offset: -1 | 1) => HTMLElement | undefined;
+  /** Bring a turn into focus before the jump: collapse the exchange the reader
+   * is leaving and reveal the target's Input and Output. */
+  activateTurn?: (turn: HTMLElement) => void;
   /** A stale scroll range is reported once per rendered conversation. */
   onDiagnostic: (message: string) => void;
   requestFrame?: (callback: FrameRequestCallback) => number;
@@ -92,6 +104,38 @@ export class OutputScrollController {
     // reader had scrolled away from the newest output.
     this.viewport.jumpToLatest.hidden = this.isNearBottom();
     this.viewport.jumpToTop.hidden = this.viewport.body.scrollTop <= 1;
+    // The turn pair stays available until the reader reaches the first or last
+    // exchange. Unlike the old single control, arriving at the target does not
+    // hide it: the reader can keep stepping through turns in that direction.
+    this.viewport.jumpToPrevTurn.hidden = this.options.adjacentTurn?.(-1) === undefined;
+    // At the last exchange there is nowhere further to step, but scrolling up
+    // away from it still leaves the next control with its restore action. Keep
+    // it available until the open exchange is back on screen, so a reader at
+    // the top of a long transcript can press either turn control to return.
+    const next = this.options.adjacentTurn?.(1);
+    const current = next === undefined ? this.options.currentTurn?.() : undefined;
+    this.viewport.jumpToNextTurn.hidden =
+      next === undefined && (current === undefined || this.isTurnVisible(current));
+  }
+
+  /** The scroll offset where a turn's own title begins, measured against the
+   * port's content box so nested transforms and gutters cannot skew it. */
+  private turnTop(turn: HTMLElement): number {
+    const { body } = this.viewport;
+    return Math.max(0, turn.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop);
+  }
+
+  /** The furthest position the port can scroll to. The newest turn often has
+   * less content below its title than the port is tall, so the title cannot be
+   * placed at the top edge even though it is visible near the bottom. Clamping
+   * keeps the middle control from promising a jump the view cannot make. */
+  private maxScrollTop(): number {
+    const { body } = this.viewport;
+    return Math.max(0, body.scrollHeight - body.clientHeight);
+  }
+
+  private turnJumpTarget(turn: HTMLElement): number {
+    return Math.min(this.turnTop(turn), this.maxScrollTop());
   }
 
   /** Cancels a queued correction. Every caller that changes what the port
@@ -335,6 +379,70 @@ export class OutputScrollController {
       return;
     }
     if (event.key === "Home" || event.key === "PageUp" || event.key === "ArrowUp") this.followingEnd = false;
+  }
+
+  /** Return to the current turn's title, then step to the previous turn on the
+   * next press. The first press restores the current exchange before navigating
+   * away from it, so a reader deep in a long turn does not skip its start. */
+  jumpToPreviousTurn(): void {
+    const current = this.options.currentTurn?.();
+    if (!current) return;
+    if (!this.atTurnStart(current)) {
+      this.scrollToTurn(current);
+      return;
+    }
+    const previous = this.options.adjacentTurn?.(-1);
+    if (previous) this.activateAndScroll(previous);
+  }
+
+  /** Step to the next exchange and reveal its Input and Output. When the
+   * exchange the reader is working in has scrolled out of view, the press
+   * returns there first, mirroring the previous-turn control. Otherwise a press
+   * at the very top of a long transcript would silently activate a turn far
+   * below instead of showing the conversation the reader left open. */
+  jumpToNextTurn(): void {
+    const current = this.options.currentTurn?.();
+    if (!current) return;
+    if (!this.isTurnVisible(current)) {
+      this.scrollToTurn(current);
+      return;
+    }
+    const next = this.options.adjacentTurn?.(1);
+    if (next) this.activateAndScroll(next);
+  }
+
+  private atTurnStart(turn: HTMLElement): boolean {
+    return Math.abs(this.viewport.body.scrollTop - this.turnJumpTarget(turn)) <= 2;
+  }
+
+  /** Whether any part of the turn currently intersects the scroll port. A tall
+   * open exchange counts as visible even when its title has scrolled above the
+   * viewport; only a fully off-screen turn pulls the next control back. */
+  private isTurnVisible(turn: HTMLElement): boolean {
+    const { body } = this.viewport;
+    const bodyRect = body.getBoundingClientRect();
+    const turnRect = turn.getBoundingClientRect();
+    return turnRect.bottom > bodyRect.top && turnRect.top < bodyRect.bottom;
+  }
+
+  private scrollToTurn(turn: HTMLElement): void {
+    this.followingEnd = false;
+    this.cancelScheduled();
+    this.viewport.body.scrollTop = this.turnJumpTarget(turn);
+    this.syncJumpControls();
+    this.viewport.body.focus({ preventScroll: true });
+  }
+
+  /** Focus an adjacent exchange before measuring its title. Closing the exchange
+   * the reader is leaving changes the height above the target, so the offset has
+   * to be read after the disclosures have settled. */
+  private activateAndScroll(turn: HTMLElement): void {
+    this.followingEnd = false;
+    this.cancelScheduled();
+    this.options.activateTurn?.(turn);
+    this.viewport.body.scrollTop = this.turnJumpTarget(turn);
+    this.syncJumpControls();
+    this.viewport.body.focus({ preventScroll: true });
   }
 
   jumpToTop(): void {

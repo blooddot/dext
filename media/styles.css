@@ -2782,6 +2782,8 @@ button.primary.stopping {
 }
 
 .stream-jump-top,
+.stream-jump-prev-turn,
+.stream-jump-next-turn,
 .stream-jump-latest {
   position: absolute;
   /* Clear #result-body's vertical scrollbar. The host decides how wide that
@@ -2816,12 +2818,27 @@ button.primary.stopping {
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease;
 }
 
-.stream-jump-top {
+/* The stack reads outward from the newest edge: latest, next turn, previous
+   turn, then the top of the whole transcript. The two turn controls are
+   persistent, so the stack keeps four slots whenever both are available. */
+.stream-jump-next-turn {
   bottom: 48px;
+}
+
+.stream-jump-prev-turn {
+  bottom: 82px;
+}
+
+.stream-jump-top {
+  bottom: 116px;
 }
 
 .stream-jump-top:hover,
 .stream-jump-top:focus-visible,
+.stream-jump-prev-turn:hover,
+.stream-jump-prev-turn:focus-visible,
+.stream-jump-next-turn:hover,
+.stream-jump-next-turn:focus-visible,
 .stream-jump-latest:hover,
 .stream-jump-latest:focus-visible {
   color: var(--vscode-foreground);
@@ -2831,17 +2848,23 @@ button.primary.stopping {
 }
 
 .stream-jump-top:focus-visible,
+.stream-jump-prev-turn:focus-visible,
+.stream-jump-next-turn:focus-visible,
 .stream-jump-latest:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
 
 .stream-jump-top .codicon,
+.stream-jump-prev-turn .codicon,
+.stream-jump-next-turn .codicon,
 .stream-jump-latest .codicon {
   font-size: 14px;
 }
 
 .stream-jump-top[hidden],
+.stream-jump-prev-turn[hidden],
+.stream-jump-next-turn[hidden],
 .stream-jump-latest[hidden] {
   display: none;
 }

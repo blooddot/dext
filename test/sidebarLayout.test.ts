@@ -536,8 +536,48 @@ describe("sidebar panel layout", () => {
     expect(css).not.toMatch(/\.stream-jump-latest \{[\s\S]*?right: 28px;/);
     const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
     expect(scrollSource).toMatch(/syncGutter\(\): void \{[\s\S]*?body\.offsetWidth - body\.clientWidth/);
-    expect(main).toMatch(/elements\.resultSection\.append\(jumpToLatest\);\s*syncResultScrollGutter\(\);/);
+    expect(main).toMatch(/elements\.resultSection\.append\(jumpToTop\);\s*elements\.resultSection\.append\(jumpToPrevTurn\);\s*elements\.resultSection\.append\(jumpToNextTurn\);\s*elements\.resultSection\.append\(jumpToLatest\);\s*syncResultScrollGutter\(\);/);
     expect(main).toMatch(/addEventListener\("resize", syncResultScrollGutter/);
+  });
+
+  it("pairs persistent previous and next turn controls with the transcript ends", async () => {
+    const css = await source("media/styles.css");
+    const main = await source("src/webview/main.ts");
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
+    // The two turn controls sit between the existing arrows. They remain
+    // available at their target, so the stack keeps a slot for each.
+    expect(css).toMatch(/\.stream-jump-next-turn \{\s*bottom: 48px;\s*\}/);
+    expect(css).toMatch(/\.stream-jump-prev-turn \{\s*bottom: 82px;\s*\}/);
+    expect(css).toMatch(/\.stream-jump-top \{\s*bottom: 116px;\s*\}/);
+    expect(css).toMatch(/\.stream-jump-prev-turn\[hidden\]/);
+    expect(css).toMatch(/\.stream-jump-next-turn\[hidden\]/);
+    expect(main).toMatch(/jumpToPrevTurn\.className = "stream-jump-prev-turn";/);
+    expect(main).toMatch(/jumpToNextTurn\.className = "stream-jump-next-turn";/);
+    // The stepping controls start from the last turn the reader expanded or
+    // navigated to, not from the live turn (which owns the streamed render).
+    expect(main).toMatch(/currentTurn: \(\) => navigationTurn\(\)/);
+    expect(main).toMatch(/adjacentTurn: \(offset\) => neighboringTurn\(offset\)/);
+    expect(main).toMatch(/activateTurn: \(turn\) => activateNavigationTurn\(turn\)/);
+    expect(main).toMatch(/jumpToPrevTurn\.addEventListener\("click", \(\) => \{\s*scroll\.jumpToPreviousTurn\(\);/);
+    expect(main).toMatch(/jumpToNextTurn\.addEventListener\("click", \(\) => \{\s*scroll\.jumpToNextTurn\(\);/);
+    // Expanding an exchange reveals its Input and Output and folds the one the
+    // reader is leaving.
+    expect(main).toMatch(/function activateNavigationTurn\(target: HTMLElement\): void \{[\s\S]*?if \(row !== target\) row\.open = false;[\s\S]*?turn\.outputDisclosure\.open = true;/);
+    // Expanding or folding an exchange moves the navigation anchor, and the
+    // boundary controls have to be re-evaluated with it.
+    expect(main).toMatch(/elements\.result\.addEventListener\("toggle", rememberNavigationTurn, true\);[\s\S]*?elements\.result\.addEventListener\("toggle", syncJumpToLatest, true\);/);
+    expect(scrollSource).toMatch(/jumpToPreviousTurn\(\): void \{[\s\S]*?if \(!this\.atTurnStart\(current\)\) \{[\s\S]*?this\.scrollToTurn\(current\);[\s\S]*?this\.activateAndScroll\(previous\);/);
+    // Next mirrors the restore behavior: an exchange that scrolled out of view
+    // is revealed again before the control steps forward.
+    expect(scrollSource).toMatch(/jumpToNextTurn\(\): void \{[\s\S]*?const current = this\.options\.currentTurn\?\.\(\);[\s\S]*?if \(!this\.isTurnVisible\(current\)\) \{[\s\S]*?this\.scrollToTurn\(current\);[\s\S]*?this\.activateAndScroll\(next\);/);
+    // The last exchange keeps the forward control available while it is off
+    // screen, because pressing it returns to that open exchange.
+    expect(scrollSource).toMatch(/syncJumpControls\(\): void \{[\s\S]*?const current = next === undefined \? this\.options\.currentTurn\?\.\(\) : undefined;[\s\S]*?jumpToNextTurn\.hidden =[\s\S]*?this\.isTurnVisible\(current\)/);
+    expect(scrollSource).toMatch(/private activateAndScroll\(turn: HTMLElement\): void \{[\s\S]*?this\.options\.activateTurn\?\.\(turn\);[\s\S]*?this\.viewport\.body\.scrollTop = this\.turnJumpTarget\(turn\);/);
+    expect(scrollSource).toMatch(/private turnTop\(turn: HTMLElement\): number \{[\s\S]*?turn\.getBoundingClientRect\(\)\.top/);
+    // A title that cannot reach the top edge (the transcript ends below it)
+    // must not offer a jump that would not move the view.
+    expect(scrollSource).toMatch(/private turnJumpTarget\(turn: HTMLElement\): number \{[\s\S]*?Math\.min\(this\.turnTop\(turn\), this\.maxScrollTop\(\)\)/);
   });
 
   it("offers edit-and-resend and retry on every output turn", async () => {
