@@ -1083,7 +1083,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             type: "imageAttachment",
             relativePath: attachment.relativePath,
             webviewUri: view.webview.asWebviewUri(attachment.uri).toString(),
-            name: attachment.name
+            name: attachment.name,
+            ...(request.requestId === undefined ? {} : { requestId: request.requestId })
           });
           break;
         }

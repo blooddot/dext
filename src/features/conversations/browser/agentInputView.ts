@@ -1,7 +1,7 @@
 import type { AgentInputAnswers, AgentInputState } from "../../../shared/contracts/types.js";
 import type { UiField, UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../shared/contracts/uiForm.js";
 import { agentInputForm, agentFormAnswers, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerChoice } from "../presentation/uiInteractionPresentation.js";
-import { InteractionForm } from "./interactionForm.js";
+import { InteractionForm, type InteractionFileHost } from "./interactionForm.js";
 import { InteractionDialog } from "./interactionDialog.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
 
@@ -22,7 +22,7 @@ export class AgentInputView {
   private readonly drafts = new Map<string, UiFormAnswers>();
   constructor(private readonly respond: (requestId: string, answers: AgentInputAnswers | null) => void,
     private readonly respondUi: (state: UiInteractionState, result: UiFormResult) => void = () => {},
-    private readonly scope = "", private readonly store?: InteractionDraftStore) {
+    private readonly scope = "", private readonly store?: InteractionDraftStore, private readonly files?: InteractionFileHost) {
     this.element.className = "agent-inputs"; this.element.hidden = true;
     this.element.setAttribute("aria-label", "Questions and interactions");
   }
@@ -90,7 +90,7 @@ export class AgentInputView {
         const answers = { ...result.answers };
         for (const field of card.form.fields) if (field.secret) delete answers[field.id];
         this.put({ ...card, status: result.status, answers, action: result.action, element: document.createElement("section") });
-      }, this.drafts.get(key) ?? this.store?.get(key) ?? {}, save);
+      }, this.drafts.get(key) ?? this.store?.get(key) ?? {}, save, this.files);
       card.control = form;
       if (card.form.presentation === "dialog") {
         const dialog = new InteractionDialog(form); card.dialog = dialog;

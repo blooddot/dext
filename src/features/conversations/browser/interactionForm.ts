@@ -1,7 +1,16 @@
 import { validateUiAnswers, type UiFormAnswers, type UiFormDefinition, type UiFormResult } from "../../../shared/contracts/uiForm.js";
+import { droppedFilePaths, fileSelectionDropEffect, findImageItem, isFileDrag, referenceInsertion } from "../../../platform/browser/fileDrop.js";
 import { selectionGroupField, type FieldControl } from "./selectionGroupField.js";
 import { selectField } from "./selectField.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
+
+/** Dropped files and pasted images reach a form field as the same `@path` text
+ * the Input uses, because a field answer is only a string. */
+export interface InteractionFileHost {
+  resolve(paths: string[]): Promise<string[]>;
+  attach(file: File): Promise<string>;
+  onError(error: unknown): void;
+}
 
 export class InteractionForm {
   readonly element = document.createElement("form");
@@ -10,7 +19,8 @@ export class InteractionForm {
   private refresh = (): void => {};
   private readonly controls = new Map<string, FieldControl>();
   constructor(readonly definition: UiFormDefinition, private readonly respond: (result: UiFormResult) => void,
-    draft: UiFormAnswers = {}, private readonly saveDraft: (draft: UiFormAnswers) => void = () => {}) {
+    draft: UiFormAnswers = {}, private readonly saveDraft: (draft: UiFormAnswers) => void = () => {},
+    private readonly files?: InteractionFileHost) {
     this.element.className = "interaction-form";
     this.element.noValidate = true;
     const head = document.createElement("div"); head.className = "interaction-head";
@@ -54,6 +64,7 @@ export class InteractionForm {
         input.setAttribute("aria-label", field.label); input.setAttribute("aria-required", String(field.required));
         const answer = draft[field.id]; input.value = answer?.type === "input" ? answer.value : field.default ?? "";
         input.placeholder = field.placeholder ?? ""; input.addEventListener("input", refresh);
+        if (!field.secret) this.bindFiles(input, refresh);
         control = { element: input, read: () => ({ type: "input", value: input.value }), clearSecret: () => { if (field.secret) input.value = ""; } };
       } else control = field.type === "select" ? selectField(field, draft[field.id], refresh) : selectionGroupField(field, draft[field.id], refresh);
       this.controls.set(field.id, control); fieldset.append(control.element); this.element.append(fieldset);
@@ -86,6 +97,45 @@ export class InteractionForm {
     });
     this.refresh = refresh;
     refresh();
+  }
+  /** A text field takes the same dropped references and pasted images as the
+   * Input. Both resolve to `@path`, which is all an answer string carries. */
+  private bindFiles(field: HTMLInputElement | HTMLTextAreaElement, refresh: () => void): void {
+    const files = this.files; if (!files) return;
+    // An input and a textarea share these events; the union only loses that.
+    const target = field as HTMLTextAreaElement;
+    const insert = (expressions: readonly string[]): void => {
+      if (!expressions.length || this.sent || this.inactive || !target.isConnected) return;
+      const from = target.selectionStart ?? target.value.length, to = target.selectionEnd ?? from;
+      const edit = referenceInsertion(target.value, from, to, expressions);
+      target.value = edit.value; target.setSelectionRange(edit.caret, edit.caret); refresh();
+    };
+    const active = (on: boolean): void => { target.classList.toggle("file-drop-active", on); };
+    target.addEventListener("dragover", (event: DragEvent) => {
+      if (!isFileDrag(event)) return;
+      event.preventDefault();
+      event.dataTransfer!.dropEffect = fileSelectionDropEffect(event.dataTransfer!.effectAllowed);
+      active(true);
+    });
+    target.addEventListener("dragleave", () => active(false));
+    target.addEventListener("drop", (event: DragEvent) => {
+      active(false); if (!isFileDrag(event)) return;
+      // A drop without paths is ordinary text: leave it to the browser.
+      event.preventDefault(); event.stopPropagation();
+      const paths = droppedFilePaths(event.dataTransfer);
+      if (!paths.length) {
+        if ([...event.dataTransfer!.types].some((type) => type.toLowerCase() === "files")) {
+          files.onError(new Error("The dropped files did not include paths. Drag files from the VS Code Explorer into the form."));
+        }
+        return;
+      }
+      void files.resolve(paths).then(insert).catch((error) => files.onError(error));
+    });
+    target.addEventListener("paste", (event: ClipboardEvent) => {
+      const file = findImageItem(event.clipboardData)?.getAsFile(); if (!file) return;
+      event.preventDefault(); event.stopPropagation();
+      void files.attach(file).then((relativePath) => insert([`@${relativePath}`])).catch((error) => files.onError(error));
+    });
   }
   private read(): UiFormAnswers { return Object.fromEntries([...this.controls].map(([id, control]) => [id, control.read()])); }
   private publicDraft(answers: UiFormAnswers): UiFormAnswers {

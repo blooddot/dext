@@ -84,3 +84,32 @@ export function droppedFilePaths(data: DataTransfer | null): string[] {
   const standard = paths(read(data, uriListTypes[1]!), true);
   return standard.length ? standard : paths(read(data, "text/plain"));
 }
+
+/** The first image in a paste or drop; everything else in it is text or files. */
+export function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
+  if (!data) return undefined;
+  for (const item of data.items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) return item;
+  }
+  return undefined;
+}
+
+/** Inserts @ references into a plain-text field, separated from the words they
+ * land between so the caret never becomes part of a neighbouring reference. */
+export function referenceInsertion(
+  value: string,
+  from: number,
+  to: number,
+  expressions: readonly string[]
+): { value: string; caret: number } {
+  const text = expressions.join(" ");
+  const space = (character: string | undefined): string => character === undefined || /\s/.test(character) ? "" : " ";
+  const prefix = space(value[from - 1]);
+  // A ref that ends the field still gets a trailing space, so the next typed
+  // character never reads as part of the path.
+  const suffix = to === value.length ? " " : space(value[to]);
+  return {
+    value: `${value.slice(0, from)}${prefix}${text}${suffix}${value.slice(to)}`,
+    caret: from + prefix.length + text.length + suffix.length
+  };
+}

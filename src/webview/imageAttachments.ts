@@ -10,15 +10,6 @@ export interface ImageAttachmentHost {
   onChanged: () => void;
 }
 
-/** The first image in a paste or drop; everything else in it is text or files. */
-export function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
-  if (!data) return undefined;
-  for (const item of data.items) {
-    if (item.kind === "file" && item.type.startsWith("image/")) return item;
-  }
-  return undefined;
-}
-
 /** Pasted-image chips above the Input. A chip stands for a file the turn already
  * refers to, so removing one never deletes the file. */
 export class ImageAttachments {

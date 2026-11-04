@@ -254,7 +254,21 @@ try {
     await key("Escape", 27); assert.equal(await evaluate(`document.getElementById('${id}').open`), false);
     await evaluate(`document.getElementById('${id}').remove()`);
   }
-  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
+  // A field answer is text, so dropped files and pasted images both arrive as
+  // `@path` at the caret the reader left behind.
+  await evaluate(`window.fileHost={resolve:async(paths)=>paths.map(path=>'@'+path.split('/').pop()),attach:async()=>'.dext/attachments/p.png',onError:(error)=>{throw error;}};
+    window.fileForm=new InteractionUI.InteractionForm(InteractionUI.parseUiForm({title:'Files',fields:[{id:'note',type:'input',label:'Note',multiline:true}]}),()=>{},{},()=>{},fileHost);
+    document.body.append(fileForm.element);window.noteField=fileForm.element.querySelector('textarea');noteField.focus();`);
+  await evaluate(`{const data=new DataTransfer();data.setData('text/uri-list','file:///repo/a.ts');
+    noteField.dispatchEvent(new DragEvent('dragover',{dataTransfer:data,bubbles:true,cancelable:true}));
+    noteField.dispatchEvent(new DragEvent('drop',{dataTransfer:data,bubbles:true,cancelable:true}));}`);
+  assert.equal(await evaluate(`new Promise(resolve=>setTimeout(()=>resolve(noteField.value),50))`), "@a.ts ");
+  await evaluate(`{const data=new DataTransfer();data.items.add(new File(['x'],'p.png',{type:'image/png'}));
+    noteField.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
+  assert.equal(await evaluate(`new Promise(resolve=>setTimeout(()=>resolve(noteField.value),50))`), "@a.ts @.dext/attachments/p.png ");
+  assert.equal(await evaluate(`noteField.classList.contains('file-drop-active')`), false);
+  await evaluate(`fileForm.element.remove()`);
+  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, dropped files and pasted images in a form field, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
 } finally {
   try { await shutdown?.(); } catch {}
   socket?.close(); browser.kill();

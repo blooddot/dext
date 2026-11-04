@@ -71,7 +71,9 @@ export const webviewRequestSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("pasteImage"),
     data: z.string().min(1),
-    mimeType: z.string().min(1)
+    mimeType: z.string().min(1),
+    /** A form field waiting for the image; the composer sends none. */
+    requestId: z.number().int().nonnegative().optional()
   }),
   z.object({ type: z.literal("deleteImageAttachment"), relativePath: z.string().min(1) }),
   z.object({ type: z.literal("reload") }),
@@ -160,7 +162,7 @@ export type WebviewResponse =
   | { type: "mcpCreated"; name: string }
   | { type: "inputKind"; kind: "empty" | "workflow" | "invalid" }
   | { type: "insertFileReferences"; expressions: string[] }
-  | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string }
+  | { type: "imageAttachment"; relativePath: string; webviewUri: string; name: string; requestId?: number }
   /** The image-annotator tab hands the block it composed back to the composer. */
   | { type: "insertAnnotations"; text: string; previous?: string }
   | { type: "clipboardWriteResult"; requestId: number; success: boolean }

@@ -3744,6 +3744,7 @@ details[open] > summary > .disclosure-chevron {
 .interaction-option small { margin-top: 3px; }
 .interaction-form input:not([type=radio]):not([type=checkbox]), .interaction-form textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px 9px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); border-radius: 6px; font: inherit; }
 .interaction-form input:not([type=radio]):not([type=checkbox]):focus, .interaction-form textarea:focus { border-color: var(--vscode-focusBorder); }
+.interaction-form input.file-drop-active, .interaction-form textarea.file-drop-active { box-shadow: inset 0 0 0 2px var(--vscode-focusBorder); }
 .interaction-form textarea { min-height: 84px; line-height: 1.5; resize: vertical; }
 .interaction-form :focus-visible, .interaction-select-popup :focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 /* Keep keyboard focus on the option row instead of boxing the selection dot. */

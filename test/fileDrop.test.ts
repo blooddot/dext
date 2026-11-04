@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "../src/webview/fileDrop.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag, referenceInsertion } from "../src/platform/browser/fileDrop.js";
 import { FileDropClient } from "../src/webview/fileDropClient.js";
 
 function transfer(values: Record<string, string>): DataTransfer {
@@ -137,5 +137,15 @@ describe("file drop requests", () => {
       await vi.advanceTimersByTimeAsync(15000);
       await pending;
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe("form field reference insertion", () => {
+  it("separates inserted refs from the words around the caret", () => {
+    expect(referenceInsertion("解释这段", 2, 2, ["@src/a.ts"])).toEqual({ value: "解释 @src/a.ts 这段", caret: 13 });
+    expect(referenceInsertion("", 0, 0, ["@a.png"])).toEqual({ value: "@a.png ", caret: 7 });
+  });
+  it("replaces the selection and joins refs with a single space", () => {
+    expect(referenceInsertion("a|b", 1, 2, ["@x.ts", "@y.ts"])).toEqual({ value: "a @x.ts @y.ts b", caret: 14 });
   });
 });

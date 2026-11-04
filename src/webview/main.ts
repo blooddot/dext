@@ -28,9 +28,9 @@ import { markdownCodeCopy } from "../shared/lib/markdownCopy.js";
 import { dextMarkdown } from "../shared/lib/markdown.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
-import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "./fileDrop.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImageItem, isFileDrag } from "../platform/browser/fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
-import { findImageItem, ImageAttachments } from "./imageAttachments.js";
+import { ImageAttachments } from "./imageAttachments.js";
 import { McpAssistantView } from "./mcpAssistantView.js";
 import { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { colorizeSource } from "./sourceHighlight.js";
@@ -278,6 +278,30 @@ const attachments = new ImageAttachments({
   removeReference: (relativePath) => editor.removeFileReference(relativePath),
   onChanged: () => persistComposerDraft()
 });
+/** Form fields awaiting a stored image, keyed by the request that asked for it. */
+const pendingFormImages = new Map<number, (relativePath: string) => void>();
+let nextFormImage = 0;
+function readImageData(file: File): Promise<{ data: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the pasted image."));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") { reject(new Error("Could not read the pasted image.")); return; }
+      const comma = reader.result.indexOf(",");
+      resolve({ data: reader.result.slice(comma + 1), mimeType: reader.result.slice(5, reader.result.indexOf(";")) });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+/** A form answer is text, so an attached image arrives as the stored @path. */
+async function attachFormImage(file: File): Promise<string> {
+  const image = await readImageData(file);
+  return new Promise((resolve) => {
+    const requestId = ++nextFormImage;
+    pendingFormImages.set(requestId, resolve);
+    vscode.postMessage({ type: "pasteImage", requestId, ...image });
+  });
+}
 
 function createTurnQuestions(turnId: string, sessionId: string | undefined): AgentInputView {
   return new AgentInputView((requestId, answers) => {
@@ -293,7 +317,7 @@ function createTurnQuestions(turnId: string, sessionId: string | undefined): Age
       while (JSON.stringify(entries).length > 200000) entries.shift();
       vscode.setState({ interactionDrafts: Object.fromEntries(entries) });
     }
-  });
+  }, { resolve: (paths) => fileDrop.resolve(paths), attach: attachFormImage, onError: renderError });
 }
 
 const transcript = new TranscriptView({
@@ -2412,23 +2436,13 @@ document.addEventListener("keydown", (event) => {
   closeComposerMenus();
 });
 elements.inputShell.addEventListener("paste", (event) => {
-  const imageItem = findImageItem(event.clipboardData);
-  if (!imageItem) return;
-  const file = imageItem.getAsFile();
+  const file = findImageItem(event.clipboardData)?.getAsFile();
   if (!file) return;
   event.preventDefault();
   event.stopPropagation();
-  const reader = new FileReader();
-  reader.onload = () => {
-    if (typeof reader.result !== "string") return;
-    const dataUrl = reader.result;
-    const comma = dataUrl.indexOf(",");
-    const header = dataUrl.slice(0, comma);
-    const mimeType = header.slice(5, header.indexOf(";"));
-    const base64 = dataUrl.slice(comma + 1);
-    vscode.postMessage({ type: "pasteImage", data: base64, mimeType });
-  };
-  reader.readAsDataURL(file);
+  void readImageData(file)
+    .then((image) => vscode.postMessage({ type: "pasteImage", ...image }))
+    .catch(renderError);
 }, true);
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
@@ -2466,8 +2480,13 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     editor.focus();
   }
   if (message.type === "imageAttachment") {
-    attachments.add(message.relativePath, message.webviewUri, message.name);
-    editor.insertFileReferences([`@${message.relativePath}`]);
+    const waiting = message.requestId === undefined ? undefined : pendingFormImages.get(message.requestId);
+    if (message.requestId !== undefined) pendingFormImages.delete(message.requestId);
+    if (waiting) waiting(message.relativePath);
+    else {
+      attachments.add(message.relativePath, message.webviewUri, message.name);
+      editor.insertFileReferences([`@${message.relativePath}`]);
+    }
   }
   if (message.type === "outputSession") {
     if (message.switchId !== undefined && message.switchId !== browser.switchId) return;
@@ -2669,6 +2688,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     // waiting for, so the pending wait ends here.
     if (message.sessionId) pendingBuilds.delete(message.sessionId);
     else pendingBuilds.clear();
+    pendingFormImages.clear();
     if (message.sessionId && resourceSessions.has(message.sessionId)) {
       resourcePending.delete(message.sessionId);
       resourceErrors.set(message.sessionId, message.message);
