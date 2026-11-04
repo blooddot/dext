@@ -129,6 +129,12 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-content { padding: 16px; overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: 4px; font-family: var(--vscode-editor-font-family, monospace); font-size: var(--vscode-editor-font-size, 13px); }
 .resource-content code { white-space: pre; }
 :is(.resource-panel, .resource-definition) code { background: transparent; border: 0; padding: 0; border-radius: 0; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family, monospace); }
+/* Syntax colour comes from the editor's token palette, not from the symbol icons:
+   --vscode-symbolIcon-* paints the outline's icons, where a class is orange, while the
+   editor paints that same type teal. VS Code exposes no CSS variable for token colours,
+   so the palette below is the closest a script-less page gets.
+   shortcut: the palette is Dark+/Light+ only, so a custom theme's token colours do not
+   reach this page; inject the theme's own tokenColors if that ever matters. */
 :is(.resource-panel, .resource-definition) .tok-keyword { color: var(--resource-syntax-keyword); }
 :is(.resource-panel, .resource-definition) .tok-string { color: var(--resource-syntax-string); }
 :is(.resource-panel, .resource-definition) .tok-number { color: var(--resource-syntax-number); }

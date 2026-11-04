@@ -113,7 +113,8 @@ export function highlightResourceSource(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\b\d+(?:\.\d+)?\b|[^A-Za-z_$\d"'`/]+|./g, (token: string) => {
     const kind = token.startsWith("//") || token.startsWith("/*") ? "comment"
       : /^["'`]/.test(token) ? "string"
-      : /^(?:import|from|export|default|async|await|function|return|const|let|var|if|else|throw|new|type|interface|extends|typeof|keyof|as|true|false|null|undefined)$/.test(token) ? "keyword"
+      : /^(?:import|from|export|default|async|await|function|return|const|let|var|if|else|throw|new|type|interface|extends|typeof|keyof|as)$/.test(token) ? "keyword"
+      : /^(?:true|false|null|undefined)$/.test(token) ? "bool"
       : /^(?:string|number|boolean|void|unknown|never|any|bigint|[A-Z][\w$]*)$/.test(token) ? "typeName"
       : /^\d/.test(token) ? "number" : undefined;
     const text = escapeResourceHtml(token);
