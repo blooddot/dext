@@ -3,15 +3,15 @@ import { projectModelNodeSchema, projectModelRelationSchema, projectModelSchema 
 import { listProjectNorms, readProjectNorm, writeProjectNorm } from "../src/features/project/host/persistence/projectNorms.js";
 import { structureFingerprint } from "../src/features/project/knowledge/projectModel.js";
 import { reconcileNativeProject } from "../src/features/project/knowledge/projectModelEvolution.js";
-import { ProjectStore, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
+import { ProjectStore, projectContentHash, type ProjectFileHost } from "../src/features/project/host/persistence/projectStore.js";
 
 const savedModel = () => projectModelSchema.parse({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [
   { id: "module:a", kind: "module", title: "Alpha", canonicalName: "Alpha", body: { kind: "inline", text: "## Responsibility\n\nOwns a." }, evidence: [{ path: "src/a.ts", contentHash: "hash" }] },
-  { id: "doc", kind: "contract", title: "Document", canonicalName: "Document", body: { kind: "document", path: "docs/a.md", contentHash: "hash" } }
+  { id: "doc", kind: "contract", title: "Document", canonicalName: "Document", body: { kind: "document", path: "docs/a.md", contentHash: projectContentHash("## Document\n") } }
 ] });
 
 function fixture() {
-  const files = new Map<string, string>([[".dext/project/model.json", JSON.stringify(savedModel())]]);
+  const files = new Map<string, string>([[".dext/project/model.json", JSON.stringify(savedModel())], ["docs/a.md", "## Document\n"]]);
   const host: ProjectFileHost = {
     readFile: async (path) => files.get(path),
     writeFile: async (path, text) => { files.set(path, text); },
@@ -23,12 +23,12 @@ function fixture() {
 const committed = (files: Map<string, string>) => JSON.parse(files.get(".dext/project/model.json")!) as ReturnType<typeof savedModel>;
 
 describe("Project norms", () => {
-  it("lists only inline bodies and reads one by id", async () => {
+  it("lists inline and document bodies and reads each by id", async () => {
     const { store } = fixture();
-    expect((await listProjectNorms(store)).map((norm) => norm.id)).toEqual(["module:a"]);
+    expect((await listProjectNorms(store)).map((norm) => norm.id)).toEqual(["module:a", "doc"]);
     expect(await readProjectNorm(store, "module:a")).toMatchObject({ title: "Alpha", text: "## Responsibility\n\nOwns a.", review: "draft", evidence: ["src/a.ts"] });
-    // A document body is revised in its own file, never as a norm.
-    await expect(readProjectNorm(store, "doc")).rejects.toThrow("inline");
+    // A document body is read from the file that owns it.
+    expect(await readProjectNorm(store, "doc")).toMatchObject({ title: "Document", text: "## Document\n" });
   });
 
   it("treats an unchanged body as a confirmation and a changed body as needing verification", async () => {
@@ -41,10 +41,18 @@ describe("Project norms", () => {
     expect(committed(files).nodes[0]).toMatchObject({ review: "edited", freshness: "needs_verification", body: { kind: "inline", text: "## Responsibility\n\nOwns more." } });
   });
 
-  it("refuses a missing node or a body it does not own", async () => {
+  it("refuses a missing node", async () => {
     const { store } = fixture();
     await expect(writeProjectNorm(store, "missing", "text")).rejects.toThrow("missing");
-    await expect(writeProjectNorm(store, "doc", "text")).rejects.toThrow("document");
+  });
+
+  it("writes a document body through its file and treats an unchanged file as confirmation", async () => {
+    const { files, store } = fixture();
+    await writeProjectNorm(store, "doc", "## Document\n");
+    expect(committed(files).nodes[1]).toMatchObject({ id: "doc", review: "accepted", freshness: "current", body: { kind: "document", path: "docs/a.md", contentHash: projectContentHash("## Document\n") } });
+    await writeProjectNorm(store, "doc", "## Document\n\nEdited.\n");
+    expect(files.get("docs/a.md")).toBe("## Document\n\nEdited.\n");
+    expect(committed(files).nodes[1]).toMatchObject({ review: "edited", freshness: "needs_verification", body: { kind: "document", path: "docs/a.md", contentHash: projectContentHash("## Document\n\nEdited.\n") } });
   });
 
   it("confirms only the structure it was reviewed on and reopens it when members move", async () => {

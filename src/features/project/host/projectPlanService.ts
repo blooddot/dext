@@ -68,7 +68,6 @@ export class ProjectPlanService implements ProjectPlanPort {
         for (const node of model.nodes) {
           const text = node.body.kind === "inline" ? node.body.text : await this.store.readStrict(node.body.path);
           if (text === undefined) throw new Error(`Knowledge document for '${node.id}' is missing.`);
-          if (node.body.kind === "document" && projectContentHash(text) !== node.body.contentHash) throw new Error(`Knowledge document for '${node.id}' changed; review its content hash.`);
           const relations = model.relations.filter(edge => edge.from === node.id || edge.to === node.id);
           all.push({ id: node.id, kind: node.kind, title: node.title, locator: `.dext/project/model.json#/nodes/${encodeURIComponent(node.id)}`, content: { ...node, text, relations }, paths: node.paths, names: [node.title, node.canonicalName], global: ["project", "constraint", "decision", "contract", "architecture"].includes(node.kind),
             links: relations.flatMap(edge => [edge.from, edge.to]),
