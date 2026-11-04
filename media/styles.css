@@ -11,6 +11,13 @@
      on dark sidebar and editor grounds (7.1:1 at #1e1e1e). */
   --dext-full-access-accent: #d99a8f;
   --dext-row-action-background: #252526;
+  /* Compact conversation rhythm, shared by the transcript and composer. */
+  --dext-composer-height: clamp(96px, 12vh, 128px);
+  --dext-section-height: 28px;
+  --dext-conversation-gap: 8px;
+  --dext-turn-surface: color-mix(in srgb, var(--vscode-foreground) 4%, var(--vscode-sideBar-background));
+  --dext-quiet-divider: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+  --dext-record-border: transparent;
   --resource-api-accent: #79b8ff;
   --resource-mcp-accent: #c2a3ff;
   --resource-rule-accent: #dfb45c;
@@ -76,13 +83,31 @@ body {
   background: var(--vscode-sideBar-background);
 }
 
+/* The History tab lives in the editor area, so it takes the editor ground. */
+body.history-panel { background: var(--vscode-editor-background); }
+
 .app-shell {
   position: relative;
   width: 100%;
+  /* One canvas width for every wide host state. A stretched sidebar and a
+     maximized/full-screen view both center this 1200px column instead of
+     letting the chrome keep expanding around a narrower reading column. */
+  max-width: 1200px;
+  margin-inline: auto;
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Sidebar content below the fixed top tab bar. Keeping this a flex column
+   preserves the old direct-children layout: the transcript takes the remaining
+   height and the composer stays pinned to the bottom. */
+#dext-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .conversation-tabs {
@@ -603,9 +628,15 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
 }
 
 @media (min-width: 1200px) {
-  .app-shell {
-    width: min(1120px, calc(100% - 32px));
-    margin: 0 auto;
+  /* The canvas itself is capped on .app-shell, so a wide panel and a
+     maximized view share the same centered column. These rules only move the
+     outer gutter from the scroll port to the sections inside that column. */
+  #dext-main > .result-section,
+  #dext-main > .input-section {
+    padding-inline: 24px;
+  }
+  #dext-main #result-body {
+    padding-inline: 0;
   }
 }
 
@@ -1074,7 +1105,7 @@ main {
 }
 
 .input-section {
-  --input-editor-height: clamp(112px, 24vh, 240px);
+  --input-editor-height: var(--dext-composer-height);
   /* Agent is the default mode, so it keeps the plain button accent. Every
      other mode tints the composer through these properties. */
   --composer-accent: var(--vscode-button-background);
@@ -2525,12 +2556,13 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode
 
 .section-heading {
   width: 100%;
-  height: 34px;
-  flex: 0 0 34px;
+  height: var(--dext-section-height);
+  flex: 0 0 var(--dext-section-height);
   margin: 0;
   padding: 0 4px;
   justify-content: space-between;
   font-size: 12px;
+  color: var(--vscode-descriptionForeground);
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -2707,7 +2739,9 @@ button.primary.stopping {
      re-anchoring moved the view off the newest output while the reader was
      following it; main.ts pins the end explicitly instead. */
   overflow-anchor: none;
-  padding-left: 16px;
+  /* One gutter for the whole transcript. It shrinks on a narrow sidebar so
+     the content, not the gutter, keeps the space. */
+  padding-inline: clamp(14px, 3.2vw, 24px);
 }
 
 
@@ -2744,7 +2778,7 @@ button.primary.stopping {
 }
 
 #result {
-  padding-right: 4px;
+  padding-right: 0;
 }
 
 .stream-jump-top,
@@ -2813,7 +2847,7 @@ button.primary.stopping {
 }
 
 .output-turn {
-  border-top: 1px solid var(--vscode-panel-border);
+  border-top: 1px solid var(--dext-record-border);
 }
 
 .output-turn:first-child {
@@ -2831,6 +2865,23 @@ button.primary.stopping {
   list-style: none;
   user-select: none;
   position: relative;
+}
+
+/* Open turns own the visual emphasis; closed turns stay readable without
+   making every historical row another horizontal rule. */
+.output-turn[open] > summary {
+  background: var(--dext-turn-surface);
+}
+
+.output-turn[open] > summary .output-turn-title {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.output-turn > summary:focus-visible,
+.turn-section > summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
 
 .output-turn > summary::-webkit-details-marker {
@@ -2873,13 +2924,13 @@ button.primary.stopping {
 }
 
 .output-turn-body {
-  padding: 0 0 10px 14px;
+  padding: 4px 0 12px var(--dext-conversation-gap);
 }
 
 .turn-section {
   margin: 0;
   border: 0;
-  border-top: 1px solid var(--vscode-widget-border);
+  border-top: 1px solid var(--dext-record-border);
   border-radius: 0;
   background: transparent;
 }
@@ -2964,14 +3015,23 @@ button.primary.stopping {
 /* Both render adapters produce these classes; spacing is owned here once. */
 .turn-section > summary {
   min-height: 28px;
-  padding: 6px 8px;
+  padding: 4px var(--dext-conversation-gap);
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--vscode-foreground);
+  color: var(--vscode-descriptionForeground);
   cursor: pointer;
   user-select: none;
   list-style: none;
+}
+
+.turn-section[data-turn-section="output"][open] {
+  margin-top: var(--dext-conversation-gap);
+  border-top-color: var(--dext-quiet-divider);
+}
+
+.turn-section[data-turn-section="output"][open] > summary {
+  font-weight: 600;
 }
 
 .turn-section > summary::-webkit-details-marker { display: none; }
@@ -3082,6 +3142,53 @@ button.primary.stopping {
 .markdown-body {
   font: 14px/1.5 var(--vscode-font-family);
 }
+
+/* Upstream paints prose #f0f6fc, brighter than the theme's own text. Soften
+   prose slightly so long answers do not glare on a pure-black theme; headings
+   and bold runs keep the full foreground for hierarchy. */
+.markdown-body {
+  color: color-mix(in srgb, var(--vscode-foreground) 90%, transparent);
+  line-height: 1.7;
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
+  color: var(--vscode-foreground);
+}
+
+.markdown-body :is(strong, b, h1, h2, h3, h4, h5, h6) {
+  color: var(--vscode-foreground);
+}
+
+/* Process and Output share the conversation's own width. The canvas is
+   already capped on .app-shell, so letting the prose fill it keeps the
+   transcript, its section headings and the composer edge-aligned instead of
+   centering a narrower strip inside a wider panel. */
+#result-body .markdown-body {
+  max-width: 100%;
+  margin-inline: 0;
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+/* 1.7 leading leaves upstream's .25em between list items looking cramped. */
+.markdown-body li + li { margin-top: .5em; }
+
+/* Links follow the theme instead of GitHub's fixed blue. */
+.markdown-body a { color: var(--vscode-textLink-foreground); }
+
+/* Upstream's code, quote and rule colours are GitHub's, not this theme's; the
+   prose now follows the theme, and these are the last pieces that did not. */
+.markdown-body pre { color: var(--vscode-editor-foreground); background-color: var(--vscode-textCodeBlock-background); }
+.markdown-body blockquote {
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-textBlockQuote-background, transparent);
+  border-left-color: var(--vscode-textBlockQuote-border, var(--vscode-panel-border));
+}
+.markdown-body table th,
+.markdown-body table td { border-color: var(--vscode-panel-border); }
+.markdown-body hr,
+.markdown-body :is(h1, h2) { border-bottom-color: var(--vscode-panel-border); }
+.markdown-body code { border-radius: 4px; }
 
 /* Code-mode submissions still need a monospace source display. */
 .turn-section:has(> summary > .turn-mode[data-mode="code"]) .dext-source {

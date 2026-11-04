@@ -192,6 +192,20 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.composer-menu \{[\s\S]*?min-width: 0;[\s\S]*?flex: 0 1 auto;/);
   });
 
+  it("centers wide and full-screen hosts on one shared canvas width", async () => {
+    const css = await source("media/styles.css");
+    // Widening used to do two different things: below 1200px the canvas filled
+    // the host, and above it #dext-main snapped to a fixed 888px column. Both
+    // states now share one centered 1200px canvas, while #dext-main itself
+    // stays fluid so nothing narrows as the host grows.
+    expect(css).toMatch(/\.app-shell \{[\s\S]*?max-width: 1200px;[\s\S]*?margin-inline: auto;/);
+    expect(css).toMatch(/#dext-main \{\r?\n {2}flex: 1 1 auto;/);
+    expect(css).not.toMatch(/#dext-main \{[^}]*?width:/);
+    expect(css).not.toContain("width: min(888px");
+    expect(css).not.toContain("width: min(1120px");
+    expect(css).toMatch(/#result-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
+  });
+
   it("offers Plan beside Agent, Ask, and Code and lands its result as a document", async () => {
     const main = await source("src/webview/main.ts");
     const sidebar = await source("src/app/sidebarProvider.ts");
@@ -498,7 +512,9 @@ describe("sidebar panel layout", () => {
 
   it("keeps the composer visible while allowing the history, editor, and attachments to shrink", async () => {
     const css = await source("media/styles.css");
-    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: clamp\(112px, 24vh, 240px\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: calc\(100% - 44px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
+    // The composer height is a shared token; the short-viewport rule below still overrides it.
+    expect(css).toMatch(/--dext-composer-height: clamp\(96px, 12vh, 128px\);/);
+    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: var\(--dext-composer-height\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: calc\(100% - 44px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
     expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 0 1 var\(--input-editor-height\);/);
     expect(css).toMatch(/\.code-editor \{[\s\S]*?height: 100%;[\s\S]*?min-height: 0;[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
