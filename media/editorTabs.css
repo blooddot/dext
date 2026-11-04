@@ -594,6 +594,12 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .project-reader-prose, .project-reader-tail { min-width: 0; }
 .project-reader-figure.is-expanded { position: fixed; z-index: 1000; inset: 12px; overflow: auto; box-shadow: 0 8px 32px var(--vscode-widget-shadow); }
 .project-reader-figure.is-expanded .project-reader-canvas { max-height: calc(100vh - 170px); }
+.markdown-diagram { margin: 12px 0; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; }
+.markdown-diagram-preview { overflow: auto; text-align: center; }
+.markdown-diagram-preview > svg { display: block; height: auto; margin: 0 auto; max-width: 100%; }
+.markdown-diagram > details { margin-top: 8px; }
+.markdown-diagram > details > summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+.markdown-diagram-status { color: var(--vscode-descriptionForeground); }
 .markdown-diagram-staging { position: absolute; left: -100000px; top: 0; width: 1000px; visibility: hidden; pointer-events: none; }
 @media (max-width: 650px) {
   .project-reader { grid-template-columns: minmax(0, 1fr); gap: 20px; }

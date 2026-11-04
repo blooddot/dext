@@ -3,6 +3,7 @@ import type { ProjectTopic } from "../knowledge/projectTopics.js";
 import { projectPlaybackSteps } from "../presentation/projectDiagramPresentation.js";
 import { escapeProjectHtml as esc, readerGalleryArticle, readerIntroduction, readerTopicArticle, topicDiagrams, type ProjectReaderData } from "../presentation/projectTopicsView.js";
 import { isTrustedHostMessage } from "./archifyBridge.js";
+import { renderMarkdownDiagrams } from "../../../platform/browser/markdownDiagrams.js";
 import { renderReaderArchify, type ReaderArchifyView } from "./projectReaderArchify.js";
 
 export interface ReaderApi { postMessage(message: unknown): void; getState?(): { filters?: Record<string, string> } | undefined; setState?(state: unknown): void }
@@ -84,7 +85,7 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     else if (figure.parentElement === pane) tail.before(figure);
   };
   new ResizeObserver(dockDiagram).observe(main);
-  const renderArticle = (html: string) => { pane.replaceChildren(); article.innerHTML = html; dockDiagram(); };
+  const renderArticle = (html: string) => { pane.replaceChildren(); article.innerHTML = html; dockDiagram(); renderMarkdownDiagrams(article); };
   const exitFullscreen = (restoreFocus = true) => {
     const figure = fullscreenFigure;
     if (!figure) return;
