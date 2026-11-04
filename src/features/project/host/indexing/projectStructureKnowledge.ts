@@ -145,6 +145,18 @@ export function structureCandidates(summary: StructureSummary): StructureCandida
   })) }));
 }
 
+/** A directory is the structural prior: its files are one candidate, and only whole candidates may be joined. */
+export function directoryCandidates(summary: StructureSummary): StructureCandidate[] {
+  const graph = buildStructureGraphFromSummary(summary);
+  const byDirectory = new Map<string, StructureMember[]>();
+  for (const file of summary.modules.flatMap(module => module.members).sort((a, b) => a.path.localeCompare(b.path))) {
+    const directory = posix.dirname(file.path);
+    byDirectory.set(directory, [...(byDirectory.get(directory) ?? []), file]);
+  }
+  return [...byDirectory].map(([directory, files]) => ({ id: `candidate:${directory}`,
+    files: files.map(file => ({ ...file, consumers: structureConsumers(graph, file.path, { typeOnly: false }) })) }));
+}
+
 const label = z.string().trim().min(1).max(120);
 export const responsibilityDraftSchema = z.object({ contexts: z.array(z.object({
   canonicalName: label, purpose: z.string().trim().min(1).max(500),
@@ -179,29 +191,24 @@ export function validateEntryPoints(groups: readonly { name: string; members: re
 }
 
 /**
- * A merge is a claim the static index can support: a non-type-only import between the groups, a
- * consumer both groups share, or one package. Similar names and directories are not evidence.
+ * A merge is a claim the static index can support: a non-type-only import between the groups or a
+ * consumer both groups share. Similar names, one package and one directory are not evidence.
  */
 export function evidenceComponents(summary: StructureSummary, groups: readonly (readonly string[])[]): number[][] {
   const graph = buildStructureGraphFromSummary(summary);
-  const groupOf = new Map<string, number>(), packageOf = new Map<string, string>();
-  for (const module of summary.modules) for (const member of module.members) {
-    packageOf.set(member.path, module.package);
-  }
+  const groupOf = new Map<string, number>();
   groups.forEach((members, index) => members.forEach(path => groupOf.set(path, index)));
   const consumers = new Map<string, Set<string>>();
   for (const path of groupOf.keys()) consumers.set(path, new Set(structureConsumers(graph, path, { typeOnly: false })));
   const parent = groups.map((_, index) => index);
   const find = (index: number): number => parent[index] === index ? index : (parent[index] = find(parent[index]!));
-  const packages = groups.map(members => new Set(members.map(path => packageOf.get(path)).filter((pkg): pkg is string => pkg !== undefined)));
   const sharedConsumers = (left: number, right: number): boolean => {
     const rightConsumers = new Set(groups[right]!.flatMap(path => [...consumers.get(path) ?? []]));
     return groups[left]!.some(path => [...consumers.get(path) ?? []].some(consumer => rightConsumers.has(consumer)
       && groupOf.get(consumer) !== left && groupOf.get(consumer) !== right));
   };
   for (let left = 0; left < groups.length; left++) for (let right = left + 1; right < groups.length; right++) {
-    const connected = packages[left]!.size > 0 && [...packages[left]!].some(pkg => packages[right]!.has(pkg))
-      || sharedConsumers(left, right) || sharedConsumers(right, left)
+    const connected = sharedConsumers(left, right) || sharedConsumers(right, left)
       || groups[left]!.some(path => structureDependencies(graph, path, { typeOnly: false }).some(target => groupOf.get(target) === right))
       || groups[right]!.some(path => structureDependencies(graph, path, { typeOnly: false }).some(target => groupOf.get(target) === left));
     if (!connected) continue;
@@ -223,7 +230,7 @@ export interface StructureHierarchyNode { id: string; title: string; parentId?: 
 export interface StructureHierarchy { parents: StructureHierarchyNode[]; parentOf: Map<string, string> }
 
 /** The deepest directory that contains every file of one responsibility. */
-function commonDirectory(paths: readonly string[]): string {
+export function commonDirectory(paths: readonly string[]): string {
   const dirs = paths.map(path => posix.dirname(path)).filter(dir => dir !== ".");
   if (!dirs.length) return "";
   let common = dirs[0]!.split("/");
@@ -271,9 +278,9 @@ export function deriveStructureHierarchy(groups: readonly { id: string; paths: r
       if (folded.length > 1) entries.push({ id: idOf(child) });
       else entries.push(...folded);
     }
-    // A single-entry directory is not a hierarchy level. Only a directory that owns at least one
-    // responsibility itself becomes a parent, so plain nesting never invents a level.
-    if (entries.length < 2 || !node.dir || node.direct.length === 0) return entries;
+    // A single-entry directory is not a hierarchy level; two or more entries make it a parent, whether
+    // they are its own modules or its children's.
+    if (entries.length < 2 || !node.dir) return entries;
     const id = idOf(node);
     for (const entry of entries) {
       if (entry.group !== undefined) parentOf.set(groups[entry.group]!.id, id);

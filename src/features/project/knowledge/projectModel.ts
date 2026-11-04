@@ -70,7 +70,7 @@ export function projectModelIntent(model: ProjectModel, documents: ReadonlyMap<s
   const outgoing = (id: string, kind: string) => model.relations.filter(edge => edge.from === id && edge.kind === kind).map(edge => edge.to);
   const incoming = (id: string, kind: string) => model.relations.filter(edge => edge.to === id && edge.kind === kind).map(edge => edge.from);
   const domain = (node: ProjectModel["nodes"][number]) => {
-    const allowed: Record<string, string[]> = { context: ["structureHash", "detail", "responsibilities", "moduleIds", "entryPoints", "previousContextIds", "uncertainties"], capability: ["outcomes", "moduleIds"], term: ["aliases", "forbiddenNames"], flow: ["trigger", "outcomes"] };
+    const allowed: Record<string, string[]> = { context: ["structureHash", "detail", "responsibilities", "moduleIds", "entryPoints", "previousContextIds", "uncertainties"], module: ["overview"], capability: ["outcomes", "moduleIds"], term: ["aliases", "forbiddenNames"], flow: ["trigger", "outcomes"] };
     const properties = Object.fromEntries(Object.entries(node.properties).filter(([key]) => allowed[node.kind]?.includes(key)));
     return { ...properties, id: node.id, canonicalName: node.canonicalName, displayName: node.title, origin: node.origin, review: node.review, freshness: node.freshness, confidence: node.confidence, evidence: node.evidence };
   };

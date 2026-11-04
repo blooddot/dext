@@ -2,7 +2,7 @@ import { z } from "zod";
 import { projectModelRelationSchema, projectModelSchema, projectModelNodeSchema, type ProjectModel, type ProjectModelNode, type ProjectModelRelation } from "../contracts/projectModel.js";
 import { projectC4Schema } from "../contracts/projectIntent.js";
 import type { StructureSummary } from "./indexing/projectStructure.js";
-import { structureCandidates, deriveStructureHierarchy, mergeEvidence, validateEntryPoints, validateOwnership, validateStructureHierarchy, responsibilityDraftSchema, responsibilityMergeSchema, type StructureCandidate } from "./indexing/projectStructureKnowledge.js";
+import { commonDirectory, directoryCandidates, deriveStructureHierarchy, mergeEvidence, validateEntryPoints, validateOwnership, validateStructureHierarchy, responsibilityDraftSchema, responsibilityMergeSchema, type StructureCandidate } from "./indexing/projectStructureKnowledge.js";
 import type { ProjectInitializationOutput, ProjectInitializationProgressListener } from "../contracts/lifecycle.js";
 import { parseProjectModel, projectModelIntent, validateProjectModel } from "../knowledge/projectModel.js";
 import { reconcileNativeProject } from "../knowledge/projectModelEvolution.js";
@@ -10,6 +10,7 @@ import { jsonCandidates } from "../../../shared/protocol/resultBoundary.js";
 import { compareProjectEvidencePaths, PROJECT_BUILD_CONFIG_PATH, type ProjectAiProvider } from "./generation/projectAiGeneration.js";
 import { projectModelQuality, withProjectQuality } from "./generation/projectModelQuality.js";
 import { type ProjectStore, projectContentHash, type ProjectFileHost } from "./persistence/projectStore.js";
+import type { ProjectDocumentUpdate } from "./persistence/projectModelStore.js";
 import { commitProjectMigration } from "./persistence/projectMigration.js";
 
 export type ProjectBootstrapRoute = "existing" | "legacy" | "documents" | "code" | "empty";
@@ -26,7 +27,7 @@ const DEFAULT_BUDGET: ProjectBootstrapBudget = { files: 600, chars: 600_000, fil
 const STAGE_CHARS = 30_000;
 
 /** Bumped with the stage plan: a checkpoint from another plan must not be resumed. */
-const PROMPT_VERSION = "project-bootstrap-12";
+const PROMPT_VERSION = "project-bootstrap-14";
 
 /** Guidance and build configuration define boundaries, so they are read before documentation and source. */
 const compareBootstrapPaths = (left: string, right: string): number =>
@@ -63,7 +64,9 @@ const guidancePath = (path: string): boolean => durable(path)
 /** One bounded model call. `module` marks a stage whose node identity and edges are already decided. */
 interface BootstrapStage { instructions: string; sources: Map<string, string>; module?: { id: string; paths: string[] }; c4?: true }
 
-const ROOT_STAGE = "Draft the graph root only: return exactly {\"project\":{\"title\":...,\"body\":...},\"architecture\":{\"title\":...,\"body\":...}}. The project states purpose, scope and non-goals; architecture states module boundaries, dependency edges and invariants. The host owns node ids, kinds and relationships. Create no module nodes yet; the directory list below is an overview, not a node per directory. Write each body as Markdown with '## Responsibility' (what it owns), '## Design' (the decisions and invariants behind the code) and '## Boundary' ('- Allowed:' and '- Forbidden:' dependencies).";
+/** A flow is read faster as a diagram than as a sentence describing wires; both the file and the reader render Mermaid. */
+const DIAGRAM_GUIDANCE = "When a body explains how parts cooperate, show that one flow as a single fenced mermaid block (```mermaid, flowchart LR, short labels) instead of describing the wires in prose; omit it when there is no flow.";
+const ROOT_STAGE = "Draft the graph root only: return exactly {\"project\":{\"title\":...,\"body\":...},\"architecture\":{\"title\":...,\"body\":...}}. The project states purpose, scope and non-goals; architecture states module boundaries, dependency edges and invariants. The host owns node ids, kinds and relationships. Create no module nodes yet; the directory list below is an overview, not a node per directory. Write each body as Markdown with '## Responsibility' (what it owns), '## Design' (the decisions and invariants behind the code) and '## Boundary' ('- Allowed:' and '- Forbidden:' dependencies). " + DIAGRAM_GUIDANCE;
 const MODEL_GUIDANCE = "Build a native Project normative model: goals, then architecture, then modules/contracts and their explicit relationships. Do not mirror the directory tree. Read guidance before specifications, configuration and source evidence. Third-party sources are supporting evidence. All generated content is draft. Do not create Plan nodes. Adopt durable documents in place rather than copying them. Return a JSON object matching the supplied schema. Evidence outside this bounded package is unknown.";
 const PROSE_GUIDANCE = "Explain one responsibility the indexed structure already decided: what it owns and why it is shaped this way. Read guidance before source. All generated content is draft. Never invent module ids, files or relationships; the index owns those.";
 /**
@@ -72,10 +75,10 @@ const PROSE_GUIDANCE = "Explain one responsibility the indexed structure already
  */
 const LABEL_LANGUAGE = "Every 'title' is a short English label of 2-5 words that already exists in the project, never a sentence and never a directory path. Prefer the code's own name for the responsibility (package, module, public type or entry symbol): when the interface calls it something else, the code name still wins the title and the interface name is documented in the body. Use the interface name only when the code has none, and never invent a product name, so a project without a UI is still mapped by its code name. Every body is written in Simplified Chinese.";
 const NAME_MAPPING = "Record the mapping once, in the first '## Responsibility' bullet of a node body or in an area 'description', as '**Names**: <interface name> → <public symbol or entry file>' (without an interface: '<code name> → <files>'); the title is the code name on that line, so the interface label, the code symbol and this record all name the same responsibility.";
-const PROSE_STAGE = "Return exactly {\"title\": \"<responsibility name>\", \"body\": \"<Markdown with ## Responsibility, ## Design and ## Boundary ('- Allowed:' / '- Forbidden:')>\"}. Name the responsibility, never the directory.";
+const PROSE_STAGE = `Return exactly {"title": "<responsibility name>", "body": "<Markdown with ## Responsibility, ## Design and ## Boundary ('- Allowed:' / '- Forbidden:')>"}. Name the responsibility, never the directory. ${DIAGRAM_GUIDANCE}`;
 /** Candidates only schedule reads; the AI proposes responsibilities, the index decides what may merge. */
-const RESPONSIBILITY_GUIDANCE = "Identify developer-facing responsibilities from the complete file facts below. Return exactly {\"contexts\":[{\"canonicalName\",\"purpose\",\"uncertainties\",\"sourceFiles\",\"entryPoints\"}]}. Candidate groups are scheduling hints from names and static dependencies, NOT knowledge modules: split unrelated files inside a candidate and merge related files across candidates when the facts support it. Assign EVERY supplied path to exactly one context. A helper, contract or single function is not automatically its own topic; keep supporting code with the feature it serves. Do not merge unrelated files merely because they share a directory, a format or a suffix. Name responsibilities, never directories. Put open questions in uncertainties, not in the purpose.";
-const RESPONSIBILITY_MERGE_GUIDANCE = "Consolidate provisional responsibility outlines from different evidence batches. Return exactly {\"contexts\":[{\"canonicalName\",\"purpose\",\"uncertainties\",\"sourceFiles\",\"entryPoints\"}]}. Merge outlines only when they describe one coherent responsibility that a developer would study together; keep distinct capabilities separate. You may move a file between outlines when its declared consumers or dependencies support it. Assign EVERY supplied path to exactly one context and never claim a path outside them.";
+const RESPONSIBILITY_GUIDANCE = "Identify developer-facing responsibilities from the complete file facts below. Return exactly {\"contexts\":[{\"canonicalName\",\"purpose\",\"uncertainties\",\"sourceFiles\",\"entryPoints\"}]}. Each candidate is the complete file list of one directory and is a module boundary: keep every candidate whole, never split one, and merge candidates only when their files belong to one responsibility. Assign EVERY supplied path to exactly one context. A helper, contract or single function is not automatically its own topic; keep supporting code with the feature it serves. Name responsibilities, never directories. Put open questions in uncertainties, not in the purpose.";
+const RESPONSIBILITY_MERGE_GUIDANCE = "Consolidate provisional responsibility outlines from different evidence batches. Return exactly {\"contexts\":[{\"canonicalName\",\"purpose\",\"uncertainties\",\"sourceFiles\",\"entryPoints\"}]}. Merge outlines only when they describe one coherent responsibility that a developer would study together; keep distinct capabilities separate. Each outline keeps whole candidates: never move a single file between outlines. Assign EVERY supplied path to exactly one context and never claim a path outside them.";
 const RESPONSIBILITY_FALLBACK = "The proposal was rejected twice, so the candidate boundaries are kept as temporary responsibilities; the run reports them for review.";
 const responsibilitySchema = z.object({ id: z.string().min(1), name: z.string().trim().min(1).max(200), purpose: z.string().max(1000).default(""),
   paths: z.array(z.string().min(1)).min(1), entryPoints: z.array(z.string().min(1)).default([]), uncertainties: z.array(z.string().min(1)).default([]) }).strict();
@@ -158,6 +161,50 @@ function hierarchyNodes(hierarchy: ReturnType<typeof deriveStructureHierarchy>, 
       body: { kind: "inline", text: `## Responsibility\n\nDirectory grouping for ${members.length} module(s): ${members.join(", ")}.\n\n## Boundary\n\n- Allowed: the modules it contains.\n- Forbidden: owning source files directly; every file has one leaf owner.` },
       paths: [], properties: { overview: true } });
   });
+}
+
+const KNOWLEDGE_DIRECTORY = ".dext/project/knowledge";
+
+/** One Markdown file per node, laid out like the module tree so the folder reads like the model. */
+function knowledgePath(directory: string, name: string, used: Set<string>): string {
+  const segments = directory.split("/").filter(segment => segment && segment !== "." && segment !== "..")
+    .map(segment => segment.replace(/[^A-Za-z0-9._-]+/g, "-"));
+  // A node named after its own directory (`src`) does not repeat the segment.
+  const stem = `${KNOWLEDGE_DIRECTORY}/${(segments.at(-1) === name ? segments : [...segments, name]).join("/")}`;
+  let path = `${stem}.md`, suffix = 1;
+  while (used.has(path.toLowerCase())) path = `${stem}-${++suffix}.md`;
+  used.add(path.toLowerCase());
+  return path;
+}
+
+/**
+ * Generated prose becomes a workspace Markdown file and the node keeps that file's hash: a person edits
+ * the body in an editor, and one file still owns it. An adopted document keeps its own path.
+ */
+async function knowledgeBodies(model: ProjectModel, previous: ReadonlyMap<string, string>, directories: ReadonlyMap<string, string>,
+  read: (path: string) => Promise<string | undefined>): Promise<{ nodes: ProjectModelNode[]; documents: ProjectDocumentUpdate[]; texts: Map<string, string> }> {
+  const used = new Set<string>(), documents: ProjectDocumentUpdate[] = [], texts = new Map<string, string>(), nodes: ProjectModelNode[] = [];
+  for (const node of model.nodes) {
+    if (node.body.kind === "document") {
+      used.add(node.body.path.toLowerCase());
+      const text = await read(node.body.path);
+      if (text === undefined) { nodes.push(node); continue; }
+      texts.set(node.body.path, text);
+      const contentHash = projectContentHash(text);
+      nodes.push(contentHash === node.body.contentHash ? node : { ...node, body: { ...node.body, contentHash } });
+      continue;
+    }
+    const name = node.kind === "project" || node.kind === "architecture" ? node.kind : slug(node.title) || slug(node.id) || "node";
+    // A renamed module keeps its file, so an edit and the folder tree stay where they were.
+    const kept = previous.get(node.id);
+    const path = kept && kept.startsWith(`${KNOWLEDGE_DIRECTORY}/`) && !used.has(kept.toLowerCase()) ? kept : knowledgePath(directories.get(node.id) ?? commonDirectory(node.paths), name, used);
+    used.add(path.toLowerCase());
+    const content = node.body.text, existing = await read(path);
+    texts.set(path, content);
+    nodes.push({ ...node, body: { kind: "document", path, contentHash: projectContentHash(content) } });
+    if (existing !== content) documents.push({ path, beforeHash: existing === undefined ? null : projectContentHash(existing), content });
+  }
+  return { nodes, documents, texts };
 }
 
 
@@ -364,7 +411,7 @@ const stageEvidence = (stage: BootstrapStage) => [...stage.sources].map(([path, 
  */
 function reusableModule(previous: ProjectModel | undefined, stage: BootstrapStage): ProjectModelNode | undefined {
   if (!previous || !stage.module) return undefined;
-  const node = previous.nodes.find((candidate) => candidate.id === stage.module!.id && candidate.body.kind === "inline");
+  const node = previous.nodes.find((candidate) => candidate.id === stage.module!.id);
   if (!node?.evidence.length || node.evidence.length !== stage.sources.size) return undefined;
   return node.evidence.every((entry) => stage.sources.has(entry.path) && projectContentHash(stage.sources.get(entry.path)!) === entry.contentHash) ? node : undefined;
 }
@@ -429,7 +476,7 @@ export async function bootstrapProject(options: {
   const drafting = route === "code" || route === "existing" && options.paths.some(path => SOURCE_FILE.test(path));
   const structure = drafting ? await options.structure?.().catch(() => undefined) : undefined;
   // Candidate groups schedule reads only; files outside the read budget cannot be explained or owned.
-  const candidates: StructureCandidate[] = structure ? structureCandidates(structure)
+  const candidates: StructureCandidate[] = structure ? directoryCandidates(structure)
     .map(candidate => ({ ...candidate, files: candidate.files.filter(file => sources.has(file.path)) }))
     .filter(candidate => candidate.files.length) : [];
   const structured = Boolean(drafting && structure && candidates.length);
@@ -501,16 +548,28 @@ export async function bootstrapProject(options: {
         };
         const candidateOf = new Map<string, number>();
         candidates.forEach((candidate, index) => candidate.files.forEach(file => candidateOf.set(file.path, index)));
-        /** Keep candidate boundaries when a proposed merge has no static evidence. */
+        /** Keep candidate boundaries when a proposal splits a directory or merges without static evidence. */
         const gated = (proposals: BootstrapResponsibility[], fallback: BootstrapResponsibility[]): BootstrapResponsibility[] => {
-          const accepted: BootstrapResponsibility[] = [];
+          const accepted: BootstrapResponsibility[] = [], kept = new Set<number>();
+          // A rejected proposal falls back to its whole candidates, and a candidate is kept at most once.
+          const keep = (indices: readonly number[]) => { for (const index of indices) {
+            if (kept.has(index)) continue;
+            kept.add(index);
+            const item = fallback.find(entry => candidates[index]!.files.some(file => entry.paths.includes(file.path)));
+            if (item) accepted.push(item);
+          } };
           for (const proposal of proposals) {
             const indices = [...new Set(proposal.paths.map(path => candidateOf.get(path)).filter((index): index is number => index !== undefined))];
+            if (indices.some(index => candidates[index]!.files.some(file => !proposal.paths.includes(file.path)))) {
+              boundaryNotes.push(`split rejected, one directory stays one module: ${proposal.name}`);
+              keep(indices);
+              continue;
+            }
             if (indices.length < 2) { accepted.push(proposal); continue; }
-            const groups = indices.map(index => candidates[index]!.files.map(file => file.path).filter(path => proposal.paths.includes(path)));
+            const groups = indices.map(index => candidates[index]!.files.map(file => file.path));
             if (mergeEvidence(structure!, groups).allowed) { accepted.push(proposal); continue; }
             boundaryNotes.push(`merge rejected without structural evidence: ${proposal.name}`);
-            accepted.push(...fallback.filter(item => item.paths.some(path => proposal.paths.includes(path))));
+            keep(indices);
           }
           return accepted;
         };
@@ -697,7 +756,15 @@ export async function bootstrapProject(options: {
     const current = await (host.readFileStrict ? host.readFileStrict(path) : host.readFile(path));
     if (current !== text) throw new Error(`Project source changed during initialization: ${path}`);
   }
-  const merged = reconcileNativeProject(candidate, model);
+  // A knowledge file whose bytes no longer match its node was edited by a person, so it is the newest
+  // body: generation keeps that prose instead of replacing it.
+  const edited = new Set<string>();
+  for (const node of model?.nodes ?? []) if (node.body.kind === "document") {
+    const text = await (host.readFileStrict ? host.readFileStrict(node.body.path) : host.readFile(node.body.path));
+    if (text !== undefined && projectContentHash(text) !== node.body.contentHash) edited.add(node.id);
+  }
+  const previous = model && edited.size ? { ...model, nodes: model.nodes.map(node => edited.has(node.id) ? { ...node, review: "edited" as const } : node) } : model;
+  const merged = reconcileNativeProject(candidate, previous);
   // The fresh index decides file ownership first; a node only the older model still knows loses its files to it.
   const owners = new Set<string>(), stale = new Set<string>();
   for (const node of new Map([...candidate.nodes, ...merged.nodes].filter(item => item.kind === "module").map(item => [item.id, item] as const)).values()) {
@@ -723,10 +790,30 @@ export async function bootstrapProject(options: {
       node.properties = { ...node.properties, moduleIds: ((node.properties.moduleIds as string[] | undefined) ?? []).filter(id => !stale.has(id)) };
     dropped.push(...stale);
   }
+  /** Where each node's Markdown lives, mirroring the directory it owns. */
+  const directories = new Map<string, string>();
+  // Directory parents are derived, so they are rebuilt from the final module set: a module reconciliation
+  // carried over from the saved model would otherwise hang off the root and keep a stale grouping body.
+  if (structured) {
+    const modules = merged.nodes.filter(node => node.kind === "module" && node.paths.length);
+    const hierarchy = deriveStructureHierarchy(modules.map(node => ({ id: node.id, paths: node.paths })));
+    const titles = new Map(merged.nodes.filter(node => node.kind === "module").map(node => [node.id, node.title]));
+    const parents = new Map(hierarchyNodes(hierarchy, titles).map(node => [node.id, node]));
+    for (const parent of hierarchy.parents) directories.set(parent.id, parent.dir);
+    const grouping = (node: ProjectModelNode) => node.kind === "module" && !node.paths.length && node.properties.overview === true && node.review === "draft";
+    merged.nodes = merged.nodes.filter(node => !grouping(node) || parents.has(node.id)).map(node => grouping(node) ? parents.get(node.id)! : node);
+    for (const [id, node] of parents) if (!merged.nodes.some(item => item.id === id)) merged.nodes.push(node);
+    merged.relations = [...structureRelations(structure!, merged.nodes, hierarchy.parentOf), ...c4Relations(merged)];
+  }
   progress({ phase: "saving", fraction: 0, message: dropped.length ? `Validating the Project model and its baseline… dropped ${dropped.length} unresolved entry(ies) from the draft.` : "Validating the Project model and its baseline…" });
-  const qualityView = projectModelIntent(merged, sources);
-  const quality = projectModelQuality(qualityView, structure?.modules.flatMap(module => module.members) ?? []);
-  const next = await store.updateProject(withProjectQuality(merged, quality), model?.revision ?? null);
+  for (const node of merged.nodes) if (!directories.has(node.id)) directories.set(node.id, commonDirectory(node.paths));
+  // A generated body is a workspace Markdown file; an adopted document keeps its own path.
+  const previousPaths = new Map((model?.nodes ?? []).flatMap(node => node.body.kind === "document" ? [[node.id, node.body.path] as const] : []));
+  const bodies = drafting ? await knowledgeBodies(merged, previousPaths, directories, path => host.readFileStrict ? host.readFileStrict(path) : host.readFile(path)) : undefined;
+  const finalModel = bodies ? { ...merged, nodes: bodies.nodes } : merged;
+  const texts = bodies?.texts ?? sources;
+  const quality = projectModelQuality(projectModelIntent(finalModel, texts), structure?.modules.flatMap(module => module.members) ?? []);
+  const next = await store.updateProject(withProjectQuality(finalModel, quality), model?.revision ?? null, bodies?.documents ?? []);
   await host.writeFile(PROJECT_BOOTSTRAP_CHECKPOINT_PATH, JSON.stringify({ version: 1, route, fingerprint, stage: "committed", completed, candidate: next }));
-  return { model: next, intent: projectModelIntent(next, sources) };
+  return { model: next, intent: projectModelIntent(next, texts) };
 }

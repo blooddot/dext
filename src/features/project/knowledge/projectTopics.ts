@@ -24,6 +24,8 @@ export interface ProjectTopic {
   sourceFiles?: string[];
   /** Saved module/context parent; a reading tree, not an inferred grouping. */
   parentId?: string;
+  /** A directory grouping node the index derived; it owns no source files. */
+  overview?: boolean;
   area?: { id: string; title: string; description: string };
   uncertainties?: string[];
   qualityWarnings?: string[];
@@ -106,7 +108,7 @@ export function buildProjectTopics(intent: ProjectIntent, diagrams: readonly Pro
         ...(area ? { area: { id: area.id, title: area.displayName ?? area.canonicalName, description: area.description } } : {}),
         description: context.purpose, responsibilities: context.responsibilities,
         entryPoints: context.entryPoints, ...(context.sourceFiles ? { sourceFiles: context.sourceFiles } : {}),
-        ...(context.parentId ? { parentId: context.parentId } : {}), steps: [], constraints: scoped.map((item) => item.statement),
+        ...(context.parentId ? { parentId: context.parentId } : {}), ...(context.overview ? { overview: true } : {}), steps: [], constraints: scoped.map((item) => item.statement),
         evidence: unique([...context.evidence, ...scoped.flatMap((item) => item.evidence), ...collaborators.flatMap((item) => item.evidence), ...(context.detail === "outline" ? [] : diagramEvidence([context.id]))]),
         diagrams: relatedDiagrams([context.id]), review: context.review,
         sections: [section], ...(context.detail !== "outline" ? { diagram } : {}),

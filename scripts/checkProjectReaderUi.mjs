@@ -323,7 +323,6 @@ try {
       assert.equal(await evaluate(`document.querySelector('[data-reader-article] h2').textContent`), 'Execution kernel');
       assert.equal(await evaluate(`document.querySelector('[data-reader-area="area.execution"]').open`), true, 'navigation opens the selected module area');
       assert.equal(await evaluate(`document.querySelector('[data-topic-node="runtime"] [data-topic-children]')?.hidden`), false, 'selecting a child opens its ancestor group');
-      assert.equal(await evaluate(`document.querySelector('[data-topic-review]')?.hidden`), false, 'a draft module says its structure needs review');
       await click('.project-reader-directory [data-reader-topic="runtime"]');
       await wait(`document.querySelector('[data-reader-article] h2')?.textContent === 'Runtime modules'`, 'parent overview');
       assert.equal(await evaluate(`!!document.querySelector('[data-reader-article] [data-reader-topic="kernel"]')`), true, 'a parent overview links to its saved children');

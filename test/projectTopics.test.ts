@@ -111,7 +111,7 @@ describe("Project topics", () => {
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
   });
-  it("renders a saved module tree, its overview children and the pending-review marker", () => {
+  it("renders a saved module tree and its overview children", () => {
     const saved = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" },
       contexts: [
         { id: "ctx.group", canonicalName: "Runtime modules", purpose: "Groups executable modules", responsibilities: [], entryPoints: [], evidence: [] },
@@ -126,7 +126,32 @@ describe("Project topics", () => {
     expect(html).toContain('data-reader-topic="ctx.code"');
     // The parent article is a readable overview that links to its saved children.
     expect(html).toContain("Grouped modules · 1");
-    expect(html).toContain("data-topic-review");
-    expect(html).toContain("Draft structure");
+  });
+  it("shows directory groupings at the top level and marks them apart from responsibilities", () => {
+    const saved = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [
+      { id: "ctx.src", canonicalName: "src", overview: true, responsibilities: [], entryPoints: [], evidence: [] },
+      { id: "ctx.features", canonicalName: "features", overview: true, parentId: "ctx.src", responsibilities: [], entryPoints: [], evidence: [] },
+      { id: "ctx.chat", canonicalName: "chat", overview: true, parentId: "ctx.features", responsibilities: [], entryPoints: [], evidence: [] },
+      { id: "ctx.turn", canonicalName: "Turn execution", parentId: "ctx.chat", responsibilities: [], entryPoints: [], evidence: [] }
+    ] });
+    const topics = buildProjectTopics(saved);
+    expect(topics.find(topic => topic.id === "ctx.chat")?.overview).toBe(true);
+    const html = renderProjectTopics(topics);
+    // src and features only hold other groupings, so they are not indentation levels.
+    expect(html).not.toContain('data-topic-node="ctx.src"');
+    expect(html).not.toContain('data-topic-node="ctx.features"');
+    expect(html).toContain('data-topic-children="ctx.chat"');
+    expect(html).toContain('<small class="project-reader-review">Directory grouping</small>');
+  });
+  it("keeps a grouping that also holds modules instead of lifting them to the top level", () => {
+    const saved = projectIntentSchema.parse({ schemaVersion: 1, updatedAt: 1, brief: { name: "Example" }, contexts: [
+      { id: "ctx.project", canonicalName: "project", overview: true, responsibilities: [], entryPoints: [], evidence: [] },
+      { id: "ctx.host", canonicalName: "host", overview: true, parentId: "ctx.project", responsibilities: [], entryPoints: [], evidence: [] },
+      { id: "ctx.store", canonicalName: "ProjectStore", parentId: "ctx.project", responsibilities: [], entryPoints: [], evidence: [] },
+      { id: "ctx.fs", canonicalName: "VscodeProjectFileHost", parentId: "ctx.host", responsibilities: [], entryPoints: [], evidence: [] }
+    ] });
+    const html = renderProjectTopics(buildProjectTopics(saved));
+    expect(html).toContain('data-topic-children="ctx.project"');
+    expect(html.indexOf('data-topic-node="ctx.store"')).toBeGreaterThan(html.indexOf('data-topic-children="ctx.project"'));
   });
 });

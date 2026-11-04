@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { attachProjectStructure, buildProjectEvidencePackage, ProjectAiGenerationService, type ProjectAiRequest } from "../src/features/project/host/generation/projectAiGeneration.js";
 import { buildStructureIndex, structureCacheSchema } from "../src/features/project/host/indexing/projectStructure.js";
 import { projectModelCheckpointSchema, type ProjectInitializationCheckpointStore, type ProjectModelCheckpoint } from "../src/features/project/host/generation/projectModelCheckpoint.js";
-import { structureCandidates, deriveStructureHierarchy, mergeEvidence, validateEntryPoints, validateOwnership, validateStructureHierarchy, type StructureCandidate } from "../src/features/project/host/indexing/projectStructureKnowledge.js";
+import { structureCandidates, directoryCandidates, deriveStructureHierarchy, mergeEvidence, validateEntryPoints, validateOwnership, validateStructureHierarchy, type StructureCandidate } from "../src/features/project/host/indexing/projectStructureKnowledge.js";
 import type { StructureSummary } from "../src/features/project/host/indexing/projectStructure.js";
 import { buildProjectTopics } from "../src/features/project/knowledge/projectTopics.js";
 
@@ -621,9 +621,17 @@ describe("structure evidence and directory hierarchy", () => {
     ]);
     const related = mergeEvidence(summary, [["src/core/a.ts"], ["src/ui/b.ts"]]);
     expect(related.allowed).toBe(true);
-    // Same package is the only remaining reason when no edge exists.
-    expect(mergeEvidence(summary, [["src/ui/b.ts"], ["src/other/c.ts"]]).allowed).toBe(true);
+    // One package is not evidence: only an import edge or a shared consumer joins two groups.
+    expect(mergeEvidence(summary, [["src/ui/b.ts"], ["src/other/c.ts"]])).toMatchObject({ allowed: false, components: [[0], [1]] });
     expect(mergeEvidence(summary, [["src/other/c.ts"], ["lib/d.ts"]])).toMatchObject({ allowed: false, components: [[0], [1]] });
+  });
+  it("takes one candidate per directory so a directory stays one module", () => {
+    const summary = structureSummary([
+      structureModule("core", "app", [structureMember("src/core/a.ts"), structureMember("src/core/b.ts", [{ specifier: "./a", to: "src/core/a.ts" }])]),
+      structureModule("ui", "app", [structureMember("src/ui/c.ts")])
+    ]);
+    expect(directoryCandidates(summary).map(candidate => candidate.files.map(file => file.path)))
+      .toEqual([["src/core/a.ts", "src/core/b.ts"], ["src/ui/c.ts"]]);
   });
   it("does not treat a type-only import or a shared name as shared responsibility", () => {
     const summary = structureSummary([
@@ -647,7 +655,7 @@ describe("structure evidence and directory hierarchy", () => {
     expect(mergeEvidence(summary, [["src/core/a.ts"], ["src/ui/b.ts"]]).allowed).toBe(true);
     expect(mergeEvidence(split, [["src/core/a.ts"], ["src/ui/b.ts"]])).toMatchObject({ allowed: true, components: [[0, 1]] });
   });
-  it("folds one responsibility per directory and creates a parent only where responsibilities split", () => {
+  it("folds one entry per directory and makes a branching directory the parent", () => {
     const single = deriveStructureHierarchy([
       { id: "module:src-core-a-ts", paths: ["src/core/a.ts"] },
       { id: "module:src-core-b-ts", paths: ["src/core/b.ts"] }
@@ -662,9 +670,11 @@ describe("structure evidence and directory hierarchy", () => {
       { id: "module:src-shared-d-ts", paths: ["src/shared/d.ts"] }
     ]);
     expect(nested.parents.map(parent => [parent.id, parent.dir, parent.parentId])).toEqual([
-      ["module:src-core", "src/core", undefined]
+      ["module:src-core", "src/core", "module:src"],
+      ["module:src", "src", undefined]
     ]);
-    expect(nested.parentOf.get("module:src-ui-c-ts")).toBeUndefined();
+    // Two entries in src/core made its parent; the single-module directories hang under src.
+    expect(nested.parentOf.get("module:src-ui-c-ts")).toBe("module:src");
     // A cross-directory merge gets the nearest common directory, not one of its members' directories.
     const merged = deriveStructureHierarchy([
       { id: "module:src-core-a-ts", paths: ["src/core/a.ts", "src/ui/b.ts"] },

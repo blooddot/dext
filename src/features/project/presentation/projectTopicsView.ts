@@ -50,12 +50,11 @@ export function readerTopicArticle(topic: ProjectTopic, data: ProjectReaderData)
   // and narrow editors keep this reading order.
   const steps = topic.analysisState !== "outline" && (topic.kind === "flow" || topic.diagram?.metadata?.topicAnalysis === 1) && sections.length
     ? `<div class="project-reader-steps"><h3>${topic.kind === "flow" ? "Follow the flow" : "Inside this module"}</h3>${sections.map((section, index) => `<section class="project-reader-step" data-reader-section="${esc(section.id)}"><button type="button" data-reader-step="${esc(section.id)}"><span>${index + 1}</span>${esc(section.title)}</button>${section.description ? `<div class="project-markdown">${renderProjectMarkdown(section.description)}</div>` : ""}</section>`).join("")}</div>` : "";
-  return `<div class="project-reader-prose">${crumbs}<header class="project-reader-heading">${topic.area ? `<p class="project-reader-kind">${esc(topic.area.title)}</p>${topic.area.description ? `<div class="project-help project-reader-area-note">${renderProjectMarkdown(topic.area.description)}</div>` : ""}` : ""}<p class="project-reader-kind">${topic.kind === "flow" ? "How it works" : topic.kind === "structure" ? "Structure map" : topic.kind === "types" ? "Type map" : topic.kind === "system_context" ? "System context · C4 level 1" : topic.kind === "containers" ? "Runtime boundaries · C4 level 2" : "Responsibility boundary"}</p><h2>${esc(topic.title)}</h2><div class="project-markdown" data-reader-section="${esc(topic.id)}">${renderProjectMarkdown(topic.description)}</div>`
+  return `<div class="project-reader-prose">${crumbs}<header class="project-reader-heading">${topic.area ? `<p class="project-reader-kind">${esc(topic.area.title)}</p>${topic.area.description ? `<div class="project-help project-reader-area-note">${renderProjectMarkdown(topic.area.description)}</div>` : ""}` : ""}<p class="project-reader-kind">${topic.kind === "flow" ? "How it works" : topic.kind === "structure" ? "Structure map" : topic.kind === "types" ? "Type map" : topic.kind === "system_context" ? "System context · C4 level 1" : topic.kind === "containers" ? "Runtime boundaries · C4 level 2" : topic.overview ? "Directory grouping" : "Responsibility boundary"}</p><h2>${esc(topic.title)}</h2><div class="project-markdown" data-reader-section="${esc(topic.id)}">${renderProjectMarkdown(topic.description)}</div>`
     + `<button type="button" data-project-norm="${esc(topic.id)}">Edit this norm</button>`
     + (topic.kind === "context" ? ` <button type="button" data-project-plan="${esc(topic.id)}">Plan a change</button>` : "")
     + `<p data-topic-check="${esc(topic.id)}" class="project-reader-warning"${warning ? "" : " hidden"}>${warning ? "Sources changed or disappeared. This explanation and its diagrams need review." : ""}</p></header>`
     + (topic.kind === "context" || topic.kind === "flow" ? `<section class="project-reader-analysis"><p data-reader-analysis-state>${topic.analysisState === "outline" ? "Not analyzed · module outline only" : warning ? "Needs update · saved analysis remains available" : "Generated · saved explanation"}</p><button type="button" data-topic-diagram="${esc(topic.id)}">${topic.analysisState === "outline" ? "Analyze this module" : "Update module analysis"}</button><p class="project-help">Read this module's sources to generate its explanation and diagram together. Selecting a module does not start AI.</p></section>` : "")
-    + (topic.review === "draft" ? '<p class="project-reader-warning" data-topic-review>Draft structure · this boundary still needs review.</p>' : "")
     // Review signals belong to the module they question, above its diagram rather than below it.
     + (topic.qualityIssues?.length ? renderProjectQuality(topic.qualityIssues, topic) : (topic.qualityWarnings?.length ? '<details class="project-reader-warning" open><summary>Review warnings' + qualityCopyButton('Copy', topic.qualityWarnings.join('\n\n'), 'Review warnings', topic.title) + '</summary>' + list(topic.qualityWarnings) + '</details>' : ''))
     + `</div>`
@@ -107,12 +106,20 @@ export function renderProjectTopics(topics: readonly ProjectTopic[], checks: rea
     const known = new Set(entries.map((topic) => topic.id));
     const children = new Map<string, ProjectTopic[]>();
     for (const topic of entries) if (topic.parentId && known.has(topic.parentId)) children.set(topic.parentId, [...(children.get(topic.parentId) ?? []), topic]);
-    const roots = entries.filter((topic) => !topic.parentId || !known.has(topic.parentId));
+    // A grouping that only leads to other groupings (src > features) adds indentation and no
+    // information, so those groups are shown at the top level instead. One that also holds its own
+    // modules is a real level: hiding it would lift those modules above it.
+    const hidden = new Set(entries.filter((topic) => {
+      const nested = children.get(topic.id) ?? [];
+      return topic.overview && nested.length > 0 && nested.every((child) => child.overview);
+    }).map((topic) => topic.id));
+    const shown = entries.filter((topic) => !hidden.has(topic.id)), shownIds = new Set(shown.map((topic) => topic.id));
+    const roots = shown.filter((topic) => !topic.parentId || !shownIds.has(topic.parentId));
     const search = (topic: ProjectTopic) => esc([topic.area?.title ?? "", topic.title, topic.description, ...topic.entryPoints].join(" ").toLowerCase());
     const row = (topic: ProjectTopic, depth: number): string => {
-      const nested = children.get(topic.id) ?? [];
+      const nested = (children.get(topic.id) ?? []).filter((child) => shownIds.has(child.id));
       const button = `<button type="button" data-reader-topic="${esc(topic.id)}" data-topic-search="${search(topic)}">${esc(topic.title)}</button>`;
-      const review = topic.review === "draft" ? '<small class="project-reader-review">Needs review</small>' : "";
+      const review = topic.overview ? '<small class="project-reader-review">Directory grouping</small>' : "";
       if (!nested.length) return `<li role="treeitem" data-topic-node="${esc(topic.id)}"><div class="project-reader-tree-row" style="--reader-depth:${depth}">${button}${review}</div></li>`;
       const toggle = `<button type="button" class="project-reader-tree-toggle" data-reader-toggle="${esc(topic.id)}" aria-expanded="true" aria-label="Collapse ${esc(topic.title)}">−</button>`;
       return `<li role="treeitem" aria-expanded="true" data-topic-node="${esc(topic.id)}"><div class="project-reader-tree-row" style="--reader-depth:${depth}">${button}${review}${toggle}</div><ul role="group" data-topic-children="${esc(topic.id)}">${nested.map((child) => row(child, depth + 1)).join("")}</ul></li>`;

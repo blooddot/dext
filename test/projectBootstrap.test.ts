@@ -40,7 +40,9 @@ describe("native Project bootstrap", () => {
     // A real CLI appended prose after the object; the whole-text JSON.parse failed on it.
     const generate = vi.fn(async (request: ProjectAiRequest) => request.prompt.includes("graph root only") ? rootReply() : ({ text: `${JSON.stringify({ schemaVersion: 1, revision: 0, updatedAt: 0, relations: [], nodes: [{ id: "api", kind: "contract", title: "API", canonicalName: "API", body: "# Contract\n\nMoney moves once." }] })}\n\nThat is the model.` }));
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate } });
-    expect(initialized.model?.nodes.filter(node => node.kind === "contract")).toEqual([expect.objectContaining({ id: "api", review: "draft", freshness: "needs_verification", body: { kind: "inline", text: "# Contract\n\nMoney moves once." } })]);
+    expect(initialized.model?.nodes.filter(node => node.kind === "contract")).toEqual([expect.objectContaining({ id: "api", review: "draft", freshness: "needs_verification",
+      body: { kind: "document", path: ".dext/project/knowledge/api.md", contentHash: projectContentHash("# Contract\n\nMoney moves once.") } })]);
+    expect(f.files.get(".dext/project/knowledge/api.md")).toBe("# Contract\n\nMoney moves once.");
   });
   it("supplies the host-owned header when a stage returns only nodes and relations", async () => {
     const f = fixture([["src/app.ts", "export const a = 1"]]);
@@ -56,7 +58,7 @@ describe("native Project bootstrap", () => {
       { id: "doc", kind: "contract", title: "Notes", canonicalName: "Notes", body: { kind: "document", path: "notes.md", contentHash: "made-up" } }] }) }));
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate } });
     expect(initialized.model?.nodes.filter(node => node.kind === "contract").map(node => node.body)).toEqual([
-      { kind: "inline", text: "# Contract" },
+      { kind: "document", path: ".dext/project/knowledge/api.md", contentHash: projectContentHash("# Contract") },
       { kind: "document", path: "notes.md", contentHash: projectContentHash("# Notes") }]);
   });
   it("reports countable stage progress and live provider activity", async () => {
@@ -218,7 +220,7 @@ describe("native Project bootstrap", () => {
     bodyOnly = true;
     f.files.set("src/core/a.ts", "export const a = 2");
     const updated = await run();
-    expect(updated.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ title: "A", body: { kind: "inline", text: "## Responsibility\n\nOwns a." } });
+    expect(updated.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ title: "A", body: { kind: "document", path: ".dext/project/knowledge/src/core/a.md" } });
   });
 
   it("treats a responsibility proposal answered in prose as rejected and keeps candidate boundaries", async () => {
@@ -228,7 +230,7 @@ describe("native Project bootstrap", () => {
     const reports: Array<{ message?: string }> = [];
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure, progress: report => reports.push(report) });
     expect(generate.mock.calls.filter(([request]) => request.prompt.includes("Identify developer-facing responsibilities"))).toHaveLength(2);
-    expect(initialized.model?.nodes.filter(node => node.kind === "module").map(node => node.paths)).toEqual([["src/core/a.ts"], ["src/ui/b.ts"]]);
+    expect(initialized.model?.nodes.filter(node => node.paths.length).map(node => node.paths)).toEqual([["src/core/a.ts"], ["src/ui/b.ts"]]);
     expect(reports.some(report => report.message?.includes("responsibility batch"))).toBe(true);
   });
 
@@ -239,32 +241,67 @@ describe("native Project bootstrap", () => {
       moduleOf("ui", "app", [memberOf("src/ui/b.ts")])
     ]);
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi() }, structure });
-    expect(initialized.model?.nodes.map(node => node.id)).toEqual(["project", "architecture", "module:src-core-a-ts", "module:src-ui-b-ts"]);
+    expect(initialized.model?.nodes.filter(node => node.paths.length).map(node => node.id)).toEqual(["module:src-core-a-ts", "module:src-ui-b-ts"]);
     expect(initialized.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ title: "A", paths: ["src/core/a.ts"] });
+    // Two entries in one directory make it the parent that groups them.
+    expect(initialized.model?.nodes.find(node => node.id === "module:src")).toMatchObject({ kind: "module", title: "src", paths: [], properties: { overview: true } });
     expect(initialized.model?.relations.map(edge => edge.id)).toEqual([
       "project--contains--architecture",
-      "project--contains--module:src-core-a-ts",
-      "project--contains--module:src-ui-b-ts",
+      "module:src--contains--module:src-core-a-ts",
+      "module:src--contains--module:src-ui-b-ts",
+      "project--contains--module:src",
       "module:src-core-a-ts--depends_on--module:src-ui-b-ts"
     ]);
     expect(initialized.model?.nodes.some(node => node.kind === "capability")).toBe(false);
+    // Every generated body is a Markdown file laid out like the module tree.
+    expect([...f.files.keys()].filter(path => path.startsWith(".dext/project/knowledge/")).sort()).toEqual([
+      ".dext/project/knowledge/architecture.md",
+      ".dext/project/knowledge/project.md",
+      ".dext/project/knowledge/src.md",
+      ".dext/project/knowledge/src/core/a.md",
+      ".dext/project/knowledge/src/ui/b.md"
+    ]);
   });
 
-  it("creates a directory parent only where several responsibilities share it", async () => {
+  it("attaches a module the update did not re-draft to its directory instead of the root", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"]]);
+    // legacy.ts is outside this run's read scope, so only the saved model still knows that module.
+    f.files.set(".dext/project/model.json", JSON.stringify(projectModelSchema.parse({ schemaVersion: 1, revision: 0, updatedAt: 0, nodes: [
+      { id: "project", kind: "project", title: "Demo", canonicalName: "Demo", body: { kind: "inline", text: "Old goal" } },
+      { id: "module:legacy", kind: "module", title: "Legacy", canonicalName: "Legacy", body: { kind: "inline", text: "Older boundary" }, paths: ["src/core/legacy.ts"] }
+    ], relations: [{ id: "project--contains--module:legacy", from: "project", to: "module:legacy", kind: "contains" }] })));
+    const structure = summaryOf([moduleOf("core", "app", [memberOf("src/core/a.ts")])]);
+    const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi() }, structure });
+    const contains = initialized.model!.relations.filter(edge => edge.kind === "contains").map(edge => edge.id);
+    expect(contains).toEqual(expect.arrayContaining(["module:src-core--contains--module:legacy", "module:src-core--contains--module:src-core-a-ts"]));
+    expect(contains).not.toContain("project--contains--module:legacy");
+  });
+
+  it("keeps one directory in one module and parents only a branching directory", async () => {
     const f = fixture([["src/core/alpha.ts", "export const a = 1"], ["src/core/beta.ts", "export const b = 2"], ["src/ui/gamma.ts", "export const c = 3"]]);
     const structure = summaryOf([moduleOf("core", "app", [memberOf("src/core/alpha.ts"), memberOf("src/core/beta.ts")]), moduleOf("ui", "app", [memberOf("src/ui/gamma.ts")])]);
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi() }, structure });
-    expect(initialized.model?.nodes.find(node => node.id === "module:src-core")).toMatchObject({ kind: "module", title: "core", paths: [], properties: { overview: true } });
-    // The single-responsibility ui directory folds into its only module.
-    expect(initialized.model?.nodes.some(node => node.id === "module:src-ui")).toBe(false);
-    expect(initialized.model?.nodes.find(node => node.id === "module:src-core")?.body).toMatchObject({ kind: "inline" });
+    // A directory is a boundary: its files stay one module and no parent is derived for it alone.
+    expect(initialized.model?.nodes.filter(node => node.kind === "module" && node.paths.length).map(node => node.paths)).toEqual([
+      ["src/core/alpha.ts", "src/core/beta.ts"], ["src/ui/gamma.ts"]]);
+    expect(initialized.model?.nodes.some(node => node.id === "module:src-core")).toBe(false);
+    expect(initialized.model?.nodes.find(node => node.id === "module:src")?.body).toMatchObject({ kind: "document", path: ".dext/project/knowledge/src.md" });
     const contains = initialized.model!.relations.filter(edge => edge.kind === "contains").map(edge => edge.id);
     expect(contains).toEqual(expect.arrayContaining([
-      "module:src-core--contains--module:src-core-alpha-ts",
-      "module:src-core--contains--module:src-core-beta-ts",
-      "project--contains--module:src-ui-gamma-ts"
+      "module:src--contains--module:src-core-alpha-ts",
+      "module:src--contains--module:src-ui-gamma-ts"
     ]));
     expect(contains).not.toContain("project--contains--module:src-core-alpha-ts");
+  });
+
+  it("rejects a split inside one directory and keeps the directory as one module", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/core/b.ts", "export const b = 2"]]);
+    const structure = summaryOf([moduleOf("core", "app", [memberOf("src/core/a.ts"), memberOf("src/core/b.ts")])]);
+    const generate = projectAi({ groups: () => [{ name: "A", files: ["src/core/a.ts"] }, { name: "B", files: ["src/core/b.ts"] }] });
+    const reports: Array<{ message?: string }> = [];
+    const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure, progress: report => reports.push(report) });
+    expect(initialized.model?.nodes.filter(node => node.kind === "module" && node.paths.length).map(node => node.paths)).toEqual([["src/core/a.ts", "src/core/b.ts"]]);
+    expect(reports.some(report => report.message?.includes("split rejected"))).toBe(true);
   });
 
   it("rejects a cross-directory merge without structural evidence and keeps the candidate boundaries", async () => {
@@ -273,7 +310,7 @@ describe("native Project bootstrap", () => {
     const generate = projectAi({ groups: () => [{ name: "Everything", files: ["src/core/model.ts", "src/ui/view.ts"] }] });
     const reports: Array<{ message?: string }> = [];
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate }, structure, progress: report => reports.push(report) });
-    expect(initialized.model?.nodes.filter(node => node.kind === "module").map(node => node.paths.sort())).toEqual([["src/core/model.ts"], ["src/ui/view.ts"]]);
+    expect(initialized.model?.nodes.filter(node => node.paths.length).map(node => node.paths.sort())).toEqual([["src/core/model.ts"], ["src/ui/view.ts"]]);
     expect(reports.some(report => report.message?.includes("merge rejected without structural evidence"))).toBe(true);
   });
 
@@ -293,7 +330,8 @@ describe("native Project bootstrap", () => {
   it("consolidates provisional responsibilities across batches and checks every owner", async () => {
     const paths = Array.from({ length: 13 }, (_, index) => `src/area${index}/file${index}.ts`);
     const f = fixture(paths.map(path => [path, `export const value${path.length} = 1`]));
-    const structure = summaryOf(paths.map((path, index) => moduleOf(`area${index}`, "app", [memberOf(path)])));
+    const structure = summaryOf(paths.map((path, index) => moduleOf(`area${index}`, "app", [memberOf(path,
+      index === 0 ? [{ specifier: "../area12/file12", to: "src/area12/file12.ts" }] : [])])));
     const generate = projectAi({ groups: request => {
       const payload = payloadOf(request) as { responsibilities?: Array<{ paths: string[] }> };
       if (!payload.responsibilities) return undefined;
@@ -358,13 +396,17 @@ describe("native Project bootstrap", () => {
       expect(prompt).toContain("the code name still wins the title");
       expect(prompt).toContain("Simplified Chinese");
     }
+    // A generated body shows its flow as one Mermaid block, which both the file and the reader render.
+    const prose = prompts.filter(prompt => prompt.includes("Explain one responsibility"));
+    expect(prose).toHaveLength(1);
+    expect(prose[0]).toContain("mermaid");
   });
 
   it("explains only readable modules and never creates a stub for an unread file", async () => {
     const f = fixture([["src/core/a.ts", "export const a = 1"], ["src/ui/b.ts", "export const b = 2"]]);
     const structure = summaryOf([moduleOf("core", "app", [memberOf("src/core/a.ts")]), moduleOf("ui", "app", [memberOf("src/ui/b.ts")]), moduleOf("gone", "app", [memberOf("src/gone/d.ts")])]);
     const initialized = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi() }, structure });
-    expect(initialized.model?.nodes.filter(node => node.kind === "module").map(node => node.paths)).toEqual([["src/core/a.ts"], ["src/ui/b.ts"]]);
+    expect(initialized.model?.nodes.filter(node => node.paths.length).map(node => node.paths)).toEqual([["src/core/a.ts"], ["src/ui/b.ts"]]);
     expect(initialized.model?.nodes.some(node => node.paths.includes("src/gone/d.ts"))).toBe(false);
   });
 
@@ -389,12 +431,42 @@ describe("native Project bootstrap", () => {
     prompts.length = 0;
     const unchanged = await run();
     expect(prose()).toHaveLength(0);
-    expect(unchanged.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ review: "accepted", freshness: "current", body: { kind: "inline", text: "Reviewed core" } });
+    expect(unchanged.model?.nodes.find(node => node.id === "module:src-core-a-ts")).toMatchObject({ review: "accepted", freshness: "current",
+      body: { kind: "document", path: ".dext/project/knowledge/src/core/a.md" } });
+    expect(f.files.get(".dext/project/knowledge/src/core/a.md")).toBe("Reviewed core");
     f.files.set("src/ui/b.ts", "export const b = 3");
     prompts.length = 0;
     await run();
     expect(prose()).toHaveLength(1);
     expect(prose()[0]).toContain("src/ui/b.ts");
+  });
+
+  it("keeps a module's Markdown file when its title changes", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"]]);
+    const structure = summaryOf([moduleOf("core", "app", [memberOf("src/core/a.ts")])]);
+    const run = (title: string) => bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi({ titles: new Map([["src/core/a.ts", title]]) }) }, structure });
+    await run("Core");
+    f.files.set("src/core/a.ts", "export const a = 2");
+    const renamed = await run("Core store");
+    // The module is re-drafted under a new title, but its file and folder stay put.
+    expect(renamed.model?.nodes.find(node => node.id === "module:src-core-a-ts")?.title).toBe("Core store");
+    expect(f.files.get(".dext/project/knowledge/src/core.md")).toBe("## Responsibility\n\nOwns a.");
+    expect([...f.files.keys()].filter(path => path.startsWith(".dext/project/knowledge/")).sort()).toEqual([
+      ".dext/project/knowledge/architecture.md", ".dext/project/knowledge/project.md", ".dext/project/knowledge/src/core.md"]);
+  });
+
+  it("keeps a knowledge file a person edited instead of the next draft", async () => {
+    const f = fixture([["src/core/a.ts", "export const a = 1"]]);
+    const structure = summaryOf([moduleOf("core", "app", [memberOf("src/core/a.ts")])]);
+    const run = () => bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi() }, structure });
+    await run();
+    f.files.set(".dext/project/knowledge/src/core/a.md", "## Responsibility\n\nHand written.");
+    f.files.set("src/core/a.ts", "export const a = 2");
+    const edited = await run();
+    // The edited file wins over the re-drafted prose, and its hash follows the file.
+    expect(f.files.get(".dext/project/knowledge/src/core/a.md")).toBe("## Responsibility\n\nHand written.");
+    expect(edited.model?.nodes.find(node => node.id === "module:src-core-a-ts")?.body)
+      .toEqual({ kind: "document", path: ".dext/project/knowledge/src/core/a.md", contentHash: projectContentHash("## Responsibility\n\nHand written.") });
   });
 
   it("reuses a matching identity and removes a module whose files moved away", async () => {
@@ -418,15 +490,17 @@ describe("native Project bootstrap", () => {
     const structure = summaryOf([moduleOf("core", "app", [memberOf("src/core/a.ts")])]);
     await bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi() }, structure });
     const saved = (await f.store.readModel())!;
-    const outside = projectModelSchema.parse({ ...saved, nodes: [...saved.nodes.map(node => node.body.kind === "inline" && node.id === "module:src-core-a-ts"
+    const outside = projectModelSchema.parse({ ...saved, nodes: [...saved.nodes.map(node => node.id === "module:src-core-a-ts"
       ? { ...node, review: "accepted", freshness: "current", body: { kind: "inline", text: "Reviewed module" } }
       : node.id === "project" ? { ...node, review: "accepted", freshness: "current", body: { kind: "inline", text: "Reviewed goal" } } : node),
       { id: "module:src-other-ts", kind: "module", title: "Other", canonicalName: "Other", body: { kind: "inline", text: "Outside scope" }, paths: ["src/other/x.ts"], review: "draft" },
       { id: "module:src-old-parent", kind: "module", title: "Old", canonicalName: "Old", body: { kind: "inline", text: "Old parent" }, paths: [], review: "draft" }] });
     await f.store.updateProject(outside, saved.revision);
     const updated = await bootstrapProject({ ...f.options, provider: { id: "fixture", generate: projectAi({ titles: new Map([["src/core/a.ts", "Changed"]]) }) }, structure });
-    expect(updated.model?.nodes.find(node => node.id === "project")?.body).toEqual({ kind: "inline", text: "Reviewed goal" });
-    expect(updated.model?.nodes.find(node => node.id === "module:src-core-a-ts")?.body).toEqual({ kind: "inline", text: "Reviewed module" });
+    expect(updated.model?.nodes.find(node => node.id === "project")?.body).toEqual({ kind: "document", path: ".dext/project/knowledge/project.md", contentHash: projectContentHash("Reviewed goal") });
+    expect(f.files.get(".dext/project/knowledge/project.md")).toBe("Reviewed goal");
+    expect(updated.model?.nodes.find(node => node.id === "module:src-core-a-ts")?.body).toEqual({ kind: "document", path: ".dext/project/knowledge/src/core/a.md", contentHash: projectContentHash("Reviewed module") });
+    expect(f.files.get(".dext/project/knowledge/src/core/a.md")).toBe("Reviewed module");
     expect(updated.model?.nodes.find(node => node.id === "module:src-other-ts")?.paths).toEqual(["src/other/x.ts"]);
     expect(updated.model?.nodes.some(node => node.id === "module:src-old-parent")).toBe(false);
 

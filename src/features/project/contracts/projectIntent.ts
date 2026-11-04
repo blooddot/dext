@@ -55,6 +55,8 @@ export const projectArchitectureContextSchema = z.object({
   sourceFiles: z.array(z.string().min(1)).optional(),
   /** Parent module/context derived from a saved containment relation; absent on legacy models. */
   parentId: z.string().min(1).optional(),
+  /** A directory grouping the index derived, not a responsibility the AI proposed. */
+  overview: z.boolean().optional(),
   /** Historical boundaries with overlapping member files; never proof of equivalent behavior. */
   previousContextIds: z.array(z.string().min(1)).optional(),
   uncertainties: z.array(z.string().min(1)).optional(),
