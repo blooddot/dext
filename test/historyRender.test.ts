@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { conversationMarkdown, conversationTitle, highlightTerminal, historyTurnMarkdown, historyTurnTitle, renderHistoryRecord, renderHistorySession } from "../src/features/conversations/presentation/historyRender.js";
-import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
+import { conversationMarkdown, conversationTitle, highlightTerminal, historyTranscript, historyTurnMarkdown, historyTurnTitle, renderHistoryRecord, renderHistorySession } from "../src/features/conversations/presentation/historyRender.js";
+import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 import type { RuntimeResponse } from "../src/shared/contracts/types.js";
 import { parseUiForm, type UiFormDefinition } from "../src/shared/contracts/uiForm.js";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/features/conversations/domain/planResponse.js";
@@ -165,7 +165,7 @@ describe("Dext history rendering", () => {
     const actions = [...summary.matchAll(/<button[^>]*data-history-command="([^"]+)"[^>]*>/g)];
     expect(actions.map((match) => match[1])).toEqual([
       "dext.history.renameTurn",
-      "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.deleteTurn"
+      "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.addTurnToDext", "dext.history.deleteTurn"
     ]);
     for (const [button] of actions) {
       expect(button).toContain('data-session-id="session-1"');
@@ -179,7 +179,7 @@ describe("Dext history rendering", () => {
     const sessionSummary = sessionHtml.slice(0, sessionHtml.indexOf("</summary>"));
     expect([...sessionSummary.matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1])).toEqual([
       "dext.history.continueConversation", "dext.history.renameConversation", "dext.history.forkConversation",
-      "dext.history.copyConversation", "dext.history.addFavorite", "dext.history.archiveConversation", "dext.history.deleteConversation"
+      "dext.history.copyConversation", "dext.history.addConversationToDext", "dext.history.addFavorite", "dext.history.archiveConversation", "dext.history.deleteConversation"
     ]);
   });
 
@@ -812,6 +812,22 @@ describe("Dext history rendering", () => {
     expect(markdown).toContain('ask(input="explain")');
     expect(markdown).toContain("### Error");
     expect(markdown).toContain("cancelled");
+  });
+
+  it("hands one turn or the whole conversation to the composer, capped", () => {
+    const turns: DextHistoryRecord[] = [
+      { id: "turn-0", createdAt: 1, input: "first", process: [], output: "one" },
+      { id: "turn-1", createdAt: 2, input: "second", process: [], output: "two" }
+    ];
+    const session = { id: "session-1", createdAt: 1, updatedAt: 2, turns };
+
+    expect(historyTranscript(session)).toBe(conversationMarkdown(session));
+    const single = historyTranscript(session, turns[1]);
+    expect(single).toContain("## Turn 2");
+    expect(single).not.toContain("first");
+    const capped = historyTranscript({ ...session, turns: [{ ...turns[0]!, output: "x".repeat(DEFAULT_HISTORY_LIMITS.maxOutputLength) }] });
+    expect(capped.length).toBeLessThanOrEqual(DEFAULT_HISTORY_LIMITS.maxOutputLength + 20);
+    expect(capped.endsWith("truncated")).toBe(true);
   });
 });
 

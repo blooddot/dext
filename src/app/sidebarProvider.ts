@@ -566,6 +566,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.postWhenReady({ type: "setInput", source });
   }
 
+  /** A History transcript becomes a read-only attachment, so the composer keeps
+   * an @ reference instead of holding the whole conversation text. */
+  async referenceConversation(text: string): Promise<void> {
+    const attachment = await this.storeTextAttachment("conversation", text);
+    this.postWhenReady({ type: "insertFileReferences", expressions: [`@${attachment.relativePath}`] });
+  }
+
   async planFromProjectObject(reference: ProjectObjectReference): Promise<void> {
     await this.newConversation();
     const selection = this.conversation.controller.selection(this.activeSession.id) ?? this.application.state().agentSelection;
@@ -644,7 +651,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await vscode.commands.executeCommand("workbench.action.terminal.copySelection");
     const text = await vscode.env.clipboard.readText();
     if (!text) throw new Error("Select terminal output before copying it with context.");
-    const attachment = await this.storeTerminalOutput(text);
+    const attachment = await this.storeTextAttachment("terminal", text);
     this.attachments.stageClipboard(text, {
       payload: attachment.relativePath,
       expression: `@${attachment.relativePath}`
@@ -780,6 +787,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "forkFromTurn":
           await vscode.commands.executeCommand("dext.history.forkFromTurn", {
             sessionId: request.sessionId ?? this.activeSession.id,
+            turnId: request.turnId
+          });
+          break;
+        case "addTurnToDext":
+          await vscode.commands.executeCommand("dext.history.addTurnToDext", {
+            sessionId: request.sessionId,
             turnId: request.turnId
           });
           break;
@@ -1301,13 +1314,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     return { relativePath: this.application.storage.reference("attachments", name), uri, name };
   }
 
-  private async storeTerminalOutput(text: string): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
+  private async storeTextAttachment(namePrefix: "terminal" | "conversation", text: string): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
     const buffer = Buffer.from(text, "utf8");
     const limit = this.application.storage.attachmentByteLimit();
     if (buffer.byteLength > limit) {
-      throw new Error(`Terminal output must be ${limit} bytes or smaller.`);
+      throw new Error(`Attachment text must be ${limit} bytes or smaller.`);
     }
-    const name = `terminal-${randomBytes(12).toString("hex")}.log`;
+    const name = `${namePrefix}-${randomBytes(12).toString("hex")}.${namePrefix === "terminal" ? "log" : "md"}`;
     const directory = this.application.storage.directory("attachments");
     await vscode.workspace.fs.createDirectory(directory);
     const uri = vscode.Uri.joinPath(directory, name);

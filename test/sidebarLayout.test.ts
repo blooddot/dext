@@ -542,7 +542,7 @@ describe("sidebar panel layout", () => {
     expect(transcript).toContain("summary.append(chevron, title, planExecutionStatus, time, actions);");
     const actionOrder = [...transcript.matchAll(/this\.actionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
     expect(actionOrder).toEqual([
-      "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_ACTION", "TURN_DELETE_ACTION"
+      "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_ACTION", "TURN_ADD_TO_INPUT_ACTION", "TURN_DELETE_ACTION"
     ]);
     // Only destructive actions on the active turn go dead while a turn is
     // running; copying and editing older turns remains available.

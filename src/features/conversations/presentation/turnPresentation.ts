@@ -20,6 +20,7 @@ export const TURN_RETRY_ACTION = { icon: "debug-restart", label: "Retry this tur
 export const TURN_CONTINUE_ACTION = { icon: "play-circle", label: "Continue from the failed Code step" } as const;
 export const TURN_FORK_ACTION = { icon: "repo-forked", label: "Fork from this turn" } as const;
 export const TURN_COPY_ACTION = { icon: "copy", label: "Copy turn as Markdown" } as const;
+export const TURN_ADD_TO_INPUT_ACTION = { icon: "comment-add", label: "Add this turn to Input as an @ reference" } as const;
 export const TURN_DELETE_ACTION = { icon: "trash", label: "Delete turn from Dext" } as const;
 export const TURN_DELETE_CONFIRMATION = "Delete this turn from Dext?";
 export const DELETE_CONFIRMATION_DETAIL = "Only Dext's saved records are removed. CLI sessions and messages are kept, and continuing may still use that context. File changes are not undone.";

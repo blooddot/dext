@@ -69,6 +69,7 @@ export class DextHistoryPanel implements vscode.Disposable {
           "dext.history.renameTurn",
           "dext.history.forkFromTurn",
           "dext.history.copyTurn",
+          "dext.history.addTurnToDext",
           "dext.history.openSpill",
           "dext.history.deleteTurn"
         ];
@@ -85,6 +86,7 @@ export class DextHistoryPanel implements vscode.Disposable {
           "dext.history.removeFavorite",
           "dext.history.renameConversation",
           "dext.history.copyConversation",
+          "dext.history.addConversationToDext",
           "dext.history.archiveConversation",
           "dext.history.unarchiveConversation",
           "dext.history.deleteConversation"

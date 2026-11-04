@@ -40,6 +40,7 @@ const conversationSchemaList = [
   z.object({ type: z.literal("renameTurn"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
   z.object({ type: z.literal("deleteTurn"), turnId: z.string().min(1), sessionId: z.string().min(1).optional() }),
   z.object({ type: z.literal("copyTurn"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("addTurnToDext"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("openSpillFile"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("correctPlan"), planPath: z.string().min(1).max(512) }),

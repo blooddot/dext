@@ -23,7 +23,7 @@ import { createApiDataSource, createFileResourceDataSource } from "./features/re
 import { managedResourcePath, removeManagedResource } from "./features/resources/host/resourceActions.js";
 import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
 import { DextHistoryPanel } from "./features/conversations/host/historyEditorProvider.js";
-import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
+import { conversationMarkdown, conversationTitle, historyTranscript, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
 import type { DextHistoryRecord, DextHistorySession } from "./features/conversations/contracts/history.js";
 import { DEFAULT_HISTORY_LIMITS } from "./features/conversations/contracts/history.js";
 import { openFileHistoryStore } from "./features/conversations/host/historyFileState.js";
@@ -639,6 +639,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const index = session.turns.findIndex((item) => item.id === context?.turnId);
         if (index === -1) throw new Error("Conversation turn not found.");
         await vscode.env.clipboard.writeText(historyTurnMarkdown(session.turns[index]!, index));
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.addTurnToDext", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        await sidebar.referenceConversation(historyTranscript(session, turn));
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.addConversationToDext", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        await sidebar.referenceConversation(historyTranscript(historySession(context)));
+        await focusSidebar();
+        sidebar.showChat();
       })
     ),
     vscode.commands.registerCommand("dext.history.openSpill", (context?: ConversationContext) =>

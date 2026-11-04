@@ -10,6 +10,7 @@ import { createFileReferenceChip, fileReferenceChipDescriptor } from "../../../p
 import type { AgentInputView } from "./agentInputView.js";
 import type { AgentTodoView } from "./agentTodoView.js";
 import {
+  TURN_ADD_TO_INPUT_ACTION,
   TURN_COPY_ACTION,
   TURN_DELETE_ACTION,
   TURN_EDIT_ACTION,
@@ -74,6 +75,7 @@ export interface TranscriptHost {
   retryTurn(sessionId: string, turnId: string): void;
   renameTurn(sessionId: string, turnId: string): void;
   forkFromTurn(sessionId: string, turnId: string): void;
+  addTurnToInput(sessionId: string, turnId: string): void;
   copyTurn(sessionId: string, turnId: string): void;
   openSpill(sessionId: string, turnId: string): void;
   deleteTurn(sessionId: string, turnId: string): void;
@@ -198,6 +200,9 @@ export class TranscriptView {
       }, true),
       this.actionButton(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, () => {
         if (sessionId) this.host.copyTurn(sessionId, turnId);
+      }, true),
+      this.actionButton(TURN_ADD_TO_INPUT_ACTION.icon, TURN_ADD_TO_INPUT_ACTION.label, () => {
+        if (sessionId) this.host.addTurnToInput(sessionId, turnId);
       }, true),
       this.actionButton(TURN_DELETE_ACTION.icon, TURN_DELETE_ACTION.label, () => {
         if (sessionId) this.host.deleteTurn(sessionId, turnId);

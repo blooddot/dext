@@ -4,9 +4,9 @@ import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson,
 import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
-import type { DextHistoryRecord, DextHistorySession } from "../contracts/history.js";
+import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession } from "../contracts/history.js";
 import {
-  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, presentTurn, resultCopyText,
+  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn, resultCopyText,
   type TurnSectionPresentation
 } from "./turnPresentation.js";
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
@@ -81,6 +81,7 @@ function historyTurnActions(sessionId: string, turnId: string, spill: boolean): 
     historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameTurn", TURN_RENAME_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkFromTurn", TURN_FORK_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyTurn", TURN_COPY_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_ADD_TO_INPUT_ACTION.icon, "dext.history.addTurnToDext", TURN_ADD_TO_INPUT_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_DELETE_ACTION.icon, "dext.history.deleteTurn", TURN_DELETE_ACTION.label, sessionId, turnId)
   ].join("")}</span>`;
 }
@@ -97,6 +98,7 @@ function historySessionActions(session: DextHistorySession, favorite: boolean): 
     historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameConversation", "Rename conversation", session.id),
     historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkConversation", "Fork conversation", session.id),
     historyActionButton("copy", "dext.history.copyConversation", "Copy conversation as Markdown", session.id),
+    historyActionButton(TURN_ADD_TO_INPUT_ACTION.icon, "dext.history.addConversationToDext", TURN_ADD_TO_INPUT_ACTION.label, session.id),
     historyActionButton(favoriteIcon, favoriteCommand, favoriteLabel, session.id),
     historyActionButton(archiveIcon, archiveCommand, archiveLabel, session.id),
     historyActionButton("trash", "dext.history.deleteConversation", "Delete conversation", session.id)
@@ -412,6 +414,21 @@ export function historyTurnMarkdown(record: DextHistoryRecord, index = 0): strin
 export function conversationMarkdown(session: DextHistorySession): string {
   const turns = session.turns.map(historyTurnMarkdown);
   return [`# Dext conversation — ${dateLabel(session.createdAt)}`, ...turns].join("\n\n");
+}
+
+/** The transcript a History row saves as a read-only attachment and references
+ * with `@`, so the input keeps a chip instead of the whole text. `turn`
+ * narrows it to that one turn. */
+export function historyTranscript(session: DextHistorySession, turn?: DextHistoryRecord): string {
+  const single = turn && session.turns.includes(turn) ? turn : undefined;
+  const text = single
+    ? `# Dext conversation — ${dateLabel(session.createdAt)}\n\n${historyTurnMarkdown(single, session.turns.indexOf(single))}`
+    : conversationMarkdown(session);
+  // shortcut: one turn's output budget for the saved transcript; upgrade to a
+  // multi-file split when longer reviews are needed.
+  return text.length <= DEFAULT_HISTORY_LIMITS.maxOutputLength
+    ? text
+    : `${text.slice(0, DEFAULT_HISTORY_LIMITS.maxOutputLength)}\n\n… truncated`;
 }
 
 export function historyTokenStyles(): string {

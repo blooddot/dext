@@ -310,6 +310,7 @@ const transcript = new TranscriptView({
   retryTurn: (sessionId, turnId) => vscode.postMessage({ type: "retryTurn", sessionId, turnId }),
   renameTurn: (sessionId, turnId) => vscode.postMessage({ type: "renameTurn", sessionId, turnId }),
   forkFromTurn: (sessionId, turnId) => vscode.postMessage({ type: "forkFromTurn", sessionId, turnId }),
+  addTurnToInput: (sessionId, turnId) => vscode.postMessage({ type: "addTurnToDext", sessionId, turnId }),
   copyTurn: (sessionId, turnId) => vscode.postMessage({ type: "copyTurn", sessionId, turnId }),
   deleteTurn: (sessionId, turnId) => vscode.postMessage({ type: "deleteTurn", sessionId, turnId }),
   openSpill: (sessionId, turnId) => vscode.postMessage({ type: "openSpillFile", sessionId, turnId }),

@@ -7,8 +7,8 @@ export type StoredDextFile = "attachments" | "plans";
 export const DEFAULT_MAX_ATTACHMENT_FILES = 200;
 
 const GLOBAL_REFERENCE_ROOT = ".dext-global";
-const ATTACHMENT_FILE = /^(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log)$/i;
-const ATTACHMENT_REFERENCE = /@((?:\.dext-global|\.dext)\/attachments\/(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log))/gi;
+const ATTACHMENT_FILE = /^(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log|conversation-[a-f0-9]{24}\.md)$/i;
+const ATTACHMENT_REFERENCE = /@((?:\.dext-global|\.dext)\/attachments\/(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)|terminal-[a-f0-9]{24}\.log|conversation-[a-f0-9]{24}\.md))/gi;
 const EXTERNAL_FILE_REFERENCE = /@(file:\/\/\/[^\s@#"'`(){}[\],]+)/gi;
 
 function safeSegments(path: string): string[] | undefined {
