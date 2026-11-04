@@ -239,7 +239,7 @@ button.primary.plan-build.preparing:disabled {
 .agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; color: inherit; font-size: inherit; overflow-wrap: anywhere; white-space: normal; }
 .agent-todo-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
 .agent-todo-text.markdown-body pre { overflow-x: auto; }
-.agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--vscode-descriptionForeground); }
+.agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
 .agent-todo-item.active {
   --todo-accent: var(--vscode-progressBar-background, var(--vscode-focusBorder));
 }
@@ -813,6 +813,7 @@ main {
   color: var(--vscode-descriptionForeground);
   font-size: 12px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .history-favorite {
@@ -2922,6 +2923,7 @@ button.primary.stopping {
   flex: 0 0 auto;
   color: var(--vscode-descriptionForeground);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .output-turn-title {
@@ -3062,7 +3064,7 @@ button.primary.stopping {
 
 .turn-section > summary::-webkit-details-marker { display: none; }
 .turn-section > summary:hover { background: var(--vscode-list-hoverBackground); }
-.turn-section-meta { color: var(--vscode-descriptionForeground); font-size: 12px; }
+.turn-section-meta { color: var(--vscode-descriptionForeground); font-size: 12px; font-variant-numeric: tabular-nums; }
 .turn-section .disclosure-chevron { flex: 0 0 12px; width: 12px; font-size: 12px; }
 .turn-section[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 
