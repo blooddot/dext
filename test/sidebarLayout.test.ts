@@ -330,7 +330,7 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
     expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);
     // The mode control reads the same accent rather than repeating the colors.
-    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control,\s*\.input-section\[data-mode="resource"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--composer-accent\) 68%[\s\S]*?color: var\(--composer-accent\);[\s\S]*?background: color-mix\(in srgb, var\(--composer-accent\) 14%/);
+    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control,\s*\.input-section\[data-mode="resource"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--composer-accent\) 68%, var\(--vscode-widget-border\)\);[\s\S]*?color: var\(--composer-accent\);[\s\S]*?background: color-mix\(in srgb, var\(--composer-accent\) 14%, var\(--vscode-editor-background\)\);/);
     expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control:focus-visible,\s*\.input-section\[data-mode="resource"\] #mode-control:focus-visible \{[\s\S]*?outline: 1px solid var\(--composer-accent\);/);
     expect(css).not.toMatch(/\.input-section\[data-mode="(?:ask|plan|code)"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--vscode-focusBorder\)/);
   });

@@ -7,8 +7,9 @@
   --dext-plan-fill: #d4b52c;
   --dext-plan-foreground: #202020;
   --dext-plan-label: #e0c34c;
-  /* Keep Full access distinct from Plan's warm gold. */
-  --dext-full-access-accent: #a9675c;
+  /* Keep Full access distinct from Plan's warm gold. Lifted for AA contrast
+     on dark sidebar and editor grounds (7.1:1 at #1e1e1e). */
+  --dext-full-access-accent: #d99a8f;
   --dext-row-action-background: #252526;
   --resource-api-accent: #79b8ff;
   --resource-mcp-accent: #c2a3ff;
@@ -26,6 +27,7 @@ body.vscode-light {
 body.vscode-light,
 body.vscode-high-contrast-light {
   --dext-row-action-background: #ffffff;
+  --dext-full-access-accent: #7f4338;
   --resource-api-accent: #1769b5;
   --resource-mcp-accent: #7546b6;
   --resource-rule-accent: #886000;
@@ -43,6 +45,11 @@ body.vscode-high-contrast-light {
   --dext-plan-fill: var(--vscode-button-background);
   --dext-plan-foreground: var(--vscode-button-foreground);
   --dext-plan-label: var(--vscode-foreground);
+  /* A customized contrastBorder in an ordinary theme is not a request for
+     high-contrast chrome. Reserve those outlines for actual HC themes. */
+  --dext-full-access-accent: var(--vscode-foreground);
+  --dext-quiet-divider: var(--vscode-contrastBorder, var(--vscode-foreground));
+  --dext-record-border: var(--dext-quiet-divider);
 }
 
 html,
@@ -546,7 +553,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   list-style: none;
 }
 .mcp-assistant-process > summary::-webkit-details-marker { display: none; }
-.mcp-assistant-process > summary:hover { background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, .06)); }
+.mcp-assistant-process > summary:hover { background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent)); }
 .mcp-assistant-process-body {
   max-height: 240px;
   overflow: auto;
@@ -1261,7 +1268,7 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
 
 .attachment-remove:hover {
   color: var(--vscode-foreground);
-  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 8%, transparent));
 }
 
 .patch-application {
@@ -1833,6 +1840,37 @@ body.image-page {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
 }
 
+.composer-control:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* Translucent pills need an explicit boundary in high contrast, and the
+   model control is text-like in normal themes, so it gets one here too. */
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-control {
+  border-color: var(--vscode-contrastBorder, var(--vscode-foreground));
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-control:hover,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-control[aria-expanded="true"] {
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-contrastBorder, var(--vscode-foreground)));
+  background: var(--vscode-list-hoverBackground);
+  box-shadow: none;
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) #model-control {
+  border-color: var(--vscode-contrastBorder, var(--vscode-foreground));
+  background: transparent;
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) #model-control:hover,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) #model-control[aria-expanded="true"] {
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-contrastBorder, var(--vscode-foreground)));
+  background: var(--vscode-list-hoverBackground);
+}
+
 .composer-control-label {
   display: none;
 }
@@ -1884,6 +1922,21 @@ body.image-page {
     var(--dext-full-access-accent) 12%,
     transparent
   );
+}
+
+/* High contrast keeps the control in the theme's ink and outline instead of
+   a tinted brand fill, which would disappear in a monochrome theme. */
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.is-full-access {
+  border-color: var(--vscode-contrastBorder, var(--vscode-foreground));
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.is-full-access:hover,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.is-full-access[aria-expanded="true"] {
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-contrastBorder, var(--vscode-foreground)));
+  background: var(--vscode-list-hoverBackground);
+  box-shadow: none;
 }
 
 #model-control {
@@ -2086,6 +2139,25 @@ body.image-page {
     var(--dext-full-access-accent) 8%,
     var(--vscode-menu-background, var(--vscode-editorWidget-background))
   );
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option.composer-menu-option-warning {
+  color: var(--vscode-foreground);
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option.composer-menu-option-warning[aria-checked="true"] {
+  color: var(--vscode-foreground);
+  background: transparent;
+  outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+  outline-offset: -1px;
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option.composer-menu-option-warning:hover,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option.composer-menu-option-warning:focus-visible {
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+  outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+  outline-offset: -1px;
 }
 
 /* Mode colors are visible while choosing, not only after a mode becomes active. */
@@ -2300,9 +2372,9 @@ button.primary.executing::after,
   background: linear-gradient(
     108deg,
     transparent 28%,
-    rgba(255, 255, 255, 0.16) 46%,
-    rgba(255, 255, 255, 0.2) 50%,
-    rgba(255, 255, 255, 0.16) 54%,
+    color-mix(in srgb, currentColor 16%, transparent) 46%,
+    color-mix(in srgb, currentColor 20%, transparent) 50%,
+    color-mix(in srgb, currentColor 16%, transparent) 54%,
     transparent 72%
   );
   border-radius: inherit;
@@ -2347,8 +2419,18 @@ button.primary.executing > *,
   }
 }
 
+/* VS Code's own Reduce Motion setting; the media query above only follows the
+   operating system. */
+body.vscode-reduce-motion *,
+body.vscode-reduce-motion *::before,
+body.vscode-reduce-motion *::after {
+  animation-duration: .01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .01ms !important;
+}
+
 button.primary.circular-action.executing::after {
-  background: linear-gradient(105deg, transparent 20%, rgba(255, 255, 255, 0.22) 40%, rgba(255, 255, 255, 0.5) 50%, rgba(255, 255, 255, 0.22) 60%, transparent 80%);
+  background: linear-gradient(105deg, transparent 20%, color-mix(in srgb, currentColor 22%, transparent) 40%, color-mix(in srgb, currentColor 50%, transparent) 50%, color-mix(in srgb, currentColor 22%, transparent) 60%, transparent 80%);
   animation-duration: 2.4s;
   animation-timing-function: ease-in-out;
 }
@@ -2372,10 +2454,22 @@ button.primary.plan-build.executing > .codicon::before {
   background: currentColor;
 }
 
-body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section[data-mode="plan"] #mode-control,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode-control,
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.plan-build,
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.circular-action {
   border: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode-control {
+  background: transparent;
+  color: var(--vscode-foreground);
+}
+
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode-control:hover,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode-control[aria-expanded="true"] {
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-contrastBorder, var(--vscode-foreground)));
+  background: var(--vscode-list-hoverBackground);
+  box-shadow: none;
 }
 
 .problems-status,
@@ -2448,7 +2542,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.circu
 }
 
 .collapsible-heading:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
 }
 
 .section-heading-actions .icon-button {
@@ -2744,7 +2838,7 @@ button.primary.stopping {
 }
 
 .output-turn > summary:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
 }
 
 .output-turn-time {
@@ -2915,7 +3009,7 @@ button.primary.stopping {
 }
 
 .execution-disclosure > summary:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
 }
 
 /* JSON keeps its exact-source copy in its own title bar. */
@@ -3138,7 +3232,7 @@ pre {
   display: none;
 }.agent-trace-group > summary:hover,
 .agent-trace-event > summary:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
 }
 
 .agent-trace-group {
@@ -3221,7 +3315,7 @@ pre {
 
 .agent-stream-item.agent-trace-tool > summary:hover,
 .agent-trace-command > summary:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
 }
 
 /* Command labels are single-line so a long shell invocation truncates instead of
@@ -3299,7 +3393,7 @@ pre {
 }
 
 .agent-stream-item > summary:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
 }
 
 .agent-progress {
@@ -3408,7 +3502,7 @@ pre {
 
 .agent-result-reference > summary:hover,
 .agent-result-section > summary:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
 }
 
 .agent-result-section-body {
@@ -3556,7 +3650,7 @@ button.method-row:hover {
 }
 
 .method-group-summary:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 8%, transparent));
 }
 
 .method-group-label {
@@ -3839,12 +3933,30 @@ button.primary.resource-save:disabled {
 .resource-preview:disabled { color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground)); cursor: default; }
 
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section[data-mode="resource"] {
+  --composer-accent: var(--vscode-foreground);
   --composer-accent-fill: var(--vscode-button-background);
   --composer-accent-foreground: var(--vscode-button-foreground);
 }
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section[data-mode="resource"] #mode-control,
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) button.primary.resource-save,
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option[data-resource-type][aria-checked="true"] {
+  outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
+  outline-offset: -1px;
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) #resource-target > .codicon {
+  color: var(--vscode-foreground);
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option[data-resource-type] {
+  color: var(--vscode-foreground);
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option[data-resource-type][aria-checked="true"] {
+  color: var(--vscode-foreground);
+  background: transparent;
+}
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option[data-resource-type]:hover,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-option[data-resource-type]:focus-visible {
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
   outline: 1px solid var(--vscode-contrastBorder, var(--vscode-foreground));
   outline-offset: -1px;
 }
