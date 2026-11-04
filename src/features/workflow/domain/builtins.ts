@@ -3,10 +3,11 @@ import { builtinCliFields, CLI_BUILTIN_IDS } from "../../agents/domain/builtinCl
 
 const CONTEXTS = ["selection", "activeFile", "file", "symbol"] as const;
 
-/** The display option every model-backed call accepts: Dext still returns the
- * result, it just stays out of Output. Absent means show it, like everywhere else. */
-function quietField(): FieldDefinition {
-  return { name: "quiet", type: "boolean", default: false, description: "Set true to keep this call's result out of Output. The caller still receives it." };
+/** The display option every model-backed call accepts: the result always reaches the
+ * caller, but it only reaches Output when the call asks for it. Output starts silent
+ * so a run reads as the code it ran, not as a pile of tool results. */
+function echoField(): FieldDefinition {
+  return { name: "echo", type: "boolean", default: false, description: "Set true to show this call's result in Output. By default it stays out of Output; the caller still receives it." };
 }
 
 const METHODS: readonly CallableDefinition[] = [
@@ -21,7 +22,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Ask call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Ask call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
-      quietField()
+      echoField()
     ],
     output: { kind: "ask" },
     context: [...CONTEXTS],
@@ -38,7 +39,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Plan call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Plan call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
-      quietField()
+      echoField()
     ],
     output: { kind: "plan" },
     context: [...CONTEXTS],
@@ -57,7 +58,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Agent call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Agent call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
-      quietField()
+      echoField()
     ],
     output: {
       kind: "agent",
@@ -79,7 +80,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this template call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this template call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
-      quietField()
+      echoField()
     ],
     output: {
       kind: "template",
@@ -124,7 +125,7 @@ const METHODS: readonly CallableDefinition[] = [
       { name: "skill", type: "string", required: true, description: "Discovered skill identifier." },
       { name: "input", type: "string", required: true, description: "Direct task input for the skill." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
-      quietField()
+      echoField()
     ],
     output: { kind: "skill" },
     executor: { kind: "deterministic", handler: "runSkill" }

@@ -99,18 +99,18 @@ describe("Dext kernel host", () => {
     expect(response.executions).toEqual([ask?.response]);
   });
 
-  it("marks only the call that asked for quiet as quiet", { timeout: 30000 }, async () => {
+  it("shows only the call that asked for echo", { timeout: 30000 }, async () => {
     const root = await workspace();
     const kernel = host(root, async (invocation) => askResponse(invocation));
     const response = await kernel.runSource([
       'import { ask } from "dext";',
-      'const judged = await ask({ input: "x", quiet: true });',
-      'const shown = await ask({ input: "y" });',
-      'console.log(judged.text + shown.text);',
+      'const shown = await ask({ input: "x", echo: true });',
+      'const hidden = await ask({ input: "y" });',
+      'console.log(shown.text + hidden.text);',
       ""
     ].join("\n"));
     const asks = response.steps?.filter((step) => step.method === "ask") ?? [];
-    expect(asks.map((step) => step.quiet === true)).toEqual([true, false]);
+    expect(asks.map((step) => step.quiet === true)).toEqual([false, true]);
     // Quiet only hides the step: the caller still gets the same result.
     expect(asks[0]?.response?.result).toEqual({ kind: "ask", text: "x" });
     expect(response.steps?.some((step) => step.stream?.text === "xy\n")).toBe(true);

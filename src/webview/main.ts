@@ -1663,7 +1663,7 @@ function renderResult(response: InputExecutionResponse): void {  const target = 
   // another instead of pretending they were a sequence.
   let fanOut: HTMLElement | undefined;
   for (const [index, step] of entries.entries()) {
-    // `quiet: true` — the call asked Dext to keep its own result out of Output.
+    // No `echo: true` — the call keeps its own result out of Output.
     if (step.quiet) {
       if (step.branch === undefined) fanOut = undefined;
       continue;

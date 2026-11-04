@@ -150,7 +150,7 @@ async function readPatch(command: string): Promise<TerminalResult> {
 }
 
 async function draftReleaseNotes(input: string): Promise<AskResult> {
-  return ask({ input, rules: RULES, quiet: true });
+  return ask({ input, rules: RULES });
 }
 
 // ---------------------------------------------------------------- 通用解析

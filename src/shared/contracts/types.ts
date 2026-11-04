@@ -457,7 +457,7 @@ export interface WorkflowStepResponse {
   assignment?: string;
   method: string;
   state: ExecutionState;
-  /** Set for a call that passed `quiet: true`: the result reaches the caller, but
+  /** Set for a call that did not pass `echo: true`: the result reaches the caller, but
    *  the step is kept out of Output. */
   quiet?: boolean;
   response?: RuntimeResponse;

@@ -265,7 +265,7 @@ async function runCheckCommand(command: string): Promise<TerminalResult> {
 }
 
 async function judgeChanges(input: string): Promise<AskResult> {
-  return ask({ input, rules: AUDIT_RULES, quiet: true });
+  return ask({ input, rules: AUDIT_RULES });
 }
 
 // ---------------------------------------------------------------- 通用解析

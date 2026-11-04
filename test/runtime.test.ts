@@ -156,10 +156,10 @@ describe("Dext runtime", () => {
     const { registry } = setup();
     const ask = new AxAdapter().compile(registry.get("ask")!);
     expect(ask.inputSchema.safeParse({ input: "hello" }).success).toBe(true);
-    expect(ask.inputSchema.safeParse({ input: "hello", quiet: true }).success).toBe(true);
+    expect(ask.inputSchema.safeParse({ input: "hello", echo: true }).success).toBe(true);
     expect(ask.inputSchema.safeParse({ message: "hello" }).success).toBe(false);
-    // Only the model-backed calls take `quiet`; a terminal call has no Output card to begin with.
-    expect(new AxAdapter().compile(registry.get("terminal")!).inputSchema.safeParse({ command: "ls", quiet: true }).success).toBe(false);
+    // Only the model-backed calls take `echo`; a terminal call has no Output card to begin with.
+    expect(new AxAdapter().compile(registry.get("terminal")!).inputSchema.safeParse({ command: "ls", echo: true }).success).toBe(false);
     const agent = new AxAdapter().compile(registry.get("agent")!);
     expect(agent.outputSchema.safeParse({ kind: "agent", text: "done" }).success).toBe(true);
     expect(agent.outputSchema.safeParse({ kind: "agent", text: "done", extra: true }).success).toBe(false);
