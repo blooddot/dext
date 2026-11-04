@@ -162,7 +162,8 @@ describe("Dext package manifest", () => {
       ["dext.openHistory", "navigation@2"],
       ["dext.openProject", "navigation@3"],
       ["dext.viewApis", "navigation@4"],
-      ["dext.viewResources", "navigation@5"]
+      ["dext.viewResources", "navigation@5"],
+      ["dext.chooseAppearance", "navigation@6"]
     ]);
     // Reloading APIs belongs with the API list it refreshes, and History is the
     // single place that reopens a past conversation.

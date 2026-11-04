@@ -405,6 +405,12 @@ export function startProjectReader(root: HTMLElement, api: ReaderApi): void {
     }
   });
   const filters = api.getState?.()?.filters;
+  // The Archify viewer is a separate sandboxed document that inlines its palette,
+  // so the current selection is re-rendered with the new light/dark theme.
+  document.addEventListener("dext-appearance-change", () => {
+    if (topic) selectTopic(topic.id, diagram?.id);
+    else if (diagram) selectDiagram(diagram.id);
+  });
   const focused = document.querySelector<HTMLElement>("[data-project-focus]")?.dataset.projectFocus;
   if (focused && data.topics.some(item => item.id === focused)) selectTopic(focused);
   else if (!data.gallery && filters?.topic && data.topics.some((topic) => topic.id === filters.topic)) selectTopic(filters.topic, filters.diagram);

@@ -37,6 +37,8 @@ import { openDextFileReference, openExternalLink } from "../platform/vscode/cont
 import { dextBuiltinNames } from "../features/workflow/domain/dextTypesStatus.js";
 import type { WebviewResponse } from "../platform/webviewProtocol.js";
 import { webviewRequestSchema } from "../platform/webviewProtocol.js";
+import type { DextAppearanceController } from "../platform/vscode/appearance.js";
+import type { DextAppearance } from "../shared/contracts/appearance.js";
 
 function imageExtension(mimeType: string): string | undefined {
   const normalized = mimeType.toLowerCase().split(";")[0]!.trim();
@@ -104,7 +106,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly application: DextApplication,
     private readonly history: ConversationHistoryStore,
-    private readonly preferences: ConversationPreferences
+    private readonly preferences: ConversationPreferences,
+    /** Absent in lightweight host tests that do not exercise appearance. */
+    private readonly appearance?: DextAppearanceController
   ) {
     this.conversation = createConversationServices({
       history,
@@ -213,6 +217,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         this.messageQueue.markNotReady();
       }
     });
+  }
+
+  /** Broadcasts the host-level choice into this document. */
+  setAppearance(theme: DextAppearance): void {
+    this.postWhenReady({ type: "dextAppearance", theme });
   }
 
   async refresh(): Promise<void> {
@@ -699,6 +708,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.refresh();
           await this.conversation.controller.postConversationState();
           await this.post({ type: "outputSession", session: this.activeSession });
+          await this.post({ type: "dextAppearance", theme: this.appearance?.current ?? "auto" });
           await this.postDextTypes("ready");
           await this.postActiveExecution(this.activeSession.id);
           await this.flushPendingMessages(pendingMessages);
@@ -706,6 +716,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         }
         case "composerTypes": {
           await this.postDextTypes("requested");
+          break;
+        }
+        case "setDextAppearance": {
+          await this.appearance?.set(request.theme);
           break;
         }
         case "composerTypesApplied": {
@@ -1392,7 +1406,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, ...parts)).with({ query: `v=${stamp}` });
     const script = asset("dist", "webview", "main.js");
     const style = asset("dist", "webview", "main.css");
+    const appearanceStyle = asset("media", "appearance.css");
+    const appearanceScript = asset("dist", "webview", "appearance.js");
     const codicons = asset("dist", "codicons", "codicon.css");
+    const theme = this.appearance?.current ?? "auto";
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -1405,11 +1422,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${codicons.toString()}">
   <link rel="stylesheet" href="${asset("dist", "markdown", "github-markdown.css").toString()}">
   <link rel="stylesheet" href="${style.toString()}">
+  <link rel="stylesheet" href="${appearanceStyle.toString()}">
   <title>Dext</title>
 </head>
-<body>
+<body data-dext-theme="${theme}">
   <div class="app-shell">
-    <nav id="conversation-tabs" class="conversation-tabs" role="tablist" aria-label="Dext conversations"></nav>
+    <div class="dext-topbar">
+      <nav id="conversation-tabs" class="conversation-tabs" role="tablist" aria-label="Dext conversations"></nav>
+    </div>
     <main id="dext-main">
     <section id="result-section" class="result-section" aria-live="polite">
       <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
@@ -1532,6 +1552,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       </form>
     </dialog>
   </div>
+  <script nonce="${nonce}" src="${appearanceScript.toString()}"></script>
   <script nonce="${nonce}" src="${script.toString()}"></script>
 </body>
 </html>`;

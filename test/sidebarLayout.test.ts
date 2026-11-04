@@ -332,6 +332,71 @@ describe("sidebar panel layout", () => {
     expect(css).toContain(".composer-menu-option.composer-menu-option-warning {");
   });
 
+  it("keeps custom accents theme-aware and readable in normal and high-contrast themes", async () => {
+    const css = await source("media/styles.css");
+    // Full access is the only custom accent that must work as small text on
+    // both grounds, so it carries explicit dark and light values.
+    expect(css).toMatch(/:root \{[\s\S]*?--dext-full-access-accent: #d99a8f;/);
+    expect(css).toMatch(/body\.vscode-light,\s*body\.vscode-high-contrast-light \{[\s\S]*?--dext-full-access-accent: #7f4338;/);
+    expect(css).toMatch(/body\.vscode-high-contrast,\s*body\.vscode-high-contrast-light \{[\s\S]*?--dext-full-access-accent: var\(--vscode-foreground\);/);
+    // Prose softens against whatever surface it is rendered on, not only the
+    // sidebar (History uses the editor ground).
+    expect(css).toContain("color: color-mix(in srgb, var(--vscode-foreground) 90%, transparent);");
+    // HC pills get an opaque theme outline instead of translucent brand fills.
+    expect(css).toMatch(/body:is\(\.vscode-high-contrast, \.vscode-high-contrast-light\) \.composer-control \{[\s\S]*?border-color: var\(--vscode-contrastBorder, var\(--vscode-foreground\)\);/);
+    // Decorative sweeps and dark-only hover fallbacks derive from the theme.
+    expect(css).toContain("color-mix(in srgb, currentColor 16%, transparent)");
+    expect(css).not.toContain("rgba(255, 255, 255");
+  });
+
+  it("offers one host-level appearance choice from the sidebar view title", async () => {
+    const contracts = await source("src/shared/contracts/appearance.ts");
+    const controller = await source("src/platform/vscode/appearance.ts");
+    const webview = await source("src/webview/appearance.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
+    const extension = await source("src/extension.ts");
+    const manifest = await source("package.json");
+    const css = await source("media/appearance.css");
+    const layout = await source("media/styles.css");
+    // The choice belongs to the extension host, not one webview's document:
+    // globalState persists it and the controller broadcasts to every surface.
+    expect(contracts).toContain('export const DEXT_APPEARANCES = ["auto", "paper", "dim"] as const;');
+    expect(controller).toContain("this.state.update(DEXT_APPEARANCE_KEY, theme);");
+    expect(controller).toContain("for (const listener of [...this.listeners]) listener(theme);");
+    // The only control is the native view-title action, so it cannot compress
+    // the conversation tabs and does not need a duplicate on editor pages.
+    expect(manifest).toContain('"command": "dext.chooseAppearance"');
+    expect(manifest).toContain('"icon": "$(color-mode)"');
+    expect(manifest).toMatch(/"view\/title": \[[\s\S]*?"command": "dext\.chooseAppearance",\s*"when": "view == dext\.sidebar",\s*"group": "navigation@6"/);
+    expect(extension).toContain('vscode.commands.registerCommand("dext.chooseAppearance"');
+    expect(extension).toContain('title: "Dext Theme"');
+    expect(extension).toContain('appearance: "paper"');
+    expect(extension).toContain('appearance: "dim"');
+    // The tab bar stays, but no webview draws a theme menu or toggle.
+    expect(sidebar).toContain('<div class="dext-topbar">');
+    expect(sidebar).not.toContain("data-dext-appearance");
+    expect(sidebar).toContain("appearanceScript");
+    expect(webview).not.toContain("dext-appearance-menu");
+    expect(webview).not.toContain("setDextAppearance");
+    expect(webview).toContain('document.body.dataset.dextTheme = effective;');
+    expect(webview).toContain('message?.type !== "dextAppearance"');
+    // Paper and Dim replace the variables the existing CSS already reads, and
+    // the guards keep a real VS Code high-contrast theme in charge.
+    expect(css).toContain('body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
+    expect(css).toContain('body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
+    expect(css).not.toContain(".dext-appearance-menu");
+    expect(css).toContain("--vscode-sideBar-background: #f7f2e8;");
+    expect(css).toContain("--vscode-sideBar-background: #211e1a;");
+    // The old reading-only prototype is gone, including its narrow measure.
+    expect(layout).not.toContain("--dext-reading-measure");
+    expect(layout).not.toContain(".reading-mode-button");
+    // Process and Output now use the shared canvas width rather than a second,
+    // narrower reading column centered inside it.
+    expect(layout).toMatch(/#result-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
+    expect(layout).not.toContain("min(100%, 56rem)");
+    expect(layout).not.toContain("min(100%, 60rem)");
+  });
+
   it("colors Send with the accent of the mode it will run in", async () => {
     const css = await source("media/styles.css");
     // Agent is the plain default; the other modes retint the shared accent

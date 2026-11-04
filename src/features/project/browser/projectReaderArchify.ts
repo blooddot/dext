@@ -1,5 +1,6 @@
 import type { ProjectDiagram } from "../contracts/projectDiagram.js";
 import { archifyViewerBridgeScript, isTrustedHostMessage, isTrustedViewerMessage } from "./archifyBridge.js";
+import { isDextLightSurface } from "../../../platform/browser/dextAppearance.js";
 
 export interface ReaderArchifyView {
   ready: Promise<void>;
@@ -50,7 +51,7 @@ export function renderReaderArchify(diagram: ProjectDiagram, canvas: HTMLElement
       || message.diagramId !== diagram.id || message.updatedAt !== diagram.updatedAt) return;
     if (message.error || typeof message.html !== "string") { fail(typeof message.error === "string" ? message.error : "Invalid render response."); return; }
     mapping = message.mapping && typeof message.mapping === "object" ? message.mapping as typeof mapping : {};
-    const theme = document.body.classList.contains("vscode-light") || document.body.classList.contains("vscode-high-contrast-light") ? "light" : "dark";
+    const theme = isDextLightSurface() ? "light" : "dark";
     const nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce ?? "";
     const bridge = `<script nonce="${nonce}">${archifyViewerBridgeScript(session, theme, Boolean(exitPresentation))}</script>`;
     frame.srcdoc = message.html.replace(/<head>/i, `<head>${bridge}`).replace(/<script(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`);

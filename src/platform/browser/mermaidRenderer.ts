@@ -1,4 +1,5 @@
 import mermaid from "mermaid";
+import { isDextLightSurface } from "./dextAppearance.js";
 
 /** The API the shared Mermaid bundle exposes to the page that lazy-loads it. */
 export interface DextMermaidRenderer {
@@ -18,7 +19,7 @@ let renderQueue = Promise.resolve();
  */
 export function renderMermaidSvg(source: string, root: HTMLElement): Promise<string> {
   const result = renderQueue.then(async () => {
-    const light = document.body.classList.contains("vscode-light") || document.body.classList.contains("vscode-high-contrast-light");
+    const light = isDextLightSurface();
     mermaid.initialize({
       startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true,
       theme: light ? "default" : "dark", fontFamily: getComputedStyle(root).fontFamily,

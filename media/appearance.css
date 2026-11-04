@@ -1,0 +1,396 @@
+/* Dext appearance: one host-level Auto/Paper/Dim choice, shared by the sidebar,
+   History and every Project/resource editor tab. Auto keeps VS Code's own
+   variables; Paper and Dim replace the `--vscode-*` values the existing CSS
+   already reads, so components do not need a second parallel token layer. */
+
+.app-shell > .dext-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  min-height: 32px;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background));
+  border-bottom: 1px solid var(--vscode-editorGroupHeader-tabsBorder, var(--vscode-sideBar-border, var(--vscode-widget-border)));
+  /* Paper/Dim set this on the body scope, but a host theme can inject its own
+     topbar tint after our palette loads. Keep Dext's own bar on the palette. */
+  color: var(--vscode-foreground);
+}
+
+body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .app-shell > .dext-topbar {
+  background: #efe8db;
+  border-bottom-color: #ded3c2;
+}
+
+body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .app-shell > .dext-topbar {
+  background: #1b1815;
+  border-bottom-color: #3d372e;
+}
+
+.app-shell > .dext-topbar .conversation-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-bottom: 0;
+  background: transparent;
+}
+
+/* ---- Self-contained palettes -------------------------------------------------
+   The `:not(...)` guards are deliberate: an actual VS Code high-contrast theme
+   always wins over Paper/Dim. `appearance.ts` also normalizes the attribute to
+   auto while high contrast is active, so Monaco and diagrams agree. */
+
+body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {
+  color-scheme: light;
+  /* editorTabs.css paints the ground on :root from --vscode-editor-background,
+     which a body-scoped palette cannot reach. Paint the body itself so an
+     editor page that previously stayed dark now follows Paper. */
+  background: #f7f2e8;
+  color: #322d26;
+  min-height: 100vh;
+  --vscode-foreground: #322d26;
+  --vscode-descriptionForeground: #6f6658;
+  --vscode-disabledForeground: #8a8072;
+  --vscode-icon-foreground: #5b5347;
+  --vscode-sideBar-background: #f7f2e8;
+  --vscode-sideBar-border: #ded3c2;
+  --vscode-editor-background: #f7f2e8;
+  --vscode-editor-foreground: #322d26;
+  --vscode-editor-inactiveSelectionBackground: #ece3d4;
+  /* Monaco reads these tokens for its gutter, caret, minimap-less margin and
+     find/suggest popups. Without explicit values the webview inherits the
+     user's workbench theme and leaves a dark strip at the composer's left
+     edge even though the rest of Paper is light. */
+  --vscode-editorGutter-background: #f7f2e8;
+  --vscode-editorCursor-foreground: #8a4b2f;
+  --vscode-editorLineNumber-foreground: #8a8072;
+  --vscode-editorLineNumber-activeForeground: #5b5347;
+  --vscode-editor-selectionBackground: #e3d3ba;
+  --vscode-editor-lineHighlightBackground: #f0e8da;
+  --vscode-editorSuggestWidget-background: #fffaf1;
+  --vscode-editorSuggestWidget-foreground: #322d26;
+  --vscode-editorSuggestWidget-selectedBackground: #e8ddcc;
+  --vscode-editorHoverWidget-background: #fffaf1;
+  --vscode-editorHoverWidget-foreground: #322d26;
+  --vscode-editorHoverWidget-border: #b5a58e;
+  --vscode-editorInfo-foreground: #1f5f9e;
+  --vscode-panel-border: #ded3c2;
+  --vscode-widget-border: #d8cbb8;
+  --vscode-widget-shadow: rgba(60, 50, 36, .12);
+  --vscode-contrastBorder: #b5a58e;
+  --vscode-contrastActiveBorder: #8a4b2f;
+  --vscode-focusBorder: #9b6b4f;
+  --vscode-editorGroupHeader-tabsBackground: #efe8db;
+  --vscode-editorGroupHeader-tabsBorder: #ded3c2;
+  --vscode-tab-activeBackground: #f7f2e8;
+  --vscode-tab-activeForeground: #322d26;
+  --vscode-tab-inactiveBackground: #efe8db;
+  --vscode-tab-inactiveForeground: #6f6658;
+  --vscode-tab-hoverBackground: #e8ddcc;
+  --vscode-tab-border: #ded3c2;
+  --vscode-tab-activeBorderTop: #8a4b2f;
+  --vscode-toolbar-hoverBackground: #eae1d2;
+  --vscode-list-hoverBackground: #eee6d8;
+  --vscode-list-hoverForeground: #322d26;
+  --vscode-list-activeSelectionBackground: #e8ddcc;
+  --vscode-list-activeSelectionForeground: #2b261f;
+  --vscode-list-inactiveSelectionBackground: #e3d9c8;
+  --vscode-list-focusBackground: #e8ddcc;
+  --vscode-input-background: #fffaf1;
+  --vscode-input-foreground: #322d26;
+  /* Control outlines are the only cue that these are fields and popups, so
+     they stay at ~3:1 on every Paper surface instead of the softer divider
+     tone used for decorative cards and rules. */
+  --vscode-input-border: #8b7a64;
+  --vscode-input-placeholderForeground: #7a7062;
+  --vscode-inputOption-activeBackground: #e8ddcc;
+  --vscode-inputOption-activeForeground: #322d26;
+  --vscode-inputOption-activeBorder: #8a4b2f;
+  --vscode-dropdown-background: #fffaf1;
+  --vscode-dropdown-foreground: #322d26;
+  --vscode-dropdown-border: #8b7a64;
+  --vscode-menu-background: #fffaf1;
+  --vscode-menu-foreground: #322d26;
+  --vscode-menu-border: #8b7a64;
+  --vscode-menu-selectionBackground: #e8ddcc;
+  --vscode-menu-selectionForeground: #2b261f;
+  --vscode-menu-separatorBackground: #ddd1bf;
+  --vscode-button-background: #6b4a34;
+  --vscode-button-foreground: #fffaf1;
+  --vscode-button-hoverBackground: #7a5540;
+  --vscode-button-border: #8b7a64;
+  --vscode-button-secondaryBackground: #e8ddcc;
+  --vscode-button-secondaryForeground: #322d26;
+  --vscode-button-secondaryHoverBackground: #dfd1bd;
+  --vscode-badge-background: #d7c9b5;
+  --vscode-badge-foreground: #3b342a;
+  --vscode-errorForeground: #a1260d;
+  --vscode-editorError-foreground: #a1260d;
+  --vscode-editorError-background: #f6ddd6;
+  --vscode-editorWarning-foreground: #806000;
+  --vscode-notificationsWarningIcon-foreground: #806000;
+  --vscode-inputValidation-errorBackground: #f6ddd6;
+  --vscode-inputValidation-errorBorder: #c94f34;
+  --vscode-textLink-foreground: #8a4b2f;
+  --vscode-textLink-activeForeground: #6e3720;
+  --vscode-textCodeBlock-background: #ede5d7;
+  --vscode-textBlockQuote-background: #f0e8da;
+  --vscode-textBlockQuote-border: #d3c4ae;
+  --vscode-editorWidget-background: #fffaf1;
+  --vscode-editorWidget-foreground: #322d26;
+  --vscode-editorWidget-border: #d8cbb8;
+  --vscode-progressBar-background: #8a4b2f;
+  --vscode-charts-blue: #1769b5;
+  --vscode-charts-green: #2f6b45;
+  --vscode-charts-orange: #a34a25;
+  --vscode-charts-yellow: #806000;
+  --vscode-debugTokenExpression-string: #a31515;
+  --vscode-terminal-foreground: #322d26;
+  --vscode-terminal-border: #ded3c2;
+  --vscode-terminal-ansiBlack: #322d26;
+  --vscode-terminal-ansiRed: #a1260d;
+  --vscode-terminal-ansiGreen: #2f6b45;
+  --vscode-terminal-ansiYellow: #7a5b00;
+  --vscode-terminal-ansiBlue: #1f5f9e;
+  --vscode-terminal-ansiMagenta: #7a3f8c;
+  --vscode-terminal-ansiCyan: #1f6b6b;
+  --vscode-terminal-ansiWhite: #6f6658;
+  --vscode-terminal-ansiBrightBlack: #6f6658;
+  --vscode-terminal-ansiBrightRed: #8a1f0a;
+  --vscode-terminal-ansiBrightGreen: #24573a;
+  --vscode-terminal-ansiBrightYellow: #665000;
+  --vscode-terminal-ansiBrightBlue: #174d80;
+  --vscode-terminal-ansiBrightMagenta: #66307a;
+  --vscode-terminal-ansiBrightCyan: #175a5a;
+  --vscode-terminal-ansiBrightWhite: #322d26;
+  --vscode-testing-iconPassed: #2f6b45;
+  --vscode-testing-iconQueued: #806000;
+  --vscode-testing-iconUnset: #6f6658;
+  --vscode-symbolIcon-keywordForeground: #7a3f8c;
+  --vscode-symbolIcon-stringForeground: #2f6b45;
+  --vscode-symbolIcon-numberForeground: #8a5a00;
+  --vscode-symbolIcon-booleanForeground: #1f5f9e;
+  --vscode-symbolIcon-propertyForeground: #1f5f9e;
+  --vscode-symbolIcon-methodForeground: #6a4b00;
+  --vscode-symbolIcon-functionForeground: #6a4b00;
+  --vscode-symbolIcon-classForeground: #1f6b5e;
+  --vscode-symbolIcon-variableForeground: #3b3228;
+  --dext-plan-fill: #c9ac35;
+  --dext-plan-foreground: #231d12;
+  --dext-plan-label: #6f5800;
+  --dext-full-access-accent: #7f4338;
+  --dext-row-action-background: #fffaf1;
+  --dext-turn-surface: #efe7d9;
+  --dext-quiet-divider: #d8cbb8;
+  --dext-record-border: transparent;
+  --resource-api-accent: #1769b5;
+  --resource-mcp-accent: #7546b6;
+  --resource-rule-accent: #886000;
+  --resource-skill-accent: #08796d;
+  --resource-project-accent: #a34a25;
+  --resource-button-foreground: #ffffff;
+  --resource-syntax-keyword: #af00db;
+  --resource-syntax-string: #a31515;
+  --resource-syntax-number: #098658;
+  --resource-syntax-function: #795e26;
+  --resource-syntax-type: #267f99;
+  --resource-syntax-parameter: #001080;
+  --resource-syntax-boolean: #0000ff;
+}
+
+body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {
+  color-scheme: dark;
+  background: #211e1a;
+  color: #e8e1d5;
+  min-height: 100vh;
+  --vscode-foreground: #e8e1d5;
+  --vscode-descriptionForeground: #b3a897;
+  --vscode-disabledForeground: #928879;
+  --vscode-icon-foreground: #c9c0b2;
+  --vscode-sideBar-background: #211e1a;
+  --vscode-sideBar-border: #3d372e;
+  --vscode-editor-background: #211e1a;
+  --vscode-editor-foreground: #e8e1d5;
+  --vscode-editor-inactiveSelectionBackground: #332e27;
+  /* Mirrors the Paper block above: these keep Monaco inside the Dim palette
+     instead of leaking the workbench theme into the gutter and popups. */
+  --vscode-editorGutter-background: #211e1a;
+  --vscode-editorCursor-foreground: #d9a27f;
+  --vscode-editorLineNumber-foreground: #928879;
+  --vscode-editorLineNumber-activeForeground: #c9c0b2;
+  --vscode-editor-selectionBackground: #4a3c2c;
+  --vscode-editor-lineHighlightBackground: #26221d;
+  --vscode-editorSuggestWidget-background: #29251f;
+  --vscode-editorSuggestWidget-foreground: #e8e1d5;
+  --vscode-editorSuggestWidget-selectedBackground: #3d372e;
+  --vscode-editorHoverWidget-background: #29251f;
+  --vscode-editorHoverWidget-foreground: #e8e1d5;
+  --vscode-editorHoverWidget-border: #6b5f50;
+  --vscode-editorInfo-foreground: #8fc7f0;
+  --vscode-panel-border: #3d372e;
+  --vscode-widget-border: #4a4237;
+  --vscode-widget-shadow: rgba(0, 0, 0, .5);
+  --vscode-contrastBorder: #6b5f50;
+  --vscode-contrastActiveBorder: #d9a27f;
+  --vscode-focusBorder: #c99b78;
+  --vscode-editorGroupHeader-tabsBackground: #1b1815;
+  --vscode-editorGroupHeader-tabsBorder: #3d372e;
+  --vscode-tab-activeBackground: #211e1a;
+  --vscode-tab-activeForeground: #e8e1d5;
+  --vscode-tab-inactiveBackground: #1b1815;
+  --vscode-tab-inactiveForeground: #b3a897;
+  --vscode-tab-hoverBackground: #2c2822;
+  --vscode-tab-border: #3d372e;
+  --vscode-tab-activeBorderTop: #d9a27f;
+  --vscode-toolbar-hoverBackground: #2c2822;
+  --vscode-list-hoverBackground: #2c2822;
+  --vscode-list-hoverForeground: #e8e1d5;
+  --vscode-list-activeSelectionBackground: #332e27;
+  --vscode-list-activeSelectionForeground: #f3ece0;
+  --vscode-list-inactiveSelectionBackground: #2a2621;
+  --vscode-list-focusBackground: #332e27;
+  --vscode-input-background: #191714;
+  --vscode-input-foreground: #e8e1d5;
+  /* Same 3:1 control-boundary rule as Paper; decorative dividers below keep
+     the quieter widget-border tone. */
+  --vscode-input-border: #857563;
+  --vscode-input-placeholderForeground: #a99e8e;
+  --vscode-inputOption-activeBackground: #3d372e;
+  --vscode-inputOption-activeForeground: #f3ece0;
+  --vscode-inputOption-activeBorder: #d9a27f;
+  --vscode-dropdown-background: #191714;
+  --vscode-dropdown-foreground: #e8e1d5;
+  --vscode-dropdown-border: #857563;
+  --vscode-menu-background: #29251f;
+  --vscode-menu-foreground: #e8e1d5;
+  --vscode-menu-border: #857563;
+  --vscode-menu-selectionBackground: #3d372e;
+  --vscode-menu-selectionForeground: #f3ece0;
+  --vscode-menu-separatorBackground: #3a342b;
+  --vscode-button-background: #a8795c;
+  --vscode-button-foreground: #17130f;
+  --vscode-button-hoverBackground: #b98a6a;
+  --vscode-button-border: #857563;
+  --vscode-button-secondaryBackground: #332e27;
+  --vscode-button-secondaryForeground: #e8e1d5;
+  --vscode-button-secondaryHoverBackground: #3d372e;
+  --vscode-badge-background: #4a4237;
+  --vscode-badge-foreground: #f3ece0;
+  --vscode-errorForeground: #f48771;
+  --vscode-editorError-foreground: #f48771;
+  --vscode-editorError-background: #3d211d;
+  --vscode-editorWarning-foreground: #e0c27f;
+  --vscode-notificationsWarningIcon-foreground: #e0c27f;
+  --vscode-inputValidation-errorBackground: #3d211d;
+  --vscode-inputValidation-errorBorder: #8a3b2f;
+  --vscode-textLink-foreground: #d9a27f;
+  --vscode-textLink-activeForeground: #e8b995;
+  --vscode-textCodeBlock-background: #191714;
+  --vscode-textBlockQuote-background: #2a2621;
+  --vscode-textBlockQuote-border: #554b3e;
+  --vscode-editorWidget-background: #29251f;
+  --vscode-editorWidget-foreground: #e8e1d5;
+  --vscode-editorWidget-border: #4a4237;
+  --vscode-progressBar-background: #d9a27f;
+  --vscode-charts-blue: #79b8ff;
+  --vscode-charts-green: #63c9b6;
+  --vscode-charts-orange: #e58b6a;
+  --vscode-charts-yellow: #dfb45c;
+  --vscode-debugTokenExpression-string: #ce9178;
+  --vscode-terminal-foreground: #e8e1d5;
+  --vscode-terminal-border: #3d372e;
+  --vscode-terminal-ansiBlack: #191714;
+  --vscode-terminal-ansiRed: #f48771;
+  --vscode-terminal-ansiGreen: #a7d8a0;
+  --vscode-terminal-ansiYellow: #e0c27f;
+  --vscode-terminal-ansiBlue: #8fc7f0;
+  --vscode-terminal-ansiMagenta: #d7a6e8;
+  --vscode-terminal-ansiCyan: #8fd6dc;
+  --vscode-terminal-ansiWhite: #e8e1d5;
+  --vscode-terminal-ansiBrightBlack: #b3a897;
+  --vscode-terminal-ansiBrightRed: #ff9a86;
+  --vscode-terminal-ansiBrightGreen: #bde8b6;
+  --vscode-terminal-ansiBrightYellow: #f0d79d;
+  --vscode-terminal-ansiBrightBlue: #a9d7fa;
+  --vscode-terminal-ansiBrightMagenta: #e5bcf2;
+  --vscode-terminal-ansiBrightCyan: #a8e5ea;
+  --vscode-terminal-ansiBrightWhite: #f3ece0;
+  --vscode-testing-iconPassed: #7fc79a;
+  --vscode-testing-iconQueued: #e0c27f;
+  --vscode-testing-iconUnset: #b3a897;
+  --vscode-symbolIcon-keywordForeground: #d7a6e8;
+  --vscode-symbolIcon-stringForeground: #a7d8a0;
+  --vscode-symbolIcon-numberForeground: #e0c27f;
+  --vscode-symbolIcon-booleanForeground: #8fc7f0;
+  --vscode-symbolIcon-propertyForeground: #9ccbf5;
+  --vscode-symbolIcon-methodForeground: #e2c27a;
+  --vscode-symbolIcon-functionForeground: #e2c27a;
+  --vscode-symbolIcon-classForeground: #8fd6c2;
+  --vscode-symbolIcon-variableForeground: #e8e1d5;
+  --dext-plan-fill: #d4b52c;
+  --dext-plan-foreground: #202020;
+  --dext-plan-label: #e0c34c;
+  --dext-full-access-accent: #d99a8f;
+  --dext-row-action-background: #252526;
+  --dext-turn-surface: #29251f;
+  --dext-quiet-divider: #3a342b;
+  --dext-record-border: transparent;
+  --resource-api-accent: #79b8ff;
+  --resource-mcp-accent: #c2a3ff;
+  --resource-rule-accent: #dfb45c;
+  --resource-skill-accent: #63c9b6;
+  --resource-project-accent: #e58b6a;
+  --resource-button-foreground: #17130f;
+  --resource-syntax-keyword: #c586c0;
+  --resource-syntax-string: #ce9178;
+  --resource-syntax-number: #b5cea8;
+  --resource-syntax-function: #dcdcaa;
+  --resource-syntax-type: #4ec9b0;
+  --resource-syntax-parameter: #9cdcfe;
+  --resource-syntax-boolean: #569cd6;
+}
+
+/* GitHub Markdown inlines its own palette per workbench theme. Those literal
+   colours do not follow the `--vscode-*` overrides above, so the few places
+   they still paint a surface (inline code and striped table rows) are reset
+   for Paper/Dim here. */
+body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .markdown-body :not(pre) > code {
+  color: #3b3228;
+  background-color: #e7ddcd;
+}
+
+body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .markdown-body :not(pre) > code {
+  color: #efe7db;
+  background-color: #332d25;
+}
+
+body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .markdown-body table tr {
+  background-color: transparent;
+  border-top-color: #ded3c2;
+}
+
+body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .markdown-body table tr:nth-child(2n) {
+  background-color: #efe7d9;
+}
+
+body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .markdown-body table tr {
+  background-color: transparent;
+  border-top-color: #3d372e;
+}
+
+body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .markdown-body table tr:nth-child(2n) {
+  background-color: #29251f;
+}
+
+body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) ::selection {
+  color: #2b261f;
+  background: #e3d3ba;
+}
+
+body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) ::selection {
+  color: #f3ece0;
+  background: #4a3c2c;
+}
+
+body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light),
+body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {
+  scrollbar-color: color-mix(in srgb, var(--vscode-foreground) 26%, transparent) transparent;
+}

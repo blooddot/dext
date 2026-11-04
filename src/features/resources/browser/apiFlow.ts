@@ -31,3 +31,8 @@ async function renderFlow(root: HTMLElement): Promise<void> {
 }
 
 for (const root of document.querySelectorAll<HTMLElement>("[data-api-flow]")) void renderFlow(root);
+// Mermaid inlines its palette into the SVG; repaint an open flow when the
+// host-level appearance changes instead of leaving a dark diagram on Paper.
+document.addEventListener("dext-appearance-change", () => {
+  for (const root of document.querySelectorAll<HTMLElement>("[data-api-flow]")) void renderFlow(root);
+});

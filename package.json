@@ -105,6 +105,10 @@
         "title": "Copy This Turn as Markdown"
       },
       {
+        "command": "dext.history.addTurnToDext",
+        "title": "Add This Turn to Dext Input"
+      },
+      {
         "command": "dext.history.retryTurn",
         "title": "Retry This Turn"
       },
@@ -119,6 +123,10 @@
       {
         "command": "dext.history.copyConversation",
         "title": "Copy Conversation as Markdown"
+      },
+      {
+        "command": "dext.history.addConversationToDext",
+        "title": "Add Conversation to Dext Input"
       },
       {
         "command": "dext.history.deleteConversation",
@@ -204,6 +212,11 @@
         "command": "dext.viewResources",
         "title": "Dext: View Resources",
         "icon": "$(server)"
+      },
+      {
+        "command": "dext.chooseAppearance",
+        "title": "Dext: Switch Theme",
+        "icon": "$(color-mode)"
       },
       {
         "command": "dext.addMcp",
@@ -415,6 +428,10 @@
           "when": "false"
         },
         {
+          "command": "dext.history.addTurnToDext",
+          "when": "false"
+        },
+        {
           "command": "dext.history.retryTurn",
           "when": "false"
         },
@@ -428,6 +445,10 @@
         },
         {
           "command": "dext.history.copyConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.addConversationToDext",
           "when": "false"
         },
         {
@@ -646,6 +667,11 @@
           "command": "dext.viewResources",
           "when": "view == dext.sidebar",
           "group": "navigation@5"
+        },
+        {
+          "command": "dext.chooseAppearance",
+          "when": "view == dext.sidebar",
+          "group": "navigation@6"
         }
       ],
       "webview/context": [
@@ -675,6 +701,11 @@
           "group": "1_turn@4"
         },
         {
+          "command": "dext.history.addTurnToDext",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
+          "group": "1_turn@5"
+        },
+        {
           "command": "dext.history.deleteTurn",
           "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextConversationRunning",
           "group": "4_delete@1"
@@ -695,6 +726,11 @@
           "group": "1_turn@3"
         },
         {
+          "command": "dext.history.addTurnToDext",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "1_turn@4"
+        },
+        {
           "command": "dext.history.deleteTurn",
           "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
           "group": "4_delete@1"
@@ -712,12 +748,17 @@
         {
           "command": "dext.history.recordWorkflow",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && dext.workspaceTrusted",
-          "group": "2_conversation@6"
+          "group": "2_conversation@7"
         },
         {
           "command": "dext.history.copyConversation",
           "when": "webviewId == 'dext.history' && webviewSection == 'session'",
           "group": "2_conversation@3"
+        },
+        {
+          "command": "dext.history.addConversationToDext",
+          "when": "webviewId == 'dext.history' && webviewSection == 'session'",
+          "group": "2_conversation@4"
         },
         {
           "command": "dext.history.renameConversation",
@@ -727,12 +768,12 @@
         {
           "command": "dext.history.addFavorite",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && !dextFavorite",
-          "group": "2_conversation@4"
+          "group": "2_conversation@5"
         },
         {
           "command": "dext.history.removeFavorite",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && dextFavorite",
-          "group": "2_conversation@4"
+          "group": "2_conversation@5"
         },
         {
           "command": "dext.history.deleteConversation",
@@ -747,7 +788,7 @@
         {
           "command": "dext.history.unarchiveConversation",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && dextArchived",
-          "group": "2_conversation@5"
+          "group": "2_conversation@6"
         },
         {
           "command": "dext.tab.renameConversation",

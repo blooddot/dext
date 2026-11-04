@@ -58,7 +58,7 @@ import { terminalSegments } from "../features/conversations/presentation/termina
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
 import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
-import { renderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
+import { renderMarkdownDiagrams, rerenderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
 import type { PlanProjectContext } from "../shared/contracts/planProject.js";
 import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
 
@@ -76,7 +76,10 @@ function element<T extends HTMLElement>(id: string): T {
   return value as T;
 }
 
-const vscode = acquireVsCodeApi();
+// The shared appearance bundle loaded first only mirrors the host theme choice;
+// this bundle still owns the single acquireVsCodeApi() call.
+const apiWindow = window as typeof window & { __dextApi?: VsCodeApi };
+const vscode = apiWindow.__dextApi ?? (apiWindow.__dextApi = acquireVsCodeApi());
 
 const elements = {
   conversationTabs: element<HTMLElement>("conversation-tabs"),
@@ -865,6 +868,14 @@ function toggleResultDetails(): void {
   // closed turns just because one happens to be closed.
   setResultDetailsOpen(!details.some((detail) => detail.open));
 }
+
+// The host-level appearance bundle writes `data-dext-theme` before dispatching
+// this. Monaco and already-rendered Mermaid diagrams cannot recolour themselves
+// from CSS alone, so they are rebuilt with the new light/dark base.
+document.addEventListener("dext-appearance-change", () => {
+  if (lastSidebarState) applySidebarTheme(lastSidebarState);
+  rerenderMarkdownDiagrams(elements.result);
+});
 
 function setSectionOpen(heading: HTMLElement, body: HTMLElement, open: boolean): void {
   heading.setAttribute("aria-expanded", String(open));

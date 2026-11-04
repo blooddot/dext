@@ -10,6 +10,19 @@ import {
 } from "../features/conversations/contracts/protocol.js";
 import { fileSearchRequestSchema, type FileSearchResponse } from "../features/workspace/contracts/fileSearch.js";
 import type { EditorTokenTheme } from "./vscode/theme.js";
+import { isDextAppearance, type DextAppearance } from "../shared/contracts/appearance.js";
+
+/** The appearance decision is host-level, so every webview request that changes
+ * it uses this one shape and every surface receives the matching response. */
+export const setDextAppearanceRequestSchema = z.object({
+  type: z.literal("setDextAppearance"),
+  theme: z.enum(["auto", "paper", "dim"])
+});
+
+export function parseDextAppearanceRequest(value: unknown): DextAppearance | undefined {
+  const parsed = setDextAppearanceRequestSchema.safeParse(value);
+  return parsed.success && isDextAppearance(parsed.data.theme) ? parsed.data.theme : undefined;
+}
 
 /** HTTP MCP credentials are never written to a manifest: bearer uses the
  * SecretStorage token in an Authorization header, query attaches it to the
@@ -30,6 +43,7 @@ export type ConversationSummary = ConversationSummaryContract;
 export const webviewRequestSchema = z.discriminatedUnion("type", [
   ...conversationRequestSchemas,
   z.object({ type: z.literal("ready") }),
+  setDextAppearanceRequestSchema,
   // The composer asks for its types rather than only waiting for the host to push
   // them: a Webview that missed the first message still gets its declaration, its
   // API modules and its completion, instead of a silently dumb editor.
@@ -143,6 +157,7 @@ export interface SidebarState {
 export type WebviewResponse =
   | ConversationWebviewResponse
   | { type: "state"; state: SidebarState }
+  | { type: "dextAppearance"; theme: DextAppearance }
   /** The generated `dext` declaration, so Monaco's TypeScript worker completes
    * and diagnoses `import { ask } from "dext"` in the composer — plus the workspace's
    * own API modules, because Monaco has no filesystem and cannot read `.dext/api`.

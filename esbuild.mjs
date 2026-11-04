@@ -53,6 +53,10 @@ const contexts = await Promise.all([
       // Host-rendered pages (History) have no bundle to call the diagram renderer
       // from, so this entry exposes it as a global for their inline script.
       diagrams: "src/webview/diagrams.ts",
+      // The Auto/Paper/Dim control is shared by the sidebar, History and every
+      // editor tab. Keeping one bundle means one menu implementation and one
+      // acquireVsCodeApi owner across all four webview documents.
+      appearance: "src/webview/appearance.ts",
       // API detail pages render Mermaid only when an Execution flow exists; this
       // separate entry keeps that renderer out of every other editor-tab page.
       apiFlow: "src/features/resources/browser/apiFlow.ts",

@@ -6,6 +6,8 @@ import { orderHistorySessions } from "../domain/conversationOrder.js";
 import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "../presentation/historyRender.js";
 import { openDextFileReference } from "../../../platform/vscode/contextHost.js";
 import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
+import type { DextAppearanceController } from "../../../platform/vscode/appearance.js";
+import { isDextAppearance, type DextAppearance } from "../../../shared/contracts/appearance.js";
 
 export class DextHistoryPanel implements vscode.Disposable {
   static readonly viewType = "dext.history";
@@ -15,7 +17,9 @@ export class DextHistoryPanel implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly history: ConversationHistoryStore,
     private readonly preferences: ConversationPreferences,
-    private readonly storage: DextStorage
+    private readonly storage: DextStorage,
+    /** Absent in host tests that do not render the appearance menu. */
+    private readonly appearance?: DextAppearanceController
   ) {}
 
   showInActiveEditor(): Promise<void> {
@@ -44,7 +48,11 @@ export class DextHistoryPanel implements vscode.Disposable {
       this.panel = undefined;
     });
     this.panel.webview.onDidReceiveMessage((raw: unknown) => {
-      const message = raw as { type?: string; text?: string; reference?: string; command?: string; sessionId?: string; turnId?: string };
+      const message = raw as { type?: string; theme?: string; text?: string; reference?: string; command?: string; sessionId?: string; turnId?: string };
+      if (message.type === "setDextAppearance") {
+        if (isDextAppearance(message.theme)) void this.appearance?.set(message.theme);
+        return;
+      }
       if (message.type === "copy" && typeof message.text === "string") {
         void vscode.env.clipboard.writeText(message.text);
       }
@@ -103,6 +111,12 @@ export class DextHistoryPanel implements vscode.Disposable {
     this.render();
   }
 
+  /** The appearance choice is host-level; an already-open History page adopts
+   * it without a reload, preserving expanded sessions and scroll position. */
+  setAppearance(theme: DextAppearance): void {
+    void this.panel?.webview.postMessage({ type: "dextAppearance", theme });
+  }
+
   refreshTurnTitle(sessionId: string, turnId: string): void {
     const turn = this.history.list(true).find((session) => session.id === sessionId)?.turns.find((item) => item.id === turnId);
     if (!turn) return;
@@ -126,6 +140,8 @@ export class DextHistoryPanel implements vscode.Disposable {
     const nonce = randomBytes(16).toString("base64");
     const codicons = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "codicons", "codicon.css"));
     const style = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "styles.css"));
+    const appearanceStyle = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "appearance.css"));
+    const appearanceScript = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "appearance.js"));
     const markdownStyle = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "markdown", "github-markdown.css"));
     // Diagrams come from the shared bundles, loaded only when a turn has one.
     const diagrams = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "diagrams.js"));
@@ -161,18 +177,24 @@ export class DextHistoryPanel implements vscode.Disposable {
   <link rel="stylesheet" href="${codicons.toString()}">
   <link rel="stylesheet" href="${markdownStyle.toString()}">
   <link rel="stylesheet" href="${style.toString()}">
+  <link rel="stylesheet" href="${appearanceStyle.toString()}">
   <style>${historyTokenStyles()}</style>
   <title>Dext History</title>
 </head>
-<body>
+<body class="history-panel" data-dext-theme="${this.appearance?.current ?? "auto"}">
   <section class="history-view" aria-label="Dext History">
     <div class="history-content">${body}</div>
   </section>
   <script nonce="${nonce}" src="${diagrams.toString()}"></script>
+  <script nonce="${nonce}" src="${appearanceScript.toString()}"></script>
   <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
+    const vscode = window.__dextApi || (window.__dextApi = acquireVsCodeApi());
     const renderDiagrams = (root) => window.dextRenderDiagrams?.(root);
+    const rerenderDiagrams = (root) => window.dextRerenderDiagrams?.(root);
     renderDiagrams(document.querySelector('.history-content'));
+    document.addEventListener('dext-appearance-change', () => {
+      rerenderDiagrams(document.querySelector('.history-content'));
+    });
     document.addEventListener('click', (event) => {
       const target = event.target instanceof Element ? event.target : null;
       const copyButton = target?.closest('button[data-copy]');

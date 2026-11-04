@@ -34,6 +34,9 @@ import { EditorTabRestorer } from "./platform/editor-tabs/editorTabSerializer.js
 import { restoreEditorTabState } from "./platform/editor-tabs/editorTabState.js";
 import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs/editorTabTypes.js";
 import { DextSidebarProvider } from "./app/sidebarProvider.js";
+import { DextAppearanceController } from "./platform/vscode/appearance.js";
+import { parseDextAppearanceRequest } from "./platform/webviewProtocol.js";
+import type { DextAppearance } from "./shared/contracts/appearance.js";
 import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./features/conversations/presentation/turnPresentation.js";
 import type { SelectionTarget } from "./platform/vscode/attachments.js";
 import { DextSelectionActions } from "./platform/vscode/selectionActions.js";
@@ -113,11 +116,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   }
   const preferences = new DextConversationPreferences(context.workspaceState);
+  // Appearance belongs to Dext, not to one Webview: the sidebar, History and every
+  // editor tab are separate documents, so the choice is persisted host-side and
+  // broadcast instead of being stored in a single document's localStorage.
+  const appearance = new DextAppearanceController(context.globalState);
   // History trims whole conversations inside its own persist(), where no
   // preferences object exists; clear what trimming left behind at startup.
   await preferences.pruneConversations(history.list(true).map((session) => session.id));
-  const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
-  const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
+  const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage, appearance);
+  const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences, appearance);
   // Unified editor tabs: Project, API, Global Resources, and History all go through one manager so
   // a stable key can never open twice, whichever recovery path runs first.
   const editors: {
@@ -141,18 +148,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // it is listed for every editor tab so an API page can render its flow
         // without each tab paying for Mermaid up front.
         mermaidUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "mermaid.js")).toString(),
+        appearance: {
+          theme: appearance.current,
+          stylesheetUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "appearance.css")).toString(),
+          scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "appearance.js")).toString()
+        },
         ...(script ? { scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", script)).toString() } : {})
       });
   };
   const editorTabs = new EditorTabManager(
     createVscodeEditorTabHost(vscode.window, { localResourceRoots: [context.extensionUri], renderHtml: renderEditorHtml }),
     (key, message) => {
+      // The appearance menu is host-level; intercept it before the feature
+      // provider, which only understands its own page protocol.
+      const requestedTheme = parseDextAppearanceRequest(message);
+      if (requestedTheme) {
+        void reportCommandError(() => appearance.set(requestedTheme));
+        return;
+      }
       const kind = parseEditorTabKey(key)?.kind;
       const provider = kind === "project" ? editors.project : kind === "api" ? editors.api : kind === "globalResources" ? editors.globalResources : undefined;
       void reportCommandError(() => provider?.handleMessage(key, message) ?? Promise.resolve());
     }
   );
   const editorTabRestorer = new EditorTabRestorer(editorTabs);
+  // Every document follows the persisted choice, including a sidebar that was
+  // reloaded while another surface made the change.
+  context.subscriptions.push(appearance.onDidChange(theme => {
+    sidebar.setAppearance(theme);
+    historyPanel.setAppearance(theme);
+    editorTabs.postAll({ type: "dextAppearance", theme });
+  }));
   context.subscriptions.push({ dispose: () => editorTabs.dispose() });
   if (projectHost && folder && projectStore) {
     setupProject({ context, folder, projectStore, editorTabs, editorTabRestorer, editors, renderEditorHtml,
@@ -782,6 +808,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await application.reload();
       await sidebar.refresh();
     }),
+    vscode.commands.registerCommand("dext.chooseAppearance", () =>
+      reportCommandError(async () => {
+        const kind = vscode.window.activeColorTheme.kind;
+        if (kind === vscode.ColorThemeKind.HighContrast || kind === vscode.ColorThemeKind.HighContrastLight) {
+          void vscode.window.showInformationMessage("Dext follows VS Code while a high-contrast theme is active.");
+          return;
+        }
+        const options: Array<vscode.QuickPickItem & { appearance: DextAppearance }> = [
+          { label: "Auto", description: "Follow VS Code", appearance: "auto" },
+          { label: "Paper", description: "Warm light", appearance: "paper" },
+          { label: "Dim", description: "Warm dark", appearance: "dim" }
+        ];
+        for (const option of options) {
+          if (option.appearance === appearance.current) option.description = `Current · ${option.description}`;
+        }
+        const choice = await vscode.window.showQuickPick(options, {
+          title: "Dext Theme",
+          placeHolder: "Choose how Dext pages and the reading area look"
+        });
+        if (choice) await appearance.set(choice.appearance);
+      })
+    ),
     vscode.commands.registerCommand("dext.openWorkspaceTrust", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceTrustedStatus", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceUntrustedStatus", openWorkspaceTrust),

@@ -95,6 +95,13 @@ export class EditorTabManager {
     return [...this.tabs.keys()].sort();
   }
 
+  /** Broadcasts host-level state (currently the appearance choice) to every open
+   * editor tab, including panels restored by a serializer. A closed panel has
+   * nowhere to receive it and is skipped by the adapter. */
+  postAll(message: unknown): void {
+    for (const record of this.tabs.values()) record.panel.postMessage?.(message);
+  }
+
   /** Reveals an already open tab. Returns false when nothing is open for the key. */
   reveal(key: string): boolean {
     const record = this.tabs.get(key);
