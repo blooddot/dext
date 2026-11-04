@@ -1,0 +1,1 @@
+在 VS Code 中使用 Dext 的开发者：打开项目、在输入区选择 Agent 与模型、发送 Ask/Agent/Plan 请求，并在 Code 模式用 TypeScript 组合 API 调用。

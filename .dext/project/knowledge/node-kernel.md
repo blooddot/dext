@@ -1,0 +1,1 @@
+Code 模式的执行容器：一段 ES module 作为 TypeScript 在长期存活的 Node 子进程里运行，`dext` 由 loader 映射到 `dextRuntime.mjs`，`dextSerialization.mjs` 负责结果序列化；内核与 runtime 分开打包，避免内核拿到第二份带 in-flight 注册表的 `dext` 实例。

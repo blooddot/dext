@@ -1,0 +1,1 @@
+承载 Dext 的编辑器宿主，拥有 Extension API、Webview 文档、工作区文件访问与上下文键；Dext 作为扩展运行于其中，`vscode` 在构建时被标记为 external，不属于本仓库部署范围。
