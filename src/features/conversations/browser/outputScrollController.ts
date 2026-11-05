@@ -104,14 +104,14 @@ export class OutputScrollController {
     // reader had scrolled away from the newest output.
     this.viewport.jumpToLatest.hidden = this.isNearBottom();
     this.viewport.jumpToTop.hidden = this.viewport.body.scrollTop <= 1;
-    // The turn pair stays available until the reader reaches the first or last
-    // exchange. Unlike the old single control, arriving at the target does not
-    // hide it: the reader can keep stepping through turns in that direction.
-    this.viewport.jumpToPrevTurn.hidden = this.options.adjacentTurn?.(-1) === undefined;
-    // At the last exchange there is nowhere further to step, but a title that
-    // scrolled away from the top edge still has its restore action. Keep the
-    // control available until the open exchange is aligned, so a reader deep in
-    // a long turn can press either turn control to return.
+    // Arriving at a turn does not hide either turn control: the reader can
+    // keep stepping in that direction, and an exchange whose title scrolled
+    // away keeps its restore action. The pair is only hidden at the first or
+    // last exchange while that exchange is aligned to its own title.
+    const previous = this.options.adjacentTurn?.(-1);
+    const first = previous === undefined ? this.options.currentTurn?.() : undefined;
+    this.viewport.jumpToPrevTurn.hidden =
+      previous === undefined && (first === undefined || this.atTurnStart(first));
     const next = this.options.adjacentTurn?.(1);
     const current = next === undefined ? this.options.currentTurn?.() : undefined;
     this.viewport.jumpToNextTurn.hidden =

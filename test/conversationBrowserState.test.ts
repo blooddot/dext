@@ -276,6 +276,22 @@ describe("OutputScrollController", () => {
     expect(h.jumpToNextTurn.hidden).toBe(true);
   });
 
+  it("keeps the previous control available to return to a first exchange that scrolled away", () => {
+    const h = harness();
+    h.navigation.current = h.turnAt(0);
+    h.body.scrollTop = 600;
+    h.controller.syncJumpControls();
+    // There is no earlier exchange, but the only turn's title is above the
+    // port, so the backward control still has a job.
+    expect(h.jumpToPrevTurn.hidden).toBe(false);
+
+    h.controller.jumpToPreviousTurn();
+    expect(h.body.scrollTop).toBe(0);
+    expect(h.navigation.activated).toEqual([]);
+    // Aligned at its title, the first exchange has nowhere further back to go.
+    expect(h.jumpToPrevTurn.hidden).toBe(true);
+  });
+
   it("ignores previous-turn requests when no turn is rendered", () => {
     const h = harness();
     h.body.scrollTop = 120;
