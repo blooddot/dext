@@ -1,5 +1,4 @@
 import type { AgentProfile } from "../../agents/contracts/agent.js";
-import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
 import type { ResourceDocument, ResourceSession } from "../../resources/contracts/resourceSession.js";
 import type { DextReplayEntry } from "../../../shared/contracts/replay.js";
 import type {
@@ -41,8 +40,6 @@ export interface ActiveExecution extends ExecutionSnapshot {
  * application: a conversation module cannot reach settings, resources or
  * provider discovery through it. */
 export interface TurnExecutionHost {
-  startPlanProject?: (context: PlanProjectContext) => Promise<PlanProjectContext>;
-  finishPlanProject?: (context: PlanProjectContext, summary: string, signal: AbortSignal) => Promise<PlanProjectContext>;
   profiles: () => readonly AgentProfile[];
   executeConversation: (
     mode: "agent" | "ask" | "plan",
@@ -88,8 +85,8 @@ export interface ConversationSessionPort {
   session: (sessionId: string) => DextHistorySession | undefined;
   recordTurn: (sessionId: string, turn: DextHistoryRecord) => void;
   saveProviderSessions: (session: DextHistorySession) => Promise<void>;
-  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string) => Promise<void>;
-  savePlanContext: (sessionId: string, path: string | undefined, status: NonNullable<DextHistorySession["planStatus"]>, projectContext?: PlanProjectContext) => Promise<void>;
+  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[]) => Promise<void>;
+  savePlanContext: (sessionId: string, path: string | undefined, status: NonNullable<DextHistorySession["planStatus"]>) => Promise<void>;
   saveResource: (session: DextHistorySession) => Promise<void>;
   postConversationState: () => Promise<void>;
   postPlanContext: () => Promise<void>;

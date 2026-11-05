@@ -28,9 +28,9 @@ describe("editor tab serializer", () => {
     const host = new FakeHost();
     const manager = managerFor(host);
     const restorer = new EditorTabRestorer(manager);
-    const state = createEditorTabState("dext.editor:project", { page: "architecture" });
-    expect(restorer.restore(state, "serializer", { html: "<project/>" }).status).toBe("opened");
-    expect(host.created[0]!.panel.html).toBe("<project/>");
+    const state = createEditorTabState("dext.editor:api", { page: "detail" });
+    expect(restorer.restore(state, "serializer", { html: "<api/>" }).status).toBe("opened");
+    expect(host.created[0]!.panel.html).toBe("<api/>");
     // The proactive restore sees the serializer already opened it and only reveals it.
     expect(restorer.restore(state, "proactive").status).toBe("reused");
     expect(host.created).toHaveLength(1);
@@ -58,27 +58,27 @@ describe("editor tab serializer", () => {
     for (const [kind, viewType] of Object.entries(EDITOR_TAB_VIEW_TYPES)) {
       expect(descriptorForKey(`dext.editor:${kind}`)?.viewType).toBe(viewType);
     }
-    expect(describeEditorTab("project", "dext.editor:project", EDITOR_TAB_VIEW_TYPES.project).title).toBe("Dext Project");
+    expect(describeEditorTab("api", "dext.editor:api", EDITOR_TAB_VIEW_TYPES.api).title).toBe("Dext APIs");
   });
 
   it("adopts a serializer-restored panel without creating a second one", () => {
     const host = new FakeHost();
     const manager = managerFor(host);
     const restorer = new EditorTabRestorer(manager);
-    const state = createEditorTabState("dext.editor:project", { page: "knowledge" });
+    const state = createEditorTabState("dext.editor:api", { page: "list" });
     const adopted = new FakePanel();
     const outcome = restorer.adoptRestored(state, () => adopted, "<restored/>");
-    expect(outcome).toMatchObject({ status: "opened", key: "dext.editor:project" });
+    expect(outcome).toMatchObject({ status: "opened", key: "dext.editor:api" });
     expect(host.created).toHaveLength(0);
     expect(adopted.html).toBe("<restored/>");
-    expect(manager.activeKeys).toEqual(["dext.editor:project"]);
+    expect(manager.activeKeys).toEqual(["dext.editor:api"]);
   });
 
   it("disposes a restored panel when the proactive path already opened the key", () => {
     const host = new FakeHost();
     const manager = managerFor(host);
     const restorer = new EditorTabRestorer(manager);
-    const state = createEditorTabState("dext.editor:project");
+    const state = createEditorTabState("dext.editor:globalResources");
     expect(restorer.restore(state, "proactive").status).toBe("opened");
     let disposed = false;
     const late = new FakePanel();

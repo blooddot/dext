@@ -1,1 +1,0 @@
-运行 `src/extension.ts` 的扩展宿主进程（esbuild 入口名 `extension`）：装配 `DextApplication`，并由 `createConversationServices` 一次性建立 `ConversationController`、`TurnExecutionCoordinator`、`PlanController`、`InteractionController` 与 `AgentEventStream`；同时承载历史/偏好、Plan 文档、MCP 注册表与项目文件持久化。

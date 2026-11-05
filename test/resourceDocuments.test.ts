@@ -24,7 +24,7 @@ vi.mock("vscode", () => {
   return {
     FileSystemError, FileType: { File: 1, Directory: 2 },
     Uri: { file: uri, joinPath: (root: { fsPath: string }, ...parts: string[]) => uri(join(root.fsPath, ...parts)) },
-    workspace: { workspaceFolders: undefined, fs: {
+    workspace: { workspaceFolders: undefined, getConfiguration: () => ({ get: () => undefined }), fs: {
       readDirectory: async (value: { fsPath: string }) => readdir(value.fsPath, { withFileTypes: true }).then((entries) => entries.map((entry) => [entry.name, entry.isDirectory() ? 2 : 1])).catch(missing),
       readFile: async (value: { fsPath: string }) => readFile(value.fsPath).catch(missing),
       stat: async (value: { fsPath: string }) => stat(value.fsPath).catch(missing),
@@ -162,16 +162,6 @@ describe("resource documents", () => {
     expect(() => resourceFileName("api", "a..b")).toThrow();
   });
 
-  it("identifies a Project norm by its node id and keeps the rewrite to its body", () => {
-    expect(resourceFileName("project", "module:src-app")).toBe("module:src-app");
-    const prompt = resourcePrompt({ type: "project", scope: "project", target: { name: "App entry", path: "module:src-app", content: "## Responsibility\n\nOld" } }, "Rewrite it",
-      { id: "module:src-app", kind: "module", review: "draft", freshness: "needs_verification", evidence: ["src/app.ts"] });
-    expect(prompt).toContain("must be returned unchanged");
-    // The model owns identity and relationships; only the prose is rewritten, from real evidence.
-    expect(prompt).toContain("change only the body");
-    expect(prompt).toContain('"evidence":["src/app.ts"]');
-    expect(prompt).toContain("Keeping the body byte-for-byte unchanged confirms the norm");
-  });
 
   it.each([
     ["api", "sample", 'export async function sample(input: string): Promise<AskResult> {\n  return await ask({ input });\n}\n', "api/sample.ts"],

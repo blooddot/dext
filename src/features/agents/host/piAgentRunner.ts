@@ -80,7 +80,6 @@ export class PiAgentRunner implements AgentRunner {
       if (dirname(directory) === directory) break;
     }
     const digest = createHash("sha256");
-    digest.update(JSON.stringify({ projectQuery: Boolean(request.projectQuery) }));
     digest.update(JSON.stringify([root, request.workspaceTrusted === true, piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted), command, request.cliArguments ?? [], request.mcpServers ?? [], home, this.pluginPaths(request)]));
     const identity = await stat(command); digest.update(`${identity.size}:${identity.mtimeMs}`);
     for (const file of files) { try { digest.update(file).update(await readFile(file)); } catch { /* Optional Pi configuration or text context. */ } }
@@ -98,12 +97,12 @@ export class PiAgentRunner implements AgentRunner {
     const permission = piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted);
     const plugins = this.pluginPaths(request);
     let session: Session | undefined;
-    const bridge = new PiBridge({ permission, tools: piTools(permission, Boolean(request.contract), process.platform, request.workspaceTrusted === true, Boolean(request.projectQuery)), mcpServers: request.mcpServers ?? [], projectQuery: request.workspaceTrusted === true && Boolean(request.projectQuery),
+    const bridge = new PiBridge({ permission, tools: piTools(permission, Boolean(request.contract), process.platform, request.workspaceTrusted === true), mcpServers: request.mcpServers ?? [],
       ...(plugins.length ? { plugins: true } : {}),
       ...(request.contract ? { resultSchema: resultToolParameters(request.contract.outputJsonSchema) } : {}) }, (frame) => this.bridgeRequest(session, frame));
     let transport: PiRpcTransport | undefined;
     try {
-      const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral, projectQuery: Boolean(request.projectQuery), plugins,
+      const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral, plugins,
         ...(resume ? { sessionPath: resume } : {}), ...(request.cliArguments ? { extra: request.cliArguments } : {}) });
       transport = (this.options.transportFactory ?? ((program, argv, cwd, env) => new PiRpcTransport(program, argv, cwd, env)))(command, args, request.cwd,
         { ...process.env, DEXT_PI_BRIDGE: bridge.endpoint, DEXT_PI_BRIDGE_TOKEN: bridge.token });
@@ -124,12 +123,6 @@ export class PiAgentRunner implements AgentRunner {
     if (frame.kind === "plan_todo") {
       if (!active.request.planTodo) return { status: "rejected", diagnostics: "This turn does not execute a Dext plan, so there is no task list to update." };
       active.request.planTodo(frame.report); return { status: "accepted" };
-    }
-    if (frame.kind === "project_query") {
-      if (!active.request.workspaceTrusted || !active.request.projectQuery) return { status: "unavailable" };
-      const value = await active.request.projectQuery(frame.query);
-      if (session?.active !== active || active.done || active.controller.signal.aborted) return { status: "unavailable" };
-      return { status: "accepted", value };
     }
     const parsed = active.request.contract?.outputSchema.safeParse(frame.args);
     if (!parsed) return { status: "unavailable" };

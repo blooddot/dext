@@ -92,8 +92,6 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   await evaluate(`document.querySelector('.image-attachment-remove').click()`);
   await settle();
   assert.equal((await bounds()).input.top, before.input.top, 'removing final attachment restores Input height');
-  await evaluate(`host({type:'planContext',path:'a.plan.md',status:'active',projectContext:{workspaceKey:'test',planPath:'a.plan.md',documentHash:'h',fileHash:'f',availability:'ready',assessment:'change',reason:'Interface changed',basis:[],reviewStatus:'pending'}})`);
-  assert.match(await evaluate(`document.querySelector('#plan-status').textContent`), /Project update required/);
   await evaluate(`host({type:'planContext',status:'new'})`);
   // Annotating the same picture again must edit the block the tab already wrote
   // instead of stacking a second copy, in this session and after a restart.
@@ -115,5 +113,5 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   assert.equal(annotated.split("Image annotations for @").length - 1, 1, `re-inserting edits the block in place: ${annotated}`);
   assert.match(annotated, /: second$/m);
   console.log('PASS re-annotating replaces the block in Input');
-  console.log('PASS Plan attachments, layout, and Project status state');
+  console.log('PASS Plan attachments and layout state');
 }, false);

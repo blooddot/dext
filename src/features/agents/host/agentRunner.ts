@@ -20,7 +20,6 @@ import { runCodexConversation } from "./codexConversationRunner.js";
 import { codexErrorMessage } from "../domain/codexError.js";
 
 export interface AgentExecutionRequest {
-  projectQuery?: (input: unknown) => Promise<unknown>;
   workspaceTrusted?: boolean;
   agentPreset?: string;
   profile: AgentProfile;
@@ -50,7 +49,6 @@ export interface AgentExecutionRequest {
 /** An unstructured user conversation. Unlike Dext APIs, it has no JSON
  * envelope or output schema and its result is ordinary assistant text. */
 export interface AgentConversationRequest {
-  projectQuery?: (input: unknown) => Promise<unknown>;
   /** Plan task reports from a provider tool; absent outside plan execution. */
   planTodo?: (report: unknown) => void;
   workspaceTrusted?: boolean;
@@ -332,7 +330,7 @@ export function extractConversationText(output: string, provider: AgentProfile["
  * so the schema Dext sends marks the optional ones nullable and the model answers
  * `null` where it means "omitted". Dext's contracts declare those fields as
  * merely optional, which rejects null, so drop null properties before the caller
- * validates. No Dext or Project contract has a nullable field, so this can only
+ * validates. No Dext contract has a nullable field, so this can only
  * turn an invalid answer into a valid one. Text that is not JSON is returned
  * unchanged, so a caller still sees what the model actually produced.
  */

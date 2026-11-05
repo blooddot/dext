@@ -143,9 +143,7 @@ describe("OutputScrollController", () => {
       }
     });
     // A rendered turn moves up the port exactly as far as the port scrolls, so
-    // its document offset stays at the supplied top in this fixture. Turns are
-    // 200px tall, which lets the visibility check distinguish a title that is
-    // on screen from one that has scrolled entirely past either edge.
+    // its document offset stays at the supplied top in this fixture.
     const turnAt = (top: number): HTMLElement =>
       ({
         getBoundingClientRect: () => ({
@@ -228,14 +226,18 @@ describe("OutputScrollController", () => {
     expect(h.navigation.activated).toEqual([]);
   });
 
-  it("steps forward while the current exchange is visible but not at its title", () => {
+  it("realigns a visible exchange to its title before stepping forward", () => {
     const h = harness();
     h.navigation.current = h.turnAt(300);
     h.navigation.next = h.turnAt(700);
     // The exchange's body fills the port but its title is above the top edge.
-    // Next only restores an exchange that is fully out of view; a visible one
-    // steps forward, while prev would realign the title in this same state.
+    // Next mirrors prev: the first press brings the title back into view.
     h.body.scrollTop = 100;
+    h.controller.jumpToNextTurn();
+    expect(h.navigation.activated).toEqual([]);
+    expect(h.body.scrollTop).toBe(300);
+
+    // Aligned at its title, the next press steps forward.
     h.controller.jumpToNextTurn();
     expect(h.navigation.activated).toEqual([h.navigation.next]);
     expect(h.body.scrollTop).toBe(600);

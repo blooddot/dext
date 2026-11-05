@@ -226,7 +226,6 @@ describe("sidebar panel layout", () => {
     expect(application).toMatch(/private async savePlan[\s\S]*?text: plan\.conversation, planPath/);
     expect(application).toMatch(/private async savePlan[\s\S]*?const workspaceStorage = this\.storage\.location\(\) === "workspace"/);
     expect(application).toMatch(/private async savePlan[\s\S]*?this\.storage\.directory\("plans"\)/);
-    expect(application).toMatch(/private async savePlan[\s\S]*?text: plan\.conversation, planPath,/);
     expect(application).toContain("globalDiagnostics: this.globalDiagnostics");
     expect(application).not.toContain('mcpDiagnostics: this.configDiagnostics.filter((item) => item.toLowerCase().includes("mcp"))');
     // Building re-reads the plan file through the host port, so the turn runs
@@ -257,8 +256,8 @@ describe("sidebar panel layout", () => {
     const extension = await source("src/extension.ts");
     expect(application).toMatch(/private webviewSettings[\s\S]*?submitOnEnter: configuration\.get<boolean>\("submitOnEnter", true\) !== false/);
     expect(main).toMatch(/if \(state\.settings\) \{[\s\S]*?editor\.setSubmitOnEnter\(state\.settings\.submitOnEnter\)/);
-    // Saving project paths changes the registered API set, so it needs a reload.
-    expect(extension).toMatch(/onWorkspaceSettingsChanged: async \(?settings\)? => \{\s*application\.setProjectWorkspaceSettings\(settings\);\s*await application\.reload\(\)/);
+    // Changing a discovery directory changes the registered API set, so it needs a reload.
+    expect(extension).toMatch(/event\.affectsConfiguration\("dext\.apiDirectories"\)[\s\S]*?await application\.reload\(\);/);
     // Configured API directories are searched, but `.dext/api` comes first.
     expect(application).toMatch(/apiRoots\(\): string\[\] \{/);
     expect(application).toMatch(/add\(vscode\.Uri\.joinPath\(vscode\.Uri\.file\(this\.workspaceRoot\), "\.dext", "api"\)\.fsPath\)/);
@@ -367,7 +366,7 @@ describe("sidebar panel layout", () => {
     // the conversation tabs and does not need a duplicate on editor pages.
     expect(manifest).toContain('"command": "dext.chooseAppearance"');
     expect(manifest).toContain('"icon": "$(color-mode)"');
-    expect(manifest).toMatch(/"view\/title": \[[\s\S]*?"command": "dext\.chooseAppearance",\s*"when": "view == dext\.sidebar",\s*"group": "navigation@6"/);
+    expect(manifest).toMatch(/"view\/title": \[[\s\S]*?"command": "dext\.chooseAppearance",\s*"when": "view == dext\.sidebar",\s*"group": "navigation@5"/);
     expect(extension).toContain('vscode.commands.registerCommand("dext.chooseAppearance"');
     expect(extension).toContain('title: "Dext Theme"');
     expect(extension).toContain('appearance: "paper"');

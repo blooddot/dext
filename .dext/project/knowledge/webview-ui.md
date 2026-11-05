@@ -1,1 +1,0 @@
-VS Code Webview 中的浏览器 bundle：`src/webview/main.ts` 提供输入区与对话页，`src/features/project/browser/entry.ts` 提供 Project 页面，`imageAnnotatorPage.ts` 是独立标注文档，Monaco 及其 TypeScript worker 提供补全与诊断，Mermaid 与 API 流程图按需单独加载。

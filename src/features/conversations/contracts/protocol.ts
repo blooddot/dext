@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
 import type { AgentStreamEvent, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import { UI_LIMITS, uiFormResultSchema } from "../../../shared/contracts/uiForm.js";
 import type { AgentSelection } from "../../agents/contracts/agent.js";
@@ -101,12 +100,11 @@ export type ConversationWebviewResponse =
     selection: AgentSelection;
     planPath?: string;
     planStatus: PlanStatus;
-    projectContext?: PlanProjectContext;
     resource?: ResourceSession;
     switchId?: number;
     hostInitiated?: true;
   }
-  | { type: "planContext"; path?: string; status: PlanStatus; projectContext?: PlanProjectContext }
+  | { type: "planContext"; path?: string; status: PlanStatus }
   | { type: "resourceContext"; sessionId: string; resource: ResourceSession; busy?: boolean }
   | {
     type: "conversations";
@@ -117,7 +115,6 @@ export type ConversationWebviewResponse =
     selection?: AgentSelection;
     planPath?: string;
     planStatus?: PlanStatus;
-    projectContext?: PlanProjectContext;
     resource?: ResourceSession;
     switchId?: number;
     hostInitiated?: true;

@@ -160,10 +160,9 @@ describe("Dext package manifest", () => {
     ).toEqual([
       ["dext.newConversation", "navigation@1"],
       ["dext.openHistory", "navigation@2"],
-      ["dext.openProject", "navigation@3"],
-      ["dext.viewApis", "navigation@4"],
-      ["dext.viewResources", "navigation@5"],
-      ["dext.chooseAppearance", "navigation@6"]
+      ["dext.viewApis", "navigation@3"],
+      ["dext.viewResources", "navigation@4"],
+      ["dext.chooseAppearance", "navigation@5"]
     ]);
     // Reloading APIs belongs with the API list it refreshes, and History is the
     // single place that reopens a past conversation.
@@ -339,13 +338,10 @@ describe("Dext package manifest", () => {
     expect(concurrency?.description).toContain("wait in a queue");
   });
 
-  it("does not contribute retired project settings", async () => {
+  it("does not contribute retired resource directory settings", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
-    for (const setting of [
-      "dext.apiDirs", "dext.skillDirs", "dext.plan.directory",
-      "dext.project.evidenceDepth", "dext.project.evidenceChars", "dext.project.evidenceFiles",
-      "dext.project.evidenceFileChars", "dext.project.evidenceInclude"
-    ]) expect(properties[setting]).toBeUndefined();
+    for (const setting of ["dext.apiDirs", "dext.skillDirs", "dext.plan.directory"])
+      expect(properties[setting]).toBeUndefined();
   });
 
   it("offers writable Agent and Plan permission tiers and a trusted-only CLI passthrough", async () => {

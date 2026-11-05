@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import { setupProject } from "./app/projectSetup.js";
 import { DextApplication } from "./app/application.js";
 import type { HistorySortOrder } from "./features/conversations/contracts/preferences.js";
 import { DextConversationPreferences } from "./features/conversations/host/conversationPreferences.js";
@@ -8,13 +7,6 @@ import { describeApiSource } from "./features/workflow/host/apiSource.js";
 import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
 import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
 import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
-import { ProjectStore } from "./features/project/host/persistence/projectStore.js";
-import { ProjectPlanService, projectWorkspaceKey } from "./features/project/host/projectPlanService.js";
-import { ProjectPlanReconciler } from "./features/project/host/projectPlanReconcile.js";
-import { runProjectQuery } from "./features/project/knowledge/projectQuery.js";
-import type { ProjectEditorProvider } from "./features/project/host/projectEditorProvider.js";
-import { VscodeProjectFileHost, effectiveProjectWorkspaceSettings } from "./features/project/host/projectPanelDataSource.js";
-import { projectToolSettingsFromDefinition } from "./features/project/contracts/projectSettings.js";
 import { type ResourceEditorDataSource } from "./features/resources/contracts/resourceDocuments.js";
 import type { ResourceScope } from "./features/resources/contracts/resourceSession.js";
 import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.js";
@@ -42,9 +34,6 @@ import type { SelectionTarget } from "./platform/vscode/attachments.js";
 import { DextSelectionActions } from "./platform/vscode/selectionActions.js";
 let activeApplication: DextApplication | undefined;
 
-/** Narrows a restored page to one the Project tab can actually render. */
-
-
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
   application.configurePiRuntime(vscode.Uri.joinPath(context.extensionUri, "media", "pi-extension.mjs").fsPath);
@@ -53,37 +42,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
-  const projectHost = folder?.uri.scheme === "file" ? new VscodeProjectFileHost(folder.uri) : undefined;
-  const projectStore = projectHost ? new ProjectStore(projectHost) : undefined;
-  if (projectStore) {
-    application.setProjectPlanPort(new ProjectPlanService(projectStore, folder!.uri.fsPath));
-    application.setProjectReconciler(new ProjectPlanReconciler(projectStore));
-    application.configureProjectEvidence(folder!.uri.fsPath, (context.storageUri ?? context.globalStorageUri).fsPath);
-    application.setProjectToolProvider(async () => {
-      const definition = await projectStore.readDefinition();
-      if (definition.tool?.projectQuery === false || !await projectStore.readModel()) return undefined;
-      return { modelPath: vscode.Uri.joinPath(folder!.uri, ".dext", "project", "model.json").fsPath, serverPath: vscode.Uri.joinPath(context.extensionUri, "dist", "projectModelMcp.js").fsPath };
-    });
-    application.runtime.setProjectQueryProvider(async workspace => {
-      if (projectWorkspaceKey(workspace) !== projectWorkspaceKey(folder!.uri.fsPath) || (await projectStore.readDefinition()).tool?.projectQuery === false || !await projectStore.readModel()) return undefined;
-      return async input => {
-        if ((await projectStore.readDefinition()).tool?.projectQuery === false) throw new Error("Project query was disabled.");
-        const model = await projectStore.readModel();
-        if (!model) throw new Error("Project model is unavailable.");
-        return runProjectQuery(model, input);
-      };
-    });
-    const definition = await projectStore.readDefinition();
-    if (definition.paths) application.setProjectWorkspaceSettings(effectiveProjectWorkspaceSettings(definition));
-    application.setStructureToolProvider(async () => {
-      const [definition, intent] = await Promise.all([projectStore.readDefinition(), projectStore.readIntent()]);
-      if (!intent || !projectToolSettingsFromDefinition(definition).structureQuery) return undefined;
-      return {
-        cachePath: vscode.Uri.joinPath(context.storageUri ?? context.globalStorageUri, "project-structure.json").fsPath,
-        serverPath: vscode.Uri.joinPath(context.extensionUri, "dist", "structureMcp.js").fsPath
-      };
-    });
-  }
   await application.reload();
   // Memento updates serialize the extension's entire state across renderer IPC.
   // Keep history in workspace storage files, and retire old keys only after a
@@ -125,25 +83,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await preferences.pruneConversations(history.list(true).map((session) => session.id));
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage, appearance);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences, appearance);
-  // Unified editor tabs: Project, API, Global Resources, and History all go through one manager so
+  // Unified editor tabs: API, Global Resources, and History all go through one manager so
   // a stable key can never open twice, whichever recovery path runs first.
   const editors: {
-    project?: ProjectEditorProvider;
     api?: ApiEditorProvider;
     globalResources?: GlobalResourcesEditorProvider;
   } = {};
   const renderEditorHtml = (panel: VscodeWebviewPanelLike, body: string): string => {
     const webview = (panel as vscode.WebviewPanel).webview;
-    // The Project reader embeds the sandboxed Archify viewer; its srcdoc inherits this
-    // policy, so the relaxed frame/font/image sources stay scoped to that document.
-    // An API page replaces that script with the local Mermaid entry only when a flow exists.
-    const projectReader = body.includes("data-project-reader");
-    const script = projectReader || body.includes("data-project-quality-copy") ? "project.js" : body.includes("data-api-flow") ? "apiFlow.js" : undefined;
+    // An API page replaces this script with the local Mermaid entry only when a flow exists.
+    const script = body.includes("data-api-flow") ? "apiFlow.js" : undefined;
     return renderEditorTabHtml(body,
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
       webview.cspSource,
       {
-        embedFrames: projectReader,
         // Both the conversation page and the API page lazy-load this one bundle;
         // it is listed for every editor tab so an API page can render its flow
         // without each tab paying for Mermaid up front.
@@ -167,7 +120,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       const kind = parseEditorTabKey(key)?.kind;
-      const provider = kind === "project" ? editors.project : kind === "api" ? editors.api : kind === "globalResources" ? editors.globalResources : undefined;
+      const provider = kind === "api" ? editors.api : kind === "globalResources" ? editors.globalResources : undefined;
       void reportCommandError(() => provider?.handleMessage(key, message) ?? Promise.resolve());
     }
   );
@@ -180,14 +133,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     editorTabs.postAll({ type: "dextAppearance", theme });
   }));
   context.subscriptions.push({ dispose: () => editorTabs.dispose() });
-  if (projectHost && folder && projectStore) {
-    setupProject({ context, folder, projectStore, editorTabs, editorTabRestorer, editors, renderEditorHtml,
-      aiProvider: application.projectAiProvider(), agentProfiles: () => application.agentProfiles(),
-      setReferenceSource: source => sidebar.setProjectReferenceSource(source),
-      editProjectNorm: id => sidebar.editProjectNorm(id),
-      onWorkspaceSettingsChanged: async settings => { application.setProjectWorkspaceSettings(settings); await application.reload(); await sidebar.refresh(); }
-    });
-  }
   const textDecoderForResources = new TextDecoder();
   // The Node and JavaScript reference the APIs page lists: generated at build time
   // from `@types/node` and TypeScript's own lib files, so it documents the same
@@ -375,24 +320,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   context.subscriptions.push(
-    vscode.commands.registerCommand("dext.openProject", () => reportCommandError(async () => {
-      if (editors.project) await editors.project.show("overview");
-      else await vscode.window.showInformationMessage("Open a local project folder to use Dext Project.");
-    })),
-    vscode.commands.registerCommand("dext.planFromProjectObject", (id?: string) => reportCommandError(async () => {
-      if (!projectStore || typeof id !== "string") throw new Error("Choose a Project object to start a Plan.");
-      const native = await projectStore.readModel();
-      if (native) {
-        const node = native.nodes.find(node => node.id === id);
-        if (!node) throw new Error("Project node is missing.");
-        await sidebar.planFromProjectObject({ objectId: node.id, canonicalName: node.canonicalName }); return;
-      }
-      const snapshot = await projectStore.readLegacySnapshot();
-      const items = [...snapshot.objects, ...(snapshot.intent?.contexts ?? []), ...(snapshot.intent?.capabilities ?? []), ...(snapshot.intent?.terms ?? [])];
-      const matches = items.filter(item => item.id === id);
-      if (matches.length !== 1) throw new Error("Project reference is missing or ambiguous.");
-      await sidebar.planFromProjectObject({ objectId: matches[0]!.id, canonicalName: matches[0]!.canonicalName });
-    })),
     vscode.commands.registerCommand("dext.viewApis", () =>
       reportCommandError(() => editors.api?.showList() ?? Promise.resolve(undefined))
     ),
@@ -962,6 +889,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // not reload the API set.
       if (event.affectsConfiguration("dext.outputLanguage")) {
         application.applyOutputLanguageSettings();
+      }
+      // These four settings name the directories discovery walks, so the next
+      // reload is what makes a change visible.
+      if (
+        event.affectsConfiguration("dext.apiDirectories")
+        || event.affectsConfiguration("dext.skillDirectories")
+        || event.affectsConfiguration("dext.mcpDirectories")
+        || event.affectsConfiguration("dext.planDirectory")
+      ) {
+        await application.reload();
+        await sidebar.refresh();
+        return;
       }
       if (
         event.affectsConfiguration("dext.submitOnEnter")

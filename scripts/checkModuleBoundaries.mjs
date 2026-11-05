@@ -31,18 +31,6 @@ export const declaredTypeEdges = [
   {
     from: "src/features/resources/presentation/resourceDocuments.ts",
     to: "src/platform/editor-tabs/editorTabState.ts"
-  },
-  {
-    from: "src/features/project/presentation/projectPanel.ts",
-    to: "src/platform/editor-tabs/editorTabState.ts"
-  },
-  {
-    from: "src/features/project/contracts/evidence.ts",
-    to: "src/features/project/host/indexing/projectStructure.ts"
-  },
-  {
-    from: "src/features/project/contracts/evidence.ts",
-    to: "src/features/project/host/indexing/projectStructureGraph.ts"
   }
 ];
 
@@ -60,10 +48,6 @@ export const crossFeatureHostCouplings = [
   {
     from: "src/features/workflow/host/runtime.ts",
     to: "src/features/agents/host/resultRepair.ts"
-  },
-  {
-    from: "src/features/project/host/generation/projectAiGeneration.ts",
-    to: "src/features/agents/host/cliAxAIService.ts"
   }
 ];
 
@@ -109,40 +93,19 @@ export const removedModulePaths = [
   // First clean-up wave forwarders.
   "src/agentProfiles.ts",
   "src/apiEditorProvider.ts",
-  "src/core/archifyAdapter.ts",
-  "src/core/projectAiGeneration.ts",
-  "src/core/projectArchitecture.ts",
-  "src/core/projectContext.ts",
-  "src/core/projectDiagram.ts",
-  "src/core/projectDiagramAdapter.ts",
-  "src/core/projectDiagramHistory.ts",
-  "src/core/projectDiagramPresentation.ts",
-  "src/core/projectDiagramRegistry.ts",
-  "src/core/projectEvidenceSettings.ts",
-  "src/core/projectIntent.ts",
-  "src/core/projectKnowledge.ts",
-  "src/core/projectMermaid.ts",
-  "src/core/projectReference.ts",
-  "src/core/projectSettings.ts",
-  "src/core/projectTopics.ts",
   "src/core/toml.ts",
   "src/editorTabHtml.ts",
   "src/editorTabManager.ts",
   "src/editorTabSerializer.ts",
   "src/editorTabState.ts",
   "src/editorTabTypes.ts",
-  "src/projectDiagramViewer.ts",
-  "src/projectService.ts",
-  "src/projectStore.ts",
   "src/resourceDocuments.ts",
   "src/resourceSession.ts",
   "src/vscodeProjectHost.ts",
   "src/webview/apiPanel.ts",
-  "src/webview/archifyBridge.ts",
   "src/webview/fileSearchClient.ts",
   "src/webview/globalResourcesPanel.ts",
   "src/webview/outputLink.ts",
-  "src/webview/projectPanel.ts",
   // The dissolved `core` directory.
   "src/core/agentAssertions.ts",
   "src/core/agentRouter.ts",

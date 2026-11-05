@@ -1,16 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatTurnTokenUsage, presentTurn, presentPlanProject, resultCopyText, TURN_EDIT_ACTION, TURN_RENAME_ACTION } from "../src/features/conversations/presentation/turnPresentation.js";
+import { formatTurnTokenUsage, presentTurn, resultCopyText, TURN_EDIT_ACTION, TURN_RENAME_ACTION } from "../src/features/conversations/presentation/turnPresentation.js";
 import type { DextResult } from "../src/shared/contracts/types.js";
 import { TurnTitle } from "../src/features/conversations/browser/turnTitle.js";
 
 describe("turn title presentation", () => {
-  it("distinguishes Project impact, stale basis and pending reconciliation", () => {
-    const context = { workspaceKey: "w", planPath: "a", documentHash: "h", fileHash: "f", availability: "ready" as const, assessment: "none" as const, reason: "Verified contract", basis: [], reviewStatus: "current" as const };
-    expect(presentPlanProject(context).label).toBe("No Project update");
-    expect(presentPlanProject({ ...context, assessment: "unknown" }).label).toBe("Project impact unknown");
-    expect(presentPlanProject({ ...context, reviewStatus: "stale" }).label).toBe("Project basis changed");
-    expect(presentPlanProject({ ...context, reviewStatus: "proposed" }).label).toBe("Project updates pending");
-  });
   it("keeps the shared Input, Process, and Output presentation stable", () => {
     expect(presentTurn({ source: "prompt", mode: "agent", durationMs: 1_234 })).toEqual({
       input: {

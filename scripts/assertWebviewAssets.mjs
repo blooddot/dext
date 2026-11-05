@@ -5,10 +5,6 @@ import { resolve } from "node:path";
 import { listFiles } from "@vscode/vsce";
 import { structureIndexAssets } from "./buildStructureIndexAssets.mjs";
 import { checkStructureIndexRuntime } from "./checkStructureIndexRuntime.mjs";
-import { checkArchifyUpstream } from "./checkArchifyUpstream.mjs";
-
-const archifyRuntime = await checkArchifyUpstream();
-
 const output = resolve("dist", "webview");
 const entries = await readdir(output, { recursive: true });
 const files = await Promise.all(
@@ -18,7 +14,7 @@ const fileNames = files.filter((file) => file.size > 0).map((file) => file.entry
 
 // `ts.worker.js` is what gives the composer its TypeScript completion, hover and
 // diagnostics; without it the editor silently loses every language feature.
-for (const required of ["main.js", "project.js", "apiFlow.js", "mermaid.js", "diagrams.js", "appearance.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
+for (const required of ["main.js", "apiFlow.js", "mermaid.js", "diagrams.js", "appearance.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
   assert.ok(fileNames.includes(required), `Missing Webview build asset '${required}'.`);
 }
 assert.ok((await stat(resolve("dist", "codicons", "codicon.ttf"))).size > 0, "Missing VS Code codicon font.");
@@ -30,10 +26,6 @@ const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
 // Files on disk can pass build checks while .vscodeignore removes them from the VSIX.
 // Keep the History stylesheet's existing URL valid for pages open during an update.
 const packagedFiles = new Set((await listFiles()).map((file) => file.replaceAll("\\", "/")));
-assert.ok(packagedFiles.has("dist/projectModelMcp.js"), "Missing packaged Project model query server.");
-for (const path of [...archifyRuntime.paths, "UPSTREAM.json"]) {
-  assert.ok(packagedFiles.has(`vendor/project-diagrams/archify/${path}`), `Missing packaged Archify runtime file '${path}'.`);
-}
 for (const [pkg, file] of structureIndexAssets) {
   for (const name of [file, `${pkg}.LICENSE`]) {
     assert.ok(packagedFiles.has(`dist/structure-index/${name}`), `Missing structure index asset '${name}'.`);
@@ -48,7 +40,6 @@ for (const required of [
   "media/appearance.css",
   "dist/webview/main.css",
   "dist/webview/main.js",
-  "dist/webview/project.js",
   "dist/webview/apiFlow.js",
   "dist/webview/mermaid.js",
   "dist/webview/diagrams.js",
@@ -108,7 +99,7 @@ for (const marker of ["data-turn-review", "data-plan-review", "data-adopt-sugges
   assert.ok(!mainBundle.includes(marker), `Retired Review behavior '${marker}' remains in the bundle.`);
 }
 // The migrated editor-tab pages are rendered by the host, so they live in the extension bundle.
-for (const action of ["data-resource-open", "data-resource-search", "data-project-page", "data-project-reader"]) {
+for (const action of ["data-resource-open", "data-resource-search"]) {
   assert.ok(extensionBundle.includes(action), `Missing migrated editor-tab behavior '${action}' from the extension bundle.`);
 }
 for (const style of [".turn-review", ".plan-review"]) {
@@ -122,7 +113,6 @@ for (const font of fileNames.filter(name=>name.endsWith('.ttf'))) assert.ok(pack
 assert.ok(!mainBundle.includes('@codemirror/'), 'Old editor code must not be bundled');
 assert.ok(!mainStyles.includes('.cm-editor'), 'Old editor styles must not be bundled');
 
-// --- Project diagrams: Archify runtime completeness and removed-engine absence -----------------
 const buildMeta = JSON.parse(await readFile(resolve("dist", "build-meta.json"), "utf8"));
 // The kernel is started with `--import dist/dextLoader.mjs`, so its ESM files must
 // exist on disk, be listed in the manifest and survive packaging.
@@ -163,60 +153,13 @@ assert.ok(
 assert.equal(buildMeta.schemaVersion, 1, "dist/build-meta.json was written by an unknown esbuild manifest schema.");
 const extensionInputs = buildMeta.entryInputs?.extension;
 assert.ok(Array.isArray(extensionInputs) && extensionInputs.length > 0, "The build manifest lists no extension inputs; rerun `npm run build`.");
-for (const known of ["src/extension.ts", "src/features/project/host/diagrams/archifyAdapter.ts"]) {
+for (const known of ["src/extension.ts"]) {
   assert.ok(
     extensionInputs.some((input) => input === known || input.endsWith(`/${known}`)),
     `The build manifest does not list '${known}', so it does not describe this bundle.`
   );
 }
-for (const forbidden of [
-  "typescript/lib/typescript.js",
-  "typescript/lib/tsc.js",
-  "src/features/project/knowledge/projectArchitectureTypeScript.ts",
-  "src/features/project/knowledge/projectArchitecturePython.ts",
-  "src/features/project/knowledge/projectArchitectureRust.ts",
-  "src/features/project/knowledge/projectArchitectureScanner.ts",
-  "src/features/project/knowledge/projectArchitectureWorker.ts"
-]) {
-  assert.ok(
-    !extensionInputs.some((input) => input === forbidden || input.endsWith(`/${forbidden}`)),
-    `The runtime bundle must not contain '${forbidden}'; Project parses no source in the extension host.`
-  );
-}
-assert.ok(!extensionBundle.includes("project-diagrams/drawio"), "The removed draw.io runtime must not reach the runtime bundle.");
-assert.ok(!extensionBundle.includes("ArchitectureScanResult"), "The removed static scan contract must not reach the runtime bundle.");
-for (const required of [
-  "vendor/project-diagrams/archify/package.json",
-  "vendor/project-diagrams/archify/bin/archify.mjs",
-  "vendor/project-diagrams/archify/bin/delivery-update.mjs",
-  "vendor/project-diagrams/archify/assets/template.html",
-  "vendor/project-diagrams/archify/scripts/check-render-output.mjs",
-  "vendor/project-diagrams/archify/explainer/check.mjs",
-  "vendor/project-diagrams/archify/locales/manifest.json",
-  "vendor/project-diagrams/archify/locales/zh-CN.json",
-  "vendor/project-diagrams/archify/renderers/shared/owned-temp-directory.mjs",
-  "vendor/project-diagrams/archify/LICENSE",
-  "vendor/project-diagrams/archify/THIRD_PARTY_NOTICES.md",
-  "vendor/project-diagrams/archify/schemas/common.schema.json",
-  "vendor/project-diagrams/archify/schemas/architecture.schema.json",
-  "vendor/project-diagrams/archify/schemas/workflow.schema.json",
-  "vendor/project-diagrams/archify/schemas/sequence.schema.json",
-  "vendor/project-diagrams/archify/schemas/dataflow.schema.json",
-  "vendor/project-diagrams/archify/schemas/lifecycle.schema.json",
-  "vendor/project-diagrams/archify/schemas/tree.schema.json",
-  "vendor/project-diagrams/archify/schemas/class.schema.json",
-  "vendor/project-diagrams/archify/renderers/architecture/render-architecture.mjs",
-  "vendor/project-diagrams/archify/renderers/workflow/render-workflow.mjs",
-  "vendor/project-diagrams/archify/renderers/sequence/render-sequence.mjs",
-  "vendor/project-diagrams/archify/renderers/dataflow/render-dataflow.mjs",
-  "vendor/project-diagrams/archify/renderers/lifecycle/render-lifecycle.mjs",
-  "vendor/project-diagrams/archify/renderers/tree/render-tree.mjs",
-  "vendor/project-diagrams/archify/renderers/class/render-class.mjs",
-  "vendor/project-diagrams/archify/renderers/erd/grid.mjs"
-]) {
-  assert.ok(packagedFiles.has(required), `Missing packaged Archify runtime file '${required}'.`);
-}
-for (const forbidden of ["vendor/project-diagrams/drawio", ".tmp-archify-upstream", ".tmp-tb", "dist/build-meta.json", "dist/extensionHostTest.js"]) {
+for (const forbidden of [".tmp-tb", "dist/build-meta.json", "dist/extensionHostTest.js"]) {
   assert.ok(
     ![...packagedFiles].some((file) => file === forbidden || file.startsWith(`${forbidden}/`)),
     `'${forbidden}' must not be distributed in the VSIX.`

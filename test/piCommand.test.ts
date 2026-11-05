@@ -3,11 +3,9 @@ import { describe, expect, it } from "vitest";
 import { checkPiVersion, piArguments, piCommand, piExtraArguments, piPermission, piTools } from "../src/features/agents/host/piCommand.js";
 
 describe("associating an installed Pi command", () => {
-  it("adds only the scoped Project callback to trusted read-only tools", () => {
-    expect(piTools("read-only", false, "win32", true, true)).toContain("dext_project_query");
-    expect(piTools("read-only", false, "win32", false, true)).not.toContain("dext_project_query");
-    expect(piTools("read-only", false, "win32", true, false)).not.toContain("dext_project_query");
-    const args = piArguments({ extensionPath: "pi.mjs", sessionDirectory: "sessions", permission: "read-only", trusted: true, projectQuery: true });
+  it("offers the Dext bridge tools to a trusted read-only turn", () => {
+    expect(piTools("read-only", false, "win32", true)).toContain("dext_request_user_input");
+    const args = piArguments({ extensionPath: "pi.mjs", sessionDirectory: "sessions", permission: "read-only", trusted: true });
     expect(args).toContain("--no-mcp");
     expect(args[args.indexOf("--tools") + 1]).not.toMatch(/(?:^|,)(?:write|edit|bash|powershell|mcp__\*)(?:,|$)/);
   });

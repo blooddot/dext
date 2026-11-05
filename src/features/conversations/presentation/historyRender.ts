@@ -116,7 +116,6 @@ export function highlightTerminal(source: string): string {
 }
 
 function referenceIcon(reference: ContextReferenceOccurrence): string {
-  if (reference.kind === "project") return "symbol-module";
   if (reference.kind === "dir") return "folder";
   if (reference.kind === "symbol") return "symbol-method";
   return "file";

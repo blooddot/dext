@@ -2,7 +2,6 @@ import { PlanExecution, resumePlanTodos } from "../domain/planExecution.js";
 import { planTodoItems, planTodoInstruction, type PlanTodoProgress } from "../domain/planTodoProgress.js";
 import type { AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import type { DextHistorySession, PlanStatus } from "../contracts/history.js";
-import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
 
 /** The host capabilities plan work needs. Reading the actual file is a port so
  * the controller never touches `vscode.workspace.fs` directly. */
@@ -12,12 +11,11 @@ export interface PlanFileHost {
   readPlan: (planPath: string) => Promise<string>;
   /** True when the reference names a Dext plan this host can serve. */
   knownPlan: (reference: string) => boolean;
-  preparePlanBuild?: (path: string, document: string, previous?: PlanProjectContext) => Promise<PlanProjectContext | undefined>;
 }
 
 export interface PlanSessionPort {
   active: () => DextHistorySession;
-  savePlanContext: (sessionId: string, path: string | undefined, status: PlanStatus, projectContext?: PlanProjectContext) => Promise<void>;
+  savePlanContext: (sessionId: string, path: string | undefined, status: PlanStatus) => Promise<void>;
   savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string) => Promise<void>;
   postPlanContext: () => Promise<void>;
 }
@@ -49,8 +47,7 @@ export class PlanController {
   startRun(session: DextHistorySession, source: string, executePlan: boolean, executionPlanPath: string | undefined): PlanRunContext {
     if (!executePlan) return {};
     const previousPlan = [...session.turns].reverse().find((turn) => turn.executePlan && turn.planPath === executionPlanPath);
-    const sameDocument = !session.projectContext || session.planProgress?.documentHash === session.projectContext.documentHash;
-    const previousTodos = !sameDocument ? [] : session.planProgress && session.planProgress.path === executionPlanPath
+    const previousTodos = session.planProgress && session.planProgress.path === executionPlanPath
       ? session.planProgress.todos
       : previousPlan ? [...previousPlan.process].reverse().find((event) => event.phase === "todo")?.todos ?? [] : [];
     const planRun = new PlanExecution(resumePlanTodos(planTodoItems(source), previousTodos));
@@ -78,22 +75,10 @@ export class PlanController {
     if (!text.trim()) throw new Error(`Plan '${planPath}' is empty.`);
     const session = this.options.sessions.active();
     if (this.options.running(session.id)) throw new Error("Stop the running turn before building a plan.");
-    const previous = session.projectContext?.planPath === planPath ? session.projectContext : undefined;
     const previousStatus = session.planStatus ?? "active";
-    const context = await this.options.host.preparePlanBuild?.(planPath, text, previous);
-    // A contradiction is recorded before failing: the toolbar then names it, and the
-    // user can revise the plan instead of retrying an evaluation they cannot see.
-    if (context?.assessment === "conflict") {
-      session.projectContext = context;
-      session.activePlanPath = planPath;
-      await this.options.sessions.savePlanContext(session.id, planPath, session.planStatus ?? "active", context);
-      await this.options.sessions.postPlanContext();
-      throw new Error(`Project review required, revise the plan in Plan mode: ${context.reason}`);
-    }
-    if (context) session.projectContext = context;
     session.activePlanPath = planPath;
     session.planStatus = "running";
-    await this.options.sessions.savePlanContext(session.id, planPath, "running", context);
+    await this.options.sessions.savePlanContext(session.id, planPath, "running");
     await this.options.sessions.postPlanContext();
     try {
       // The turn starts in the conversation this Build was clicked in. The check
@@ -109,47 +94,40 @@ export class PlanController {
       // status running would keep Build disabled with no turn behind it.
       if (!this.options.running(session.id)) {
         session.planStatus = previousStatus;
-        await this.options.sessions.savePlanContext(session.id, planPath, previousStatus, session.projectContext);
+        await this.options.sessions.savePlanContext(session.id, planPath, previousStatus);
         await this.options.sessions.postPlanContext();
       }
       throw error;
     }
   }
 
-  /** One click after a Project conflict: the plan is revised instead of the user
-   * rewriting it. The stale assessment goes with it, so the next Build evaluates
-   * the corrected document. */
+  /** One click to revise the selected plan instead of the user rewriting it. */
   async correct(planPath: string): Promise<void> {
     if (!this.options.host.isTrustedLocalWorkspace()) {
       throw new Error("Correcting a plan requires a trusted local workspace.");
     }
     const session = this.options.sessions.active();
     if (this.options.running(session.id)) throw new Error("Stop the running turn before correcting a plan.");
-    const reason = session.projectContext?.planPath === planPath ? session.projectContext.reason : "";
-    delete session.projectContext;
     session.activePlanPath = planPath;
     await this.options.sessions.savePlanContext(session.id, planPath, session.planStatus ?? "active");
     await this.options.sessions.postPlanContext();
     await this.options.startTurn(session, "plan", [
-      "Correct this plan so it no longer contradicts the Project norms. Keep every task that is still valid; never weaken a norm to make the plan pass.",
-      reason ? `Project conflict: ${reason}` : ""
+      "Correct this plan so its tasks match what the codebase actually allows. Keep every task that is still valid.",
     ].join("\n"), planPath, false);
   }
 
   /** The plan the model wrote becomes the conversation's active target as soon
    * as the turn is stored. */
-  async adoptGeneratedPlan(session: DextHistorySession, planPath: string, projectContext?: PlanProjectContext): Promise<void> {
+  async adoptGeneratedPlan(session: DextHistorySession, planPath: string): Promise<void> {
     session.activePlanPath = planPath;
     session.planStatus = "active";
-    if (projectContext) session.projectContext = projectContext;
-    await this.options.sessions.savePlanContext(session.id, planPath, "active", projectContext);
+    await this.options.sessions.savePlanContext(session.id, planPath, "active");
     await this.options.sessions.postPlanContext();
   }
 
   async saveProgress(session: DextHistorySession, executionPlanPath: string, todos: readonly AgentTodoItem[]): Promise<void> {
-    const documentHash = session.projectContext?.documentHash;
-    session.planProgress = { path: executionPlanPath, todos: [...todos], ...(documentHash ? { documentHash } : {}) };
-    await this.options.sessions.savePlanProgress(session.id, executionPlanPath, todos, documentHash);
+    session.planProgress = { path: executionPlanPath, todos: [...todos] };
+    await this.options.sessions.savePlanProgress(session.id, executionPlanPath, todos);
   }
 
   /** A stopped plan keeps its progress; a completed one clears the target. */
@@ -159,12 +137,11 @@ export class PlanController {
   ): Promise<void> {
     if (session.planStatus !== "running") return;
     if (options.failed) session.planStatus = options.cancelled ? "active" : "failed";
-    else if (options.outcome?.status === "completed" && (session.projectContext?.availability !== "ready" || session.projectContext.reviewStatus === "reconciled")) {
+    else if (options.outcome?.status === "completed") {
       delete session.activePlanPath;
       session.planStatus = "new";
     } else session.planStatus = "active";
-    // Completion clears the active target, but keeps the final assessment and receipts auditable.
-    await this.options.sessions.savePlanContext(session.id, session.activePlanPath, session.planStatus, session.projectContext);
+    await this.options.sessions.savePlanContext(session.id, session.activePlanPath, session.planStatus);
     await this.options.sessions.postPlanContext();
   }
 

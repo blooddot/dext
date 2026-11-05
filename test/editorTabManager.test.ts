@@ -83,14 +83,14 @@ describe("editor tab manager", () => {
   it("creates once per stable key and reveals the existing panel on reopen", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    const descriptor = describeEditorTab("project", "dext.editor:project", EDITOR_TAB_VIEW_TYPES.project);
+    const descriptor = describeEditorTab("api", "dext.editor:api", EDITOR_TAB_VIEW_TYPES.api);
     const first = manager.open(descriptor);
     const second = manager.open(descriptor);
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(host.created).toHaveLength(1);
     expect((second.panel as FakePanel).revealed).toBe(1);
-    expect(manager.activeKeys).toEqual(["dext.editor:project"]);
+    expect(manager.activeKeys).toEqual(["dext.editor:api"]);
   });
 
   it("releases the key on close and disposes the panel without deleting data", () => {
@@ -116,7 +116,7 @@ describe("editor tab manager", () => {
   it("keeps the live tab when a panel that adoption replaced reports its own dispose", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    const descriptor = describeEditorTab("project", "dext.editor:project", EDITOR_TAB_VIEW_TYPES.project);
+    const descriptor = describeEditorTab("api", "dext.editor:api", EDITOR_TAB_VIEW_TYPES.api);
     const live = manager.open(descriptor);
     // A restored panel for an already-open key is disposed by `adopt`, which must not close the
     // registered one through its own dispose callback.

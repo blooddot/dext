@@ -23,9 +23,7 @@ const contexts = await Promise.all([
   esbuild.context({
     entryPoints: {
       extension: "src/extension.ts",
-      extensionHostTest: "test/extensionHost.ts",
-      structureMcp: "src/features/project/host/indexing/projectStructureMcp.ts",
-      projectModelMcp: "src/features/project/host/indexing/projectModelMcp.ts"
+      extensionHostTest: "test/extensionHost.ts"
     },
     bundle: true,
     outdir: "dist",
@@ -41,7 +39,6 @@ const contexts = await Promise.all([
   esbuild.context({
     entryPoints: {
       main: "src/webview/main.ts",
-      project: "src/features/project/browser/entry.ts",
       // The image-annotator editor tab is its own document; it shares the built
       // `main.css` but none of the composer bundle.
       imageAnnotator: "src/features/conversations/browser/imageAnnotatorPage.ts",

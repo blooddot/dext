@@ -89,9 +89,7 @@ async function receive(request) {
       }, 60); return;
     }
     if (text === "fixture:compact") { send({ type: "compaction_start", reason: "threshold" }); input += 4; output += 1; send({ type: "compaction_end", reason: "threshold", result: { summary: "short" }, aborted: false }); }
-    if (text === "fixture:project-query") {
-      message(JSON.stringify(await call("project_query", { query: { operation: "summary", limit: 2 } })));
-    } else if (text === "fixture:todo") {
+    if (text === "fixture:todo") {
       message('<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->\nImplementing');
     } else if (text === "fixture:question") {
       const answer = await call("question", { questions: [{ id: "q", question: "Choose", options: [{ label: "A", description: "" }, { label: "B", description: "" }], multiSelect: true }] });

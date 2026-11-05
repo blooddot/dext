@@ -3,12 +3,6 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import * as vscode from "vscode";
-import type { ProjectPlanPort } from "../features/project/contracts/projectPlan.js";
-import { z } from "zod";
-import { projectImpactSchema, projectReviewReportSchema, type PlanProjectContext } from "../shared/contracts/planProject.js";
-import { ProjectChangeEvidence } from "../features/project/host/projectChangeEvidence.js";
-import type { ProjectPlanReconciler } from "../features/project/host/projectPlanReconcile.js";
-import { planSemanticContent } from "../features/project/knowledge/projectPlan.js";
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
 import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
@@ -31,9 +25,8 @@ import { createResultRepair } from "../features/agents/host/resultRepair.js";
 import { DextRuntime } from "../features/workflow/host/runtime.js";
 import { SkillCatalog } from "../features/workflow/host/skillCatalog.js";
 import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
-import { AGENT_PERMISSIONS, DEFAULT_AGENT_PROFILE_IDS, SUPPORTED_AGENT_PROFILE_IDS, type AgentMcpServer, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
+import { AGENT_PERMISSIONS, DEFAULT_AGENT_PROFILE_IDS, SUPPORTED_AGENT_PROFILE_IDS, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
 import { AgentProfileStore } from "../features/agents/host/agentProfiles.js";
-import { createProjectAiProvider } from "../features/project/host/generation/projectAiProvider.js";
 import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "../runner/dextHost.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import { VsCodeContextHost } from "../platform/vscode/contextHost.js";
@@ -50,12 +43,7 @@ import { McpAccessTokenStore } from "../features/mcp/host/mcpSecrets.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "../features/conversations/domain/planFile.js";
 import { splitPlanResponse } from "../features/conversations/domain/planResponse.js";
 import { DextStorage } from "../platform/vscode/dextStorage.js";
-import type { ProjectWorkspaceSettings } from "../features/project/contracts/projectSettings.js";
-import type { ProjectAiProvider } from "../features/project/host/generation/projectAiGeneration.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
-import { listProjectNorms, readProjectNorm, writeProjectNorm } from "../features/project/host/persistence/projectNorms.js";
-import { ProjectStore } from "../features/project/host/persistence/projectStore.js";
-import { VscodeProjectFileHost } from "../features/project/host/persistence/vscodeProjectFileHost.js";
 import type { ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
 import { isSkillPackId, normalizeSkillPackManifest, skillPackId, SKILL_PACK_MANIFEST_FILE, SKILL_PACK_SOURCE_FILE, SKILL_PACKS_DIRECTORY, SKILLS_DIRECTORY, type SkillPackManifest } from "../features/resources/domain/skillPack.js";
@@ -140,17 +128,6 @@ async function apiSourceFiles(root: vscode.Uri, limit: number): Promise<vscode.U
     }
   }
   return files;
-}
-
-/** Ask is free-form chat: models still answer Project prompts with prose or a
- * fenced block instead of the requested JSON. Take the first candidate the
- * schema accepts, so a wrapper never turns a review into a hard failure. */
-function parseAnswer<T>(schema: z.ZodType<T>, text: string): T | undefined {
-  for (const candidate of agentResultCandidates(text)) {
-    const parsed = schema.safeParse(candidate.value);
-    if (parsed.success) return parsed.data;
-  }
-  return undefined;
 }
 
 /** Registry diagnostics name the server they rejected. Keeping the reason lets
@@ -289,7 +266,7 @@ export class DextApplication {
   /**
    * Directories the `dext/api/<id>` alias resolves against, most specific first.
    * `.dext/api` always comes first, so a configured directory cannot shadow a
-   * project API; the project's own `paths.apiDirs` adds roots
+   * workspace API; `dext.apiDirectories` adds roots
    * after it, then global storage.
    */
   apiRoots(): string[] {
@@ -297,17 +274,36 @@ export class DextApplication {
     const add = (root: string): void => { if (root && !roots.includes(root)) roots.push(root); };
     add(vscode.Uri.joinPath(vscode.Uri.file(this.workspaceRoot), ".dext", "api").fsPath);
     const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
-    const projectDirs = this.projectWorkspaceSettings?.apiDirs;
-    if (projectDirs) {
-      for (const entry of projectDirs) add(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), ...entry.split("/")).fsPath);
+    for (const entry of this.workspaceDirectories("apiDirectories")) {
+      add(vscode.Uri.joinPath(folder?.uri ?? vscode.Uri.file(this.workspaceRoot), ...entry.split("/")).fsPath);
     }
     add(vscode.Uri.joinPath(this.storage.globalStorageUri, "api").fsPath);
     return roots;
   }
+
+  /** The workspace-relative directories a `dext.*Directories` setting adds, in order.
+   * An entry that is not a safe relative path is ignored, so one bad value cannot
+   * take the whole reload down. */
+  private workspaceDirectories(key: "apiDirectories" | "skillDirectories" | "mcpDirectories"): string[] {
+    const configured: unknown = vscode.workspace.getConfiguration("dext").get(key);
+    if (!Array.isArray(configured)) return [];
+    const directories: string[] = [];
+    for (const entry of configured) {
+      if (typeof entry !== "string") continue;
+      try { directories.push(planPathSegments(entry).join("/")); } catch { /* an unusable path is ignored */ }
+    }
+    return directories;
+  }
+
+  /** The workspace-relative directory saved plans go in, or the default. */
+  private planDirectory(): string {
+    const configured: unknown = vscode.workspace.getConfiguration("dext").get("planDirectory");
+    if (typeof configured !== "string") return DEFAULT_PLAN_DIRECTORY;
+    try { return planPathSegments(configured).join("/"); } catch { return DEFAULT_PLAN_DIRECTORY; }
+  }
   private workspaceRoot = process.cwd();
   private workspaceUri: vscode.Uri | undefined;
   private workspaceTrusted = false;
-  private projectWorkspaceSettings: ProjectWorkspaceSettings | undefined;
   private resourceWrite: Promise<void> = Promise.resolve();
   /** Static API flow analysis for creation rules. Absent in hostless unit setups. */
   private apiFlowAnalyzer: ((content: string) => Promise<ApiFlow>) | undefined;
@@ -316,7 +312,6 @@ export class DextApplication {
    * absent from the registry, so this is the only place that reason survives. */
   private mcpServerRejections = new Map<string, string>();
   /** Built-in host tool resolved per turn; a user setting and a saved model can disable it. */
-  private structureToolProvider: (() => Promise<{ cachePath: string; serverPath: string } | undefined>) | undefined;
   /** The declaration the current workspace's generated project describes: the
    * built-in surface plus the MCP tools its own manifests declare. Rebuilt on every
    * reload from the same registry the kernel executes. */
@@ -334,20 +329,11 @@ export class DextApplication {
   private agentTimeoutMs = DEFAULT_AGENT_TIMEOUT_MS;
   private agentIdleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS;
   private readonly mcpSecrets: McpAccessTokenStore | undefined;
-  /** Kept beside the runtime copy so Project AI prompts follow the same setting. */
+  /** Kept beside the runtime copy so prompts follow the same setting. */
   private resolvedOutputLanguage: ResolvedOutputLanguage | undefined;
   readonly storage: DextStorage;
   /** Dext's extension state; a tab that outlives its close keeps its marks here. */
   readonly globalState: vscode.Memento | undefined;
-  projectAiProvider(): ProjectAiProvider {
-    return createProjectAiProvider({ runtime: this.runtime, listProfiles: () => this.agents.list(), profiles: () => this.agentProfiles(), selection: () => this.agents.currentSelection(), language: () => this.resolvedOutputLanguage });
-  }
-
-
-  /** Applies the project-owned paths before the next resource reload or turn. */
-  setProjectWorkspaceSettings(settings: ProjectWorkspaceSettings): void {
-    this.projectWorkspaceSettings = settings;
-  }
 
   /**
    * The same syntax-only analyser the API detail page uses. New APIs are rejected
@@ -367,164 +353,10 @@ export class DextApplication {
     return ["API flow issues:", ...issues.map((issue) => `- ${describeApiFlowIssue(issue)}`)].join("\n");
   }
 
-  /**
-   * The host-owned structure tool is injected into Agent conversations as an ordinary stdio MCP
-   * server. The resolver runs per turn, so a setting change or a newly built model applies without
-   * restarting Dext. It uses Dext's own Electron/Node binary, so the user installs no manifest and
-   * needs no system `node`; the server exits with the provider session.
-   */
-  setStructureToolProvider(provider: (() => Promise<{ cachePath: string; serverPath: string } | undefined>) | undefined): void {
-    this.structureToolProvider = provider;
-  }
-
-  private projectToolProvider: (() => Promise<{ modelPath: string; serverPath: string } | undefined>) | undefined;
-  setProjectToolProvider(provider: () => Promise<{ modelPath: string; serverPath: string } | undefined>): void { this.projectToolProvider = provider; }
-
-  setProjectPlanPort(port: ProjectPlanPort | undefined): void {
-    this.projectPlanPort = port;
-    this.runtime.setProjectPlanPort(port);
-  }
-
-  private projectPlanPort: ProjectPlanPort | undefined;
-  private projectChangeEvidence: ProjectChangeEvidence | undefined;
-  private projectReconciler: ProjectPlanReconciler | undefined;
-
-  setProjectReconciler(reconciler: ProjectPlanReconciler): void { this.projectReconciler = reconciler; }
-
-  configureProjectEvidence(workspace: string, storage: string): void {
-    this.projectChangeEvidence = new ProjectChangeEvidence(workspace, storage);
-  }
-
-  /**
-   * Starts one Plan execution: re-validates the bound plan and captures the baseline
-   * that the final review compares against.
-   */
-  async startPlanProject(context: PlanProjectContext): Promise<PlanProjectContext> {
-    if (context.availability !== "ready") return context;
-    const uri = this.planUri(context.planPath);
-    if (!uri || !this.projectPlanPort) throw new Error("Bound Plan or Project is unavailable.");
-    const document = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-    const validation = await this.projectPlanPort.validatePlan(context, document);
-    if (!validation.valid) throw new Error(validation.diagnostics.join(" "));
-    if (!this.projectChangeEvidence) throw new Error("Project change evidence storage is unavailable.");
-    // Every Build starts a fresh baseline; a finished run leaves no copy behind.
-    const baseline = await this.projectChangeEvidence.capture(context.evidenceId);
-    return { ...context, evidenceId: baseline.id, reviewStatus: "pending" };
-  }
-
-  /**
-   * Final review, host write guards and the norm write in one turn. A proposal that
-   * fails any guard stays pending with its reason; the turn itself still succeeds.
-   */
-  async finishPlanProject(context: PlanProjectContext, summary: string, signal: AbortSignal): Promise<PlanProjectContext> {
-    if (context.availability !== "ready") return context;
-    if (!context.evidenceId || !this.projectChangeEvidence || !this.projectPlanPort) return { ...context, assessment: "unknown", reviewStatus: "pending", reason: "Project change evidence is missing." };
-    const changes = await this.projectChangeEvidence.compare(context.evidenceId);
-    const uri = this.planUri(context.planPath);
-    if (!uri) throw new Error("Plan document is unavailable for final Project review.");
-    const document = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-    const validation = await this.projectPlanPort.validatePlan(context, document, { basis: false });
-    // Every ending clears the baseline: code that changed during this run is now
-    // evidence that the norms citing it need a fresh look.
-    const settle = async (next: PlanProjectContext): Promise<PlanProjectContext> => {
-      // A failed stale mark matters less than the result already written.
-      if (this.projectReconciler) await this.projectReconciler.markStale(changes.changes.map(change => change.path)).catch(() => undefined);
-      await this.projectChangeEvidence!.remove(context.evidenceId!);
-      return { ...next, evidenceId: undefined };
-    };
-    if (!validation.valid) return settle({ ...context, assessment: "conflict", reviewStatus: "stale", reason: validation.diagnostics.join(" ") });
-    if (!changes.complete || JSON.stringify(changes).length > 120_000) return settle({ ...context, assessment: "unknown", reviewStatus: "pending", reason: [...changes.diagnostics, "Actual change coverage is incomplete; Project updates were not applied."].join(" ") });
-    const read = await this.projectPlanPort.readPlanContext({ workspaceKey: context.workspaceKey, input: document, paths: changes.changes.map(change => change.path) });
-    const prompt = [
-      "Review actual implementation changes against Project norms, read-only. Do not modify any file.",
-      "Check responsibilities, interfaces, behavior, dependencies, invariants and decisions even if the plan anticipated none. Changes are host-observed content differences; they do not prove authorship. Concurrent or unexplained edits require unknown or conflict.",
-      "Return JSON matching this schema. Checks you perform use agent_reported, never host_observed. Deltas are proposals, not authorization. Do not declare completion for unresolved work.",
-      "Use supplied writeTargets for target/id/beforeHash. Legacy targets replace one complete JSON document. Native targets are node or relation; body changes replace the owning node and may omit unchanged fields. Never invent hashes or directly write Project during this review.",
-      JSON.stringify(z.toJSONSchema(projectReviewReportSchema)), JSON.stringify({ plan: document, project: read, changes, agentSummary: summary.slice(0, 24_000) })
-    ].join("\n\n");
-    const answer = await this.runtime.executeConversation("ask", prompt, { signal });
-    if (answer.result.kind !== "ask") throw new Error("Project review returned an unexpected result.");
-    const report = parseAnswer(projectReviewReportSchema, answer.result.text);
-    if (!report) return settle({ ...context, assessment: "unknown", reviewStatus: "pending", reason: "The final Project review returned no usable JSON report; Project updates were not applied." });
-    if (report.checks.some(check => check.source !== "agent_reported")) throw new Error("The Agent may only report its own checks.");
-    const known = new Set(read.basis.map(item => item.id));
-    if (report.refs.some(id => !known.has(id)) || read.diagnostics.length) return settle({ ...context, assessment: "unknown", reviewStatus: "pending", reason: "Final review references are missing or context coverage is incomplete." });
-    report.checks.unshift({ source: "host_observed", description: `Compared ${changes.changes.length} content changes against the saved execution baseline.`, status: "passed" });
-    const base: PlanProjectContext = { ...context, assessment: report.assessment, reason: report.reason, report };
-    if (report.assessment === "none") return settle({ ...base, reviewStatus: report.checks.every(check => check.status === "passed") ? "reconciled" : "pending" });
-    if (report.assessment !== "change") return settle({ ...base, reviewStatus: "pending" });
-    if (report.checks.some(check => check.status === "failed")) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} A reported check failed.` });
-    const deltas = report.projectDelta.filter(delta => delta.op !== "none");
-    if (!deltas.length) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} A change assessment names no Project update.` });
-    const observed = new Set(changes.changes.map(change => change.path));
-    const unbound = [...new Set(deltas.flatMap(delta => delta.evidence).filter(path => !observed.has(path)))];
-    if (unbound.length) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} Delta evidence is outside this plan's changes: ${unbound.join(", ")}.` });
-    const body = deltas.reduce((sum, delta) => sum + JSON.stringify(delta.after ?? null).length, 0);
-    if (deltas.length > 20 || body > 40_000) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} The proposal is too large to apply unattended (${deltas.length} updates, ${body} characters).` });
-    if (!this.projectReconciler) return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} Project reconciliation is unavailable.` });
-    // Only norms this run actually read are writable; evidence comes from the basis,
-    // never from the proposal that is being authorized.
-    const basis = context.basis.filter(item => item.kind === "object");
-    const authorizedIds = basis.map(item => item.id);
-    const authorizedTargets = [...new Set(basis.map(item => item.locator.split("#")[0]!).filter(target => target.startsWith(".dext/")))];
-    let receipts = [...(context.receipts ?? [])];
-    try {
-      receipts = await this.projectReconciler.reconcile({ deltas: report.projectDelta, authorizedIds, authorizedTargets, decision: "accept", receipts, saveReceipts: next => { receipts = next; return Promise.resolve(); } });
-    } catch (error) {
-      return settle({ ...base, reviewStatus: "pending", reason: `${report.reason} Project updates were not applied: ${error instanceof Error ? error.message : String(error)}` });
-    }
-    return settle({ ...base, reviewStatus: "reconciled", receipts });
-  }
-
-  async preparePlanBuild(path: string, document: string, previous?: PlanProjectContext): Promise<PlanProjectContext | undefined> {
-    const port = this.projectPlanPort;
-    if (!port || !this.workspaceUri) {
-      if (previous?.availability === "ready") throw new Error("Bound Project is unavailable; restore its workspace before building.");
-      return undefined;
-    }
-    // A changed Plan or a changed Project only makes the stored assessment stale.
-    // Re-derive it from the current document instead of blocking every Build.
-    if (previous && !(await port.validatePlan(previous, document)).valid) previous = undefined;
-    const read = await port.readPlanContext({ workspaceKey: this.workspaceUri.fsPath, input: document });
-    if (previous?.availability === "ready" && read.availability !== "ready") throw new Error("Bound Project is no longer readable.");
-    if (read.availability !== "ready") return port.bindPlan(read, path, document);
-    if (previous && previous.assessment !== "unknown" && previous.assessment !== "conflict") return { ...previous, fileHash: createHash("sha256").update(document).digest("hex") };
-    const prompt = [
-      "Evaluate this existing Plan against the Project norms, read-only. Do not write files or rewrite the plan.",
-      "Assess responsibilities, interfaces, behavior, dependencies, invariants and decisions. Missing or partial evidence means unknown; contradictions mean conflict.",
-      "Return assessment, reason, refs and coverage. This assessment grants no write authorization.",
-      JSON.stringify(read), document, JSON.stringify(z.toJSONSchema(projectImpactSchema))
-    ].join("\n\n");
-    // Ask is a read-only transport shared by every supported provider, including Pi.
-    const response = await this.runtime.executeConversation("ask", prompt);
-    if (response.result.kind !== "ask") throw new Error("Project assessment returned an unexpected result.");
-    // No usable answer leaves the assessment unknown, which is advisory here.
-    const context = port.bindPlan(read, path, document, parseAnswer(projectImpactSchema, response.result.text));
-    // Unknown is advisory: the plan body and norm hashes were already checked, and the
-    // final review still inspects the actual changes. A contradiction is returned so the
-    // caller records it and names the plan change that resolves it.
-    return context;
-  }
-
   /** Called by the sidebar when its Webview exists. A cached MCP image URL is
    * only usable in a Webview whose localResourceRoots include global storage. */
   setMcpImageWebview(webview: vscode.Webview | undefined): void {
     this.mcpImageWebview = webview;
-  }
-
-  private async conversationMcpServers(): Promise<readonly AgentMcpServer[]> {
-    if (!this.workspaceTrusted) return [];
-    const servers: AgentMcpServer[] = [];
-    const project = await this.projectToolProvider?.();
-    if (project) servers.push({ name: "dext_project", command: process.execPath, args: [project.serverPath, "--model", project.modelPath], env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {} });
-    const tool = await this.structureToolProvider?.();
-    if (!tool || !existsSync(tool.cachePath)) return servers;
-    return [...servers, {
-      name: "dext_structure",
-      command: process.execPath,
-      args: [tool.serverPath, "--cache", tool.cachePath],
-      env: process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}
-    }];
   }
 
   constructor(globalState?: vscode.Memento, secretStorage?: vscode.SecretStorage, globalStorageUri?: vscode.Uri) {
@@ -597,7 +429,6 @@ export class DextApplication {
     this.runtime.setMcpCaller((tool, input, onProcessEvent) => this.mcp.call(tool, input, {
       ...(onProcessEvent ? { onProcessEvent } : {})
     }));
-    this.runtime.setConversationMcpServers(() => this.conversationMcpServers());
     // Single result boundary: tolerant parse plus one bounded read-only repair
     // attempt. The transport is chosen here per profile; the core predictor
     // itself stays hostless.
@@ -678,7 +509,7 @@ export class DextApplication {
     this.applyTimeoutSettings();
     this.applyAgentPermissionSettings();
     this.applyOutputLanguageSettings();
-    const skillDirs = this.projectWorkspaceSettings?.skillDirs ?? [];
+    const skillDirs = this.workspaceDirectories("skillDirectories");
     const mcpManifests = await this.loadMcpManifests(folder);
     // The declaration a project commits is generated from its own manifests only: a
     // global manifest lives on one machine, and the committed file has to be the same
@@ -791,7 +622,7 @@ export class DextApplication {
    * on one machine, and a committed mapping cannot name them.
    */
   private projectApiDirs(): string[] {
-    const dirs = [DEXT_API_DIRECTORY, ...(this.projectWorkspaceSettings?.apiDirs ?? [])];
+    const dirs = [DEXT_API_DIRECTORY, ...this.workspaceDirectories("apiDirectories")];
     return [...new Set(dirs.map((dir) => dir.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "")).filter(Boolean))];
   }
 
@@ -914,7 +745,7 @@ export class DextApplication {
     const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
     if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
     if (folder?.uri.scheme === "file") {
-      for (const entry of this.projectWorkspaceSettings?.mcpDirs ?? []) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
+      for (const entry of this.workspaceDirectories("mcpDirectories")) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
     }
     if (includeGlobal) directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
     const uniqueDirectories = directories.filter((item, index, all) => all.findIndex((candidate) => candidate.scope === item.scope && candidate.uri.fsPath === item.uri.fsPath) === index);
@@ -1203,26 +1034,13 @@ export class DextApplication {
       }
       return folder.uri;
     }
-    // Project norms live inside the project model, so they have no global scope and never write there.
-    if (type === "project" && scope !== "project") throw new Error("Project norms exist only in this workspace.");
     if (scope === "global") return vscode.Uri.joinPath(this.storage.globalStorageUri, RESOURCE_DIRECTORIES[type]);
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project resources require a trusted local workspace.");
     return vscode.Uri.joinPath(folder.uri, ".dext", RESOURCE_DIRECTORIES[type]);
   }
 
-  /** The model writer behind the Project resource mode; the same store Overview updates. */
-  private projectNormStore(): ProjectStore {
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project norms require a trusted local workspace.");
-    return new ProjectStore(new VscodeProjectFileHost(folder.uri));
-  }
-
   async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }>> {
-    if (type === "project") {
-      this.resourceRoot(type, "project");
-      return (await listProjectNorms(this.projectNormStore())).map((norm) => ({ name: norm.title, path: norm.id, scope: "project" as const }));
-    }
     const items: Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }> = [];
     for (const scope of ["project", "global"] as const) {
       if (scope === "project" && (!vscode.workspace.workspaceFolders?.[0] || !this.workspaceTrusted)) continue;
@@ -1525,11 +1343,6 @@ export class DextApplication {
   }
 
   async readResource(type: ResourceKind, scope: ResourceScope, path: string, name: string): Promise<ResourceTarget> {
-    if (type === "project") {
-      this.resourceRoot(type, scope);
-      const norm = await readProjectNorm(this.projectNormStore(), path);
-      return { name: norm.title, path, content: norm.text };
-    }
     const uri = vscode.Uri.joinPath(this.resourceRoot(type, scope), ...resourcePathSegments(type, path));
     const content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
     if (type === "skill" ? new TextEncoder().encode(content).byteLength > SKILL_FILE_MAX_BYTES : content.length > 200_000) throw new Error("This resource is too large to edit in a conversation.");
@@ -1584,8 +1397,7 @@ export class DextApplication {
       const fence = "`".repeat(Math.max(3, ...Array.from(preview.matchAll(/`+/g), (match) => match[0].length + 1)));
       const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
       const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
-      const label = resource.type === "project" ? `Project norm: ${file.path}`
-        : resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
+      const label = resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
       return `Draft: ${label}\n\n${fence}${language}\n${preview}\n${fence}`
         + (preview.length < file.content.length ? "\n\nPreview truncated; the complete file will be saved." : "");
     }).join("\n\n") + (flowIssues.length ? `\n\n${this.apiFlowIssueText(flowIssues)}` : "")
@@ -1722,17 +1534,13 @@ export class DextApplication {
       throw new Error("This is a GitHub URL. Switch to Import to install a Skill from it.");
     }
     if (resource.type === "skill" && !resource.target) resource.origin = "describe";
-    // A Project norm is rewritten, never created here: the model owns its identity.
-    if (resource.type === "project" && !resource.target) throw new Error("Select a Project norm to rewrite, then describe the change.");
-    const norm = resource.type === "project" ? await readProjectNorm(this.projectNormStore(), resource.target!.path) : undefined;
-    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input), norm), { ...metadata, resourceSource });
+    const response = await this.runtime.executeConversation("ask", resourcePrompt(resource, this.storage.attachmentPrompt(input)), { ...metadata, resourceSource });
     if (response.result.kind !== "ask") throw new Error("The selected Agent did not return resource text.");
     const value = agentResultCandidates(response.result.text)[0]?.value;
     if (value === undefined) throw new Error("The Agent returned invalid resource JSON. Refine the request and try again.");
     if (typeof value.name !== "string" || typeof value.content !== "string") throw new Error("The resource needs a name and content.");
     const limits = this.resourceFileLimits(resource, value.content);
-    // A norm has no supporting files; its prose is the whole resource.
-    const files = resource.type === "project" ? [] : mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files, limits);
+    const files = mergeResourceFiles((resource.draft ?? resource.target)?.files, value.files, limits);
     const draft: ResourceDocument = { name: resource.target?.name ?? value.name.trim(), content: value.content, ...(files.length ? { files } : {}) };
     if (!resource.target) resourceFileName(resource.type, draft.name);
     this.validateResource(resource.type, draft);
@@ -1753,12 +1561,6 @@ export class DextApplication {
     if (!resource.draft) throw new Error("Generate a resource draft first.");
     const { type, scope, draft, target } = resource;
     this.validateResource(type, draft);
-    // A Project norm lives in the model, so it is written there and nowhere on disk.
-    if (type === "project") {
-      if (scope !== "project" || !target) throw new Error("Select a Project norm to rewrite, then describe the change.");
-      await writeProjectNorm(this.projectNormStore(), target.path, draft.content);
-      return { name: target.name, path: target.path, content: draft.content };
-    }
     // A historical API may already break the wrapper rule; only a newly created
     // API is blocked, so upgrading Dext cannot make existing work unsaveable.
     if (type === "api" && !target) {
@@ -2028,8 +1830,7 @@ export class DextApplication {
     if (!plan.document) return response;
     const workspaceStorage = this.storage.location() === "workspace";
     if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return response;
-    const configured = (this.projectWorkspaceSettings?.planDirectory
-      ?? DEFAULT_PLAN_DIRECTORY).trim();
+    const configured = this.planDirectory();
     const segments = workspaceStorage ? planPathSegments(configured || DEFAULT_PLAN_DIRECTORY) : [];
     const directory = workspaceStorage
       ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)
@@ -2054,10 +1855,6 @@ export class DextApplication {
     const target = existingPath
       ? this.planUri(existingPath) ?? vscode.Uri.joinPath(directory, ...planPathSegments(existingPath))
       : vscode.Uri.joinPath(directory, name!);
-    if (result.projectContext && this.projectPlanPort) {
-      const validation = await this.projectPlanPort.validatePlan(result.projectContext, plan.document);
-      if (!validation.valid) throw new Error(validation.diagnostics.join(" "));
-    }
     await vscode.workspace.fs.createDirectory(directory);
     if (existingPath) {
       const actualHash = createHash("sha256").update(await vscode.workspace.fs.readFile(target)).digest("hex");
@@ -2065,12 +1862,7 @@ export class DextApplication {
     }
     await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${plan.document}\n`));
     const planPath = existingPath ?? (workspaceStorage ? [...segments, name!].join("/") : this.storage.reference("plans", name!));
-    const projectContext = result.projectContext ? {
-      ...result.projectContext, planPath,
-      documentHash: createHash("sha256").update(planSemanticContent(plan.document)).digest("hex"),
-      fileHash: createHash("sha256").update(`${plan.document}\n`).digest("hex")
-    } : undefined;
-    return { ...response, result: { ...result, text: plan.conversation, planPath, ...(projectContext ? { projectContext } : {}) } };
+    return { ...response, result: { ...result, text: plan.conversation, planPath } };
   }
 
   planUri(reference: string): vscode.Uri | undefined {
@@ -2132,7 +1924,7 @@ export class DextApplication {
     const directories: Array<{ uri: vscode.Uri; scope: "project" | "global" }> = [];
     if (folder?.uri.scheme === "file") directories.push({ uri: vscode.Uri.joinPath(folder.uri, ".dext", "mcp"), scope: "project" });
     if (folder?.uri.scheme === "file") {
-      for (const entry of this.projectWorkspaceSettings?.mcpDirs ?? []) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
+      for (const entry of this.workspaceDirectories("mcpDirectories")) directories.push({ uri: vscode.Uri.joinPath(folder.uri, entry), scope: "project" });
     }
     directories.push({ uri: vscode.Uri.joinPath(this.storage.globalStorageUri, "mcp"), scope: "global" });
     for (const { uri: directory, scope } of directories) {

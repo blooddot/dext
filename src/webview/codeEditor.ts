@@ -4,7 +4,6 @@ import { DEXT_COMPOSER_SCHEME, installDextTypescript } from "./monacoTypescript.
 import { ReferenceProjection, referenceDecorations } from "./monacoReferences.js";
 import type { ClipboardClient } from "./clipboardClient.js";
 import type { FileSearchClient } from "./../features/workspace/browser/fileSearchClient.js";
-import type { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { codeReferencePasteText } from "./codeReferencePaste.js";
 import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, isFileDrag } from "../platform/browser/fileDrop.js";
 import { fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
@@ -22,7 +21,6 @@ export interface CodeEditorOptions {
   broker?: unknown;
   clipboard: ClipboardClient;
   files: FileSearchClient;
-  projects?: ProjectReferenceClient;
   resolveDroppedFiles(paths: string[]): Promise<string[]>;
   onRun(): void;
   onOpenReference(reference: ContextReferenceOccurrence): void;
@@ -276,7 +274,7 @@ export class DextCodeEditor {
     const value = this.model.getValue();
     const edits = inputReferenceProjections(value).map(ref => ({ range: monaco.Range.fromPositions(this.model.getPositionAt(ref.interpolationStart), this.model.getPositionAt(ref.interpolationEnd)), text: this.projection.encode(ref.reference.expression) }));
     if (!edits.length) return;
-    this.transforming = true; this.view.executeEdits("dext.project", edits); this.transforming = false; this.renderReferences();
+    this.transforming = true; this.view.executeEdits("dext.references", edits); this.transforming = false; this.renderReferences();
   }
   private referencePointer(event: MouseEvent, index: number, close: boolean): void {
     const ref = this.projection.references(this.model.getValue())[index]; if (!ref) return;

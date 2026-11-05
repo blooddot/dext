@@ -34,7 +34,7 @@ export interface CliAxAIServiceOptions {
   model?: string;
   /** Treats the outermost recovered JSON object as the answer instead of searching for a
    * Dext-shaped one. Required whenever the answer legitimately contains nested objects that
-   * carry their own `kind` (a project model's diagrams do), which the Dext-result search
+   * carry their own `kind`, which the Dext-result search
    * would otherwise mistake for the result itself. */
   preferOutermostObject?: boolean;
 }

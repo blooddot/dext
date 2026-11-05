@@ -48,10 +48,6 @@
   "contributes": {
     "commands": [
       {
-        "command": "dext.planFromProjectObject",
-        "title": "Dext: Plan from Project Object"
-      },
-      {
         "command": "dext.sidebar.focus",
         "title": "Dext: Focus Sidebar"
       },
@@ -197,11 +193,6 @@
       {
         "command": "dext.tab.closeConversation",
         "title": "Close"
-      },
-      {
-        "command": "dext.openProject",
-        "title": "Dext: Open Project",
-        "icon": "$(book)"
       },
       {
         "command": "dext.viewApis",
@@ -654,24 +645,19 @@
           "group": "navigation@2"
         },
         {
-          "command": "dext.openProject",
+          "command": "dext.viewApis",
           "when": "view == dext.sidebar",
           "group": "navigation@3"
         },
         {
-          "command": "dext.viewApis",
+          "command": "dext.viewResources",
           "when": "view == dext.sidebar",
           "group": "navigation@4"
         },
         {
-          "command": "dext.viewResources",
-          "when": "view == dext.sidebar",
-          "group": "navigation@5"
-        },
-        {
           "command": "dext.chooseAppearance",
           "when": "view == dext.sidebar",
-          "group": "navigation@6"
+          "group": "navigation@5"
         }
       ],
       "webview/context": [
@@ -854,6 +840,35 @@
           "default": true,
           "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text, and a multi-cursor copy is left entirely to VS Code. Disable this to use VS Code's native copy behavior."
         },
+        "dext.apiDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Additional workspace-relative directories to discover Dext APIs in, for example `tools/api`. `.dext/api` is always searched first and Dext's global storage last, so a directory listed here never shadows a `.dext/api` module with the same id."
+        },
+        "dext.skillDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Additional workspace-relative directories to discover Skills in, for example `tools/skills`. `.dext/skills` and Dext's global Skill storage are always searched too."
+        },
+        "dext.mcpDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Additional workspace-relative directories to read MCP manifests from, for example `tools/mcp`. `.dext/mcp` and Dext's global manifest storage are always searched too."
+        },
+        "dext.planDirectory": {
+          "type": "string",
+          "default": ".dext/plans",
+          "markdownDescription": "Workspace-relative directory saved plans go in when `dext.storage.location` is `workspace`."
+        },
         "dext.storage.location": {
           "type": "string",
           "default": "global",
@@ -1022,7 +1037,7 @@
     "test:host": "npm run build && node scripts/runExtensionTest.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkProjectReaderUi.mjs && node scripts/checkProjectDiagramsUi.mjs && node scripts/checkImageAnnotatorUi.mjs",
+    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkImageAnnotatorUi.mjs",
     "check:ui:conversations": "node scripts/checkConversationTabsUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkStructuredOutputUi.mjs && node scripts/checkInteractionUi.mjs && node scripts/checkPatchApplicationUi.mjs",
     "check": "node scripts/checkModuleBoundaries.mjs && npm run lint && npm run typecheck && npm run test && npm run build && npm run generate:dext-types -- --check && node scripts/generateApiReference.mjs --check && npm run test:build-assets",
     "check:workspace-types": "node scripts/generateDextTypes.mjs --workspace . --check",

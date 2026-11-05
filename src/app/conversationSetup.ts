@@ -1,7 +1,6 @@
 import type { AgentProfile, AgentSelection } from "../features/agents/contracts/agent.js";
 import type { ResourceDocument, ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import type { ConversationHistoryStore } from "../features/conversations/contracts/history.js";
-import type { PlanProjectContext } from "../shared/contracts/planProject.js";
 import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import type { SkillCommandResolution } from "../features/workflow/contracts/skill.js";
@@ -19,8 +18,6 @@ import { DEFAULT_HISTORY_LIMITS } from "../features/conversations/contracts/hist
  * features outside this round. Everything below is passed in as a narrow
  * function, never as the sidebar or the whole application object. */
 export interface ConversationSetupDependencies {
-  startPlanProject?: (context: PlanProjectContext) => Promise<PlanProjectContext>;
-  finishPlanProject?: (context: PlanProjectContext, summary: string, signal: AbortSignal) => Promise<PlanProjectContext>;
   history: ConversationHistoryStore;
   preferences: ConversationPreferences;
   post: (message: WebviewResponse) => Promise<void>;
@@ -40,7 +37,6 @@ export interface ConversationSetupDependencies {
   isTrustedLocalWorkspace: () => boolean;
   readPlan: (planPath: string) => Promise<string>;
   knownPlan: (reference: string) => boolean;
-  preparePlanBuild?: (path: string, document: string, previous?: PlanProjectContext) => Promise<PlanProjectContext | undefined>;
   activeSessionId: () => string;
   disposed: () => boolean;
   maxEventTextLength?: () => number;
@@ -100,13 +96,12 @@ export function createConversationServices(dependencies: ConversationSetupDepend
     host: {
       isTrustedLocalWorkspace: dependencies.isTrustedLocalWorkspace,
       readPlan: dependencies.readPlan,
-      knownPlan: dependencies.knownPlan,
-      ...(dependencies.preparePlanBuild ? { preparePlanBuild: dependencies.preparePlanBuild } : {})
+      knownPlan: dependencies.knownPlan
     },
     sessions: {
       active: () => controller.active(),
-      savePlanContext: (sessionId, path, status, context) => controller.savePlanContext(sessionId, path, status, context),
-      savePlanProgress: (sessionId, path, todos, hash) => controller.savePlanProgress(sessionId, path, todos, hash),
+      savePlanContext: (sessionId, path, status) => controller.savePlanContext(sessionId, path, status),
+      savePlanProgress: (sessionId, path, todos) => controller.savePlanProgress(sessionId, path, todos),
       postPlanContext: () => controller.postPlanContext()
     },
     running: (sessionId) => executionRef.coordinator?.running(sessionId) ?? false,
@@ -121,8 +116,6 @@ export function createConversationServices(dependencies: ConversationSetupDepend
     history: dependencies.history,
     host: {
       profiles: dependencies.profiles,
-      ...(dependencies.startPlanProject ? { startPlanProject: dependencies.startPlanProject } : {}),
-      ...(dependencies.finishPlanProject ? { finishPlanProject: dependencies.finishPlanProject } : {}),
       executeConversation: dependencies.executeConversation,
       executeInput: dependencies.executeInput,
       draftResource: dependencies.draftResource,

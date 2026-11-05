@@ -32,7 +32,6 @@ import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImag
 import { FileDropClient } from "./fileDropClient.js";
 import { ImageAttachments } from "./imageAttachments.js";
 import { McpAssistantView } from "./mcpAssistantView.js";
-import { ProjectReferenceClient } from "./projectReferenceClient.js";
 import { colorizeSource } from "./sourceHighlight.js";
 
 import type { HarnessPresetOption } from "../features/agents/contracts/agent.js";
@@ -59,7 +58,6 @@ import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js"
 import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
 import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
 import { renderMarkdownDiagrams, rerenderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
-import type { PlanProjectContext } from "../shared/contracts/planProject.js";
 import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
 
 interface VsCodeApi {
@@ -253,7 +251,6 @@ let pendingConfirmation: (() => void) | undefined;
 
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 const fileSearch = new FileSearchClient((request) => vscode.postMessage(request));
-const projectReferences = new ProjectReferenceClient((request) => vscode.postMessage(request), (message) => renderError(new Error(message)));
 const fileDrop = new FileDropClient((request) => vscode.postMessage(request));
 let executing = false;
 let stopping = false;
@@ -268,10 +265,9 @@ let inputKind: "empty" | "workflow" | "invalid" = "empty";
 type InputMode = "agent" | "ask" | "plan" | "code";
 let inputMode: InputMode = "agent";
 let activePlanPath: string | undefined;
-let planProjectContext: PlanProjectContext | undefined;
 let planStatus: "new" | "active" | "running" | "completed" | "failed" = "new";
 // A Build leaves the composer before the host starts a turn: it re-reads the plan
-// and may assess it against the Project with an AI call. Remember whose build is
+// first. Remember whose build is
 // still being prepared, so the wait survives a re-render (including a tab
 // switch) instead of turning back into a clickable Build.
 const pendingBuilds = new Map<string, string>();
@@ -483,7 +479,6 @@ const editor = new DextCodeEditor({
   dropTarget: elements.inputShell,
   clipboard,
   files: fileSearch,
-  projects: projectReferences,
   resolveDroppedFiles: (paths) => fileDrop.resolve(paths),
   onRun: run,
   onOpenReference: openInputReference,
@@ -513,10 +508,7 @@ registerSlashCommandProvider(() => ({
   selectedSkillIds: sidebarState?.agentSelection.skills ?? []
 }));
 
-function openInputReference(reference: ContextReferenceOccurrence): void {  if (reference.kind === "project") {
-    vscode.postMessage({ type: "openProjectReference", objectId: reference.payload });
-    return;
-  }
+function openInputReference(reference: ContextReferenceOccurrence): void {
   if (reference.kind === "file") {
     vscode.postMessage({ type: "openFileReference", reference: reference.payload });
   }
@@ -622,7 +614,6 @@ function renderPlanToolbar(): void {
     inputMode: () => inputMode,
     activePlanPath: () => activePlanPath,
     planStatus: () => planStatus,
-    projectContext: () => planProjectContext,
     executing: () => executing,
     stopping: () => stopping,
     activeTurnId: () => activeTurnId,
@@ -773,15 +764,13 @@ function renderResourceControls(): void {
   elements.permissionControlIcon.className = "codicon codicon-folder";
   elements.permissionControl.classList.remove("is-full-access");
   renderComposerMenu(elements.modeMenu, (Object.entries(RESOURCE_LABELS) as Array<[ResourceKind, string]>)
-    // Project norms live in this workspace's model, so the mode appears only when there is one.
-    .filter(([type]) => type !== "project" || Boolean(sidebarState?.resourceRoots?.project))
     .map(([type, label]) => [type, label, `codicon-${RESOURCE_ICONS[type]}`]), resource.type,
-  (type) => changeResourceOptions(type as ResourceKind, type === "project" ? "project" : resource.scope));
-  const resourceKindKeys = (Object.keys(RESOURCE_LABELS) as ResourceKind[]).filter((type) => type !== "project" || Boolean(sidebarState?.resourceRoots?.project));
+  (type) => changeResourceOptions(type as ResourceKind, resource.scope));
+  const resourceKindKeys = (Object.keys(RESOURCE_LABELS) as ResourceKind[]);
   for (const [index, button] of Array.from(elements.modeMenu.querySelectorAll("button")).entries()) {
     button.dataset.resourceType = resourceKindKeys[index]!;
   }
-  const scopes: ResourceScope[] = resource.type === "file" || resource.type === "project"
+  const scopes: ResourceScope[] = resource.type === "file"
     ? (sidebarState?.resourceRoots?.project ? ["project"] : [])
     : sidebarState?.resourceRoots?.project ? ["project", "global"] : ["global"];
   renderComposerMenu(elements.permissionMenu, scopes.map((scope) => [scope,
@@ -827,8 +816,7 @@ function renderResourceToolbar(): void {
   const importing = pristineNewSkill(resource) && resourceSource === "import";
   editor.setPlaceholder(importing
     ? "Paste a GitHub URL"
-    : resource.type === "project" ? "Describe the norm to create…"
-      : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
+    : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
 }
 
 /** Applies the editor theme and Dext token styles to the sidebar document. */
@@ -2300,13 +2288,7 @@ elements.planBuild.addEventListener("click", () => {
   // The host answers with a planContext message (and an error when it refuses),
   // so the toolbar reports the wait from the click onwards.
   if (browser.activeId) pendingBuilds.set(browser.activeId, activePlanPath);
-  // A conflicting assessment gets the one-click correction; a Build here would only
-  // be refused by the host.
-  if (planProjectContext?.planPath === activePlanPath && planProjectContext.assessment === "conflict") {
-    vscode.postMessage({ type: "correctPlan", planPath: activePlanPath });
-  } else {
-    vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
-  }
+  vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
   updateRunState();
 });
 elements.result.addEventListener("click", openOutputLink);
@@ -2552,7 +2534,7 @@ elements.inputShell.addEventListener("paste", (event) => {
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (clipboard.accept(message) || fileSearch.accept(message) || projectReferences.accept(message) || fileDrop.accept(message)) return;
+  if (clipboard.accept(message) || fileSearch.accept(message) || fileDrop.accept(message)) return;
   if (message.type === "turnRenamed") {
     if (browser.renderedId === message.sessionId) {
       transcript.get(message.turnId)?.title.rename(message.title, message.displayTitle);
@@ -2644,7 +2626,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     if (lastSidebarState) renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
     activePlanPath = message.planPath;
     planStatus = message.planStatus;
-    planProjectContext = message.projectContext;
     renderPlanToolbar();
   }
   if (message.type === "conversations") {
@@ -2659,8 +2640,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     if (message.planStatus) {
       activePlanPath = message.planPath;
       planStatus = message.planStatus;
-      planProjectContext = message.projectContext;
-      renderPlanToolbar();
+        renderPlanToolbar();
     }
   }
   if (message.type === "planContext") {
@@ -2672,7 +2652,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     }
     activePlanPath = message.path;
     planStatus = message.status;
-    planProjectContext = message.projectContext;
     renderPlanToolbar();
   }
   if (message.type === "resourceContext") {

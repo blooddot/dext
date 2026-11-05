@@ -3,11 +3,6 @@ import { escapeHtml as escapeAttribute } from "../../shared/lib/html.js";
 import type { DextAppearance } from "../../shared/contracts/appearance.js";
 
 export interface EditorTabHtmlOptions {
-  /**
-   * Allows the sandboxed Archify viewer iframe. The srcdoc document inherits this policy, so it
-   * also needs inline styles, data fonts and data/blob images for the self-contained artifact.
-   */
-  embedFrames?: boolean;
   /** Local Mermaid bundle; its SVG styles require inline styles, but no frames or network. */
   scriptUri?: string;
   /** Shared Mermaid bundle loaded on demand by `main.js` or `apiFlow.js`. */
@@ -22,13 +17,10 @@ export interface EditorTabHtmlOptions {
   };
 }
 
-/** Shared document shell for new and restored Project and resource editor pages. */
+/** Shared document shell for new and restored resource editor pages. */
 export function renderEditorTabHtml(body: string, stylesheetUri: string, cspSource: string, options: EditorTabHtmlOptions = {}): string {
   const nonce = randomBytes(16).toString("hex");
-  const policy = options.embedFrames
-    ? `default-src 'none'; style-src ${escapeAttribute(cspSource)} 'unsafe-inline'; script-src 'nonce-${nonce}'; `
-      + `frame-src 'self'; font-src data:; img-src data: blob:; connect-src 'none';`
-    : `default-src 'none'; style-src ${escapeAttribute(cspSource)}${options.scriptUri ? " 'unsafe-inline'" : ""}; script-src 'nonce-${nonce}';`;
+  const policy = `default-src 'none'; style-src ${escapeAttribute(cspSource)}${options.scriptUri ? " 'unsafe-inline'" : ""}; script-src 'nonce-${nonce}';`;
   const appearance = options.appearance;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`
     + `<meta name="viewport" content="width=device-width, initial-scale=1.0">`

@@ -61,14 +61,7 @@ try {
   assert.equal(await evaluate(`document.getElementById('permission-control-value').textContent`), "Project");
   assert.equal(await evaluate(`document.getElementById('resource-save').disabled`), true);
   await evaluate(`document.getElementById('mode-control').click()`);
-  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill", "File", "Project"]);
-  await key("Escape", 27);
-  await evaluate(`resource={type:'project',scope:'project',target:{name:'Alpha',path:'module:a',content:'## Responsibility'}};host({type:'resourceContext',sessionId:'resource',resource});`);
-  assert.equal(await evaluate(`document.getElementById('mode-control-value').textContent`), "Project");
-  assert.equal(await evaluate(`document.getElementById('permission-control-value').textContent`), "Project");
-  await evaluate(`document.getElementById('permission-control').click()`);
-  // A norm lives in this workspace's model, so it has no Global scope to choose.
-  assert.equal(await evaluate(`document.querySelectorAll('#permission-menu button').length`), 1, 'a Project norm saves into the project only');
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill", "File"]);
   await key("Escape", 27);
   await evaluate(`resource={type:'api',scope:'project'};host({type:'resourceContext',sessionId:'resource',resource});`);
   await evaluate(`document.getElementById('permission-control').click()`);
@@ -113,7 +106,7 @@ try {
   const artifacts = resolve(".tmp-tb/resource-ui"); await mkdir(artifacts, { recursive: true });
   await evaluate(`document.querySelector('#code-editor textarea').focus()`);
   await send("Input.insertText", { text: "Refine this resource" });
-  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"], ["file", "file"], ["project", "project"]];
+  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"], ["file", "file"]];
   for (const [name, themeClass, background, foreground, accent] of [
     ["dark", "vscode-dark", "#181818", "#ddd", "#66aaff"],
     ["light", "vscode-light", "#fff", "#222", "#005fcc"],

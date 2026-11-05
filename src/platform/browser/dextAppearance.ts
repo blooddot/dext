@@ -12,8 +12,8 @@ export function isDextHighContrast(): boolean {
 }
 
 /**
- * Whether the page is currently painted by a light palette. Monaco, Mermaid and
- * the Archify diagrams cannot read CSS variables for their own theme choice, so
+ * Whether the page is currently painted by a light palette. Monaco and Mermaid
+ * cannot read CSS variables for their own theme choice, so
  * they ask this instead of inspecting the workbench classes alone. Paper is light
  * and Dim is dark regardless of the host theme; Auto defers to VS Code, including
  * its high-contrast variants.

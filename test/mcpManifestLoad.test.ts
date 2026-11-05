@@ -16,7 +16,7 @@ vi.mock("vscode", () => {
   return {
     FileSystemError, FileType: { File: 1, Directory: 2 },
     Uri: { file: uri, joinPath: (root: { fsPath: string }, ...parts: string[]) => uri(join(root.fsPath, ...parts)) },
-    workspace: { workspaceFolders: undefined, fs: {
+    workspace: { workspaceFolders: undefined, getConfiguration: () => ({ get: () => undefined }), fs: {
       readDirectory: async (value: { fsPath: string }) => readdir(value.fsPath, { withFileTypes: true }).then((entries) => entries.map((entry) => [entry.name, entry.isDirectory() ? 2 : 1])).catch(missing),
       readFile: async (value: { fsPath: string }) => readFile(value.fsPath).catch(missing),
       stat: async (value: { fsPath: string }) => stat(value.fsPath).catch(missing),
@@ -40,8 +40,7 @@ beforeEach(async () => {
   await mkdir(mcpDirectory(), { recursive: true });
   application = Object.create(DextApplication.prototype) as DextApplication;
   Object.assign(application, {
-    storage: { globalStorageUri: vscode.Uri.file(join(root, "global")) },
-    projectWorkspaceSettings: { mcpDirs: [] }
+    storage: { globalStorageUri: vscode.Uri.file(join(root, "global")) }
   });
 });
 afterEach(async () => { vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });

@@ -656,7 +656,7 @@ async function eventually(check: () => Promise<boolean>, description: string): P
  */
 async function verifyEditorTabs(): Promise<void> {
   const commands = await vscode.commands.getCommands(true);
-  for (const command of ["dext.openProject", "dext.viewApis", "dext.viewResources", "dext.editResource"]) {
+  for (const command of ["dext.viewApis", "dext.viewResources", "dext.editResource"]) {
     assert.ok(commands.includes(command), `${command} is registered.`);
   }
   const group = vscode.window.tabGroups.activeTabGroup;
@@ -679,15 +679,12 @@ async function verifyEditorTabs(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 400));
   assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, apiCount, "Reopening APIs reuses the open page.");
   await openAndAwait("dext.viewResources", "dext.globalResources");
-  await openAndAwait("dext.openProject", "dext.project");
-  const projectTab = vscode.window.tabGroups.activeTabGroup.activeTab!;
-  assert.equal(projectTab.label, "Dext Project", "The Project tab has a clear title.");
   assert.equal(
     vscode.window.tabGroups.activeTabGroup.tabs.length,
-    before + 3,
-    "Project, APIs, and Global Resources each contribute exactly one tab."
+    before + 2,
+    "APIs and Global Resources each contribute exactly one tab."
   );
-  for (let index = 0; index < 3; index++) {
+  for (let index = 0; index < 2; index++) {
     await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
     await new Promise((resolve) => setTimeout(resolve, 200));
   }

@@ -1,5 +1,4 @@
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
-import type { PlanProjectContext } from "../../../shared/contracts/planProject.js";
 import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 
 /** Persisted conversation shape. This contract is safe to import from the
@@ -42,7 +41,6 @@ export interface DextHistoryRecord {
   executePlan?: boolean;
   planPath?: string;
   planOutcome?: PlanExecutionOutcome;
-  projectContext?: PlanProjectContext;
   response?: InputExecutionResponse;
   error?: string;
   /** File holding the text this turn's truncation removed, opened on demand. */
@@ -56,7 +54,7 @@ export interface DextHistoryRecord {
 }
 
 /** The Plan context fields a turn stores with its record. */
-export type TurnPlanContext = Pick<DextHistoryRecord, "executePlan" | "planPath" | "planOutcome" | "projectContext">;
+export type TurnPlanContext = Pick<DextHistoryRecord, "executePlan" | "planPath" | "planOutcome">;
 
 /** Everything the coordinator records beside a turn's result. */
 export type TurnRecordContext = TurnPlanContext
@@ -77,8 +75,7 @@ export interface DextHistorySession {
   resource?: ResourceSession;
   activePlanPath?: string;
   planStatus?: PlanStatus;
-  planProgress?: { path: string; todos: AgentTodoItem[]; documentHash?: string };
-  projectContext?: PlanProjectContext;
+  planProgress?: { path: string; todos: AgentTodoItem[] };
   /** Archived conversations remain available but are hidden from the default history view. */
   archivedAt?: number;
 }
@@ -91,8 +88,8 @@ export interface ConversationHistoryStore {
   remove(sessionId: string): Promise<void>;
   renameTurn(sessionId: string, turnId: string, title: string): Promise<boolean>;
   updateResourceContext(sessionId: string, resource: ResourceSession): Promise<void>;
-  updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus, projectContext?: PlanProjectContext): Promise<void>;
-  updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string): Promise<void>;
+  updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void>;
+  updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void>;
   removeTurn(sessionId: string, turnId: string, providerSessions?: Readonly<Record<string, string>>): Promise<boolean>;
   fork(turns: readonly DextHistoryRecord[], providerSessions?: Readonly<Record<string, string>>): Promise<DextHistorySession>;
   setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void>;

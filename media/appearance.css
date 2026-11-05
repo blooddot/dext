@@ -1,5 +1,5 @@
 /* Dext appearance: one host-level Auto/Paper/Dim choice, shared by the sidebar,
-   History and every Project/resource editor tab. Auto keeps VS Code's own
+   History and every resource editor tab. Auto keeps VS Code's own
    variables; Paper and Dim replace the `--vscode-*` values the existing CSS
    already reads, so components do not need a second parallel token layer. */
 
@@ -185,7 +185,6 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --resource-mcp-accent: #7546b6;
   --resource-rule-accent: #886000;
   --resource-skill-accent: #08796d;
-  --resource-project-accent: #a34a25;
   --resource-button-foreground: #ffffff;
   --resource-syntax-keyword: #af00db;
   --resource-syntax-string: #a31515;
@@ -337,7 +336,6 @@ body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast
   --resource-mcp-accent: #c2a3ff;
   --resource-rule-accent: #dfb45c;
   --resource-skill-accent: #63c9b6;
-  --resource-project-accent: #e58b6a;
   --resource-button-foreground: #17130f;
   --resource-syntax-keyword: #c586c0;
   --resource-syntax-string: #ce9178;

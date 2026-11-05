@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
 import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
@@ -14,8 +13,6 @@ import { parseAgentResult } from "../src/shared/protocol/resultBoundary.js";
 import { DextRuntime, type RuntimeResultRepairRequest, type DeterministicHandler } from "../src/features/workflow/host/runtime.js";
 import { mcpRawResultSchema } from "../src/shared/contracts/schemas.js";
 import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
-import { ProjectPlanService } from "../src/features/project/host/projectPlanService.js";
-import { ProjectStore } from "../src/features/project/host/persistence/projectStore.js";
 import type { AgentConversationRequest, AgentExecutionRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
 import type { UiFormDefinition } from "../src/shared/contracts/uiForm.js";
 import type {
@@ -36,59 +33,6 @@ const host: ContextHost = {
   symbol: async () => undefined,
   dir: async (path) => ({ kind: "dirRef", uri: `file:///${path}`, path })
 };
-
-describe("Project-aware Plan runtime", () => {
-  function projectRuntime() {
-    const { runtime } = setup();
-    selectFakeAgent(runtime);
-    runtime.setWorkspaceTrusted(true);
-    const object = JSON.stringify({ id: "api", canonicalName: "Api", kind: "module", source: "user", confirmation: "accepted", description: "Preserve API" });
-    const service = new ProjectPlanService(new ProjectStore({
-      readFile: async path => path === ".dext/objects/api.json" ? object : undefined,
-      writeFile: async () => { throw new Error("Unexpected Project write"); },
-      listDirectory: async dir => dir === ".dext/objects" ? ["api.json"] : []
-    }), process.cwd());
-    runtime.setProjectPlanPort(service);
-    return runtime;
-  }
-  const document = '# Plan\n<!-- dext-project-impact: {"assessment":"none","reason":"API preserved","refs":["api"],"coverage":"complete"} -->';
-  it("injects the same Project norms into conversation and typed plan without changing their envelopes", async () => {
-    const runtime = projectRuntime();
-    const requests: string[] = [];
-    runtime.setAgentRunner({
-      run: async request => { requests.push(request.metadata?.instruction ?? ""); return { kind: "plan", text: document, projectContext: { workspaceKey: "forged" } }; },
-      runConversation: async request => { requests.push(request.input); return `Explanation\n<!-- dext-plan:start -->\n${document}\n<!-- dext-plan:end -->`; }
-    });
-    const conversation = await runtime.executeConversation("plan", "Fix Api");
-    const typed = await runtime.execute(invoke("plan", [arg("input", "Fix Api")]));
-    for (const request of requests) expect(request).toContain("Preserve API");
-    for (const response of [conversation, typed]) {
-      expect(response.result).toMatchObject({ kind: "plan", projectContext: { availability: "ready", assessment: "none" } });
-      if (response.result.kind === "plan") expect(response.result.projectContext?.workspaceKey).not.toBe("forged");
-    }
-    expect(requests[1]).not.toContain("dext-plan:start");
-  });
-  it("keeps host guidance with custom rules and excludes foreign workspace norms", async () => {
-    const runtime = projectRuntime(); let instruction = "";
-    runtime.setRuleLoader(async () => "Custom headings");
-    runtime.setAgentRunner({
-      run: async request => { instruction = request.metadata?.instruction ?? ""; return { kind: "plan", text: document }; },
-      runConversation: async request => { instruction = request.input; return `Explanation\n<!-- dext-plan:start -->\n${document}\n<!-- dext-plan:end -->`; }
-    });
-    await runtime.executeConversation("plan", "Fix Api");
-    expect(instruction).toContain("Custom headings"); expect(instruction).toContain("Preserve API");
-    expect(instruction).toContain("in the same change"); expect(instruction).toContain("dext_project_query");
-    const foreignPath = join(process.cwd(), "other");
-    const foreign = await runtime.execute(invoke("plan", [arg("input", "Fix Api"), arg("workspace", { kind: "dirRef", uri: pathToFileURL(foreignPath).href, path: foreignPath })]));
-    expect(instruction).not.toContain("Preserve API");
-    expect(foreign.result).toMatchObject({ projectContext: { availability: "unavailable", assessment: "unknown" } });
-  });
-  it("does not claim Project assessment from the no-Agent deterministic echo", async () => {
-    const runtime = projectRuntime(); runtime.setAgentProfiles([]); runtime.setAgentSelection({});
-    const response = await runtime.execute(invoke("plan", [arg("input", "Fix Api")]));
-    expect(response.result).not.toHaveProperty("projectContext");
-  });
-});
 
 function setup(handlers: Record<string, DeterministicHandler> = {}) {
   const registry = new MethodRegistry();
@@ -597,22 +541,6 @@ describe("Dext runtime", () => {
     expect(requests.every((item) => item.workspaceTrusted === true)).toBe(true);
   });
 
-  it("injects host-owned MCP servers per turn and omits them when disabled", async () => {
-    const { runtime } = setup();
-    const requests: AgentConversationRequest[] = [];
-    runtime.setAgentProfiles([{ id: "codex", provider: "codex", command: "codex", label: "Codex", models: [] }]);
-    runtime.setAgentSelection({ profileId: "codex" });
-    runtime.setWorkspaceTrusted(true);
-    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "typed" }), runConversation: async (request) => { requests.push(request); return "answer"; } });
-    const server = { name: "dext_structure", command: "Code.exe", args: ["server.js", "--cache", "cache.json"], env: { ELECTRON_RUN_AS_NODE: "1" } };
-    runtime.setConversationMcpServers(async () => [server]);
-    await runtime.executeConversation("ask", "with tools");
-    runtime.setConversationMcpServers(async () => []);
-    await runtime.executeConversation("ask", "without tools");
-    expect(requests[0]?.mcpServers).toEqual([server]);
-    expect(requests[1]?.mcpServers).toBeUndefined();
-  });
-
   it("runs a conversation with the caller's Agent snapshot, not the active selection", async () => {
     const { runtime } = setup();
     const requests: AgentConversationRequest[] = [];
@@ -661,11 +589,11 @@ describe("Dext runtime", () => {
     expect(structured[0]?.profile.id).toBe("codex");
     expect(structured[0]?.input).toBe("Generate the model.");
     expect(structured[0]?.outputSchema).toBe(schema);
-    // The selection the composer shows is what a Project turn runs under.
+    // The selection the composer shows is what a plan turn runs under.
     expect(structured[0]?.model).toBe("gpt-selected");
   });
 
-  it("keeps a Project turn's workspace-trust gate on extra CLI arguments", async () => {
+  it("keeps a plan turn's workspace-trust gate on extra CLI arguments", async () => {
     const { runtime } = setup();
     const structured: AgentStructuredRequest[] = [];
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);

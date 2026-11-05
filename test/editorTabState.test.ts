@@ -12,25 +12,22 @@ describe("editor tab keys", () => {
   it("rejects unknown kinds and free-form titles", () => {
     expect(parseEditorTabKey("dext.editor:unknown")).toBeUndefined();
     expect(parseEditorTabKey("Dext APIs")).toBeUndefined();
-    expect(parseEditorTabKey("dext.editor:project")).toEqual({ kind: "project" });
+    expect(parseEditorTabKey("dext.editor:api")).toEqual({ kind: "api" });
   });
 
   it("keeps a resource label in the title", () => {
-    expect(editorTabTitle("project")).toBe("Dext Project");
+    expect(editorTabTitle("api")).toBe("Dext APIs");
     expect(editorTabTitle("api", "Task.Query")).toBe("Dext APIs: Task.Query");
   });
 });
 
 describe("editor tab state", () => {
   it("keeps a valid page and falls back to the kind's first page", () => {
-    expect(normalizePage("project", "architecture")).toBe("architecture");
-    // Specs was folded into the Knowledge articles; a saved Specs tab restores the reader.
-    expect(normalizePage("project", "specs")).toBe("overview");
-    expect(restoreEditorTabState({ key: "dext.editor:project", page: "knowledge", filters: { spec: "contract" }, restoreVersion: 1 }).state)
-      .toMatchObject({ page: "knowledge", filters: { spec: "contract" } });
-    expect(normalizePage("project", "hooks")).toBe("overview");
-    // Project must never expose Hooks, Review, or task log pages.
-    expect(createEditorTabState("dext.editor:project", { page: "review" })?.page).toBe("overview");
+    expect(normalizePage("api", "detail")).toBe("detail");
+    expect(normalizePage("api", "unknown")).toBe("list");
+    expect(restoreEditorTabState({ key: "dext.editor:api", page: "detail", filters: { kind: "api" }, restoreVersion: 1 }).state)
+      .toMatchObject({ page: "detail", filters: { kind: "api" } });
+    expect(createEditorTabState("dext.editor:api", { page: "unknown" })?.page).toBe("list");
   });
 
   it("restores a saved page and filters", () => {
@@ -42,7 +39,7 @@ describe("editor tab state", () => {
 
   it("reports an invalid state instead of opening an unrelated page", () => {
     expect(restoreEditorTabState({ key: "nope" })).toEqual({ error: "Unknown editor tab key." });
-    expect(restoreEditorTabState({ key: "dext.editor:project", page: 3 }).error).toBe("Invalid editor tab state.");
+    expect(restoreEditorTabState({ key: "dext.editor:api", page: 3 }).error).toBe("Invalid editor tab state.");
   });
 
   it("records the on-screen target of a tab that holds several of them", () => {
@@ -58,11 +55,11 @@ describe("editor tab state", () => {
   });
 
   it("skips a state written by a newer build instead of treating it as the current format", () => {
-    const future = restoreEditorTabState({ key: "dext.editor:project", page: "overview", restoreVersion: EDITOR_TAB_RESTORE_VERSION + 1 });
+    const future = restoreEditorTabState({ key: "dext.editor:api", page: "list", restoreVersion: EDITOR_TAB_RESTORE_VERSION + 1 });
     expect(future.state).toBeUndefined();
     expect(future.error).toContain("newer");
     // An older state stays readable: missing fields keep their defaults.
-    expect(restoreEditorTabState({ key: "dext.editor:project", page: "knowledge", restoreVersion: 1 }).state)
-      .toMatchObject({ key: "dext.editor:project", page: "knowledge", filters: {} });
+    expect(restoreEditorTabState({ key: "dext.editor:api", page: "detail", restoreVersion: 1 }).state)
+      .toMatchObject({ key: "dext.editor:api", page: "detail", filters: {} });
   });
 });

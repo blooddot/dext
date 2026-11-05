@@ -6,7 +6,6 @@ import type {
   InputReferenceProjection,
   ParsedFileReference
 } from "../../../shared/contracts/fileReference.js";
-import { projectReferenceOccurrences } from "../../project/knowledge/projectReference.js";
 
 export type {
   ContextReferenceOccurrence,
@@ -133,15 +132,11 @@ export function inputReferenceProjections(source: string): InputReferenceProject
 
 /** Editor-only union. File attachment/CLI resolution continues to use atReferenceOccurrences. */
 export function contextReferenceOccurrences(source: string): ContextReferenceOccurrence[] {
-  const projects: ContextReferenceOccurrence[] = projectReferenceOccurrences(source).map((item) => ({
-    kind: "project", start: item.start, end: item.end, expression: item.expression,
-    payload: item.reference.objectId, label: `#${item.reference.canonicalName}`
-  }));
-  return [...atReferenceOccurrences(source), ...projects].sort((left, right) => left.start - right.start);
+  return atReferenceOccurrences(source).sort((left, right) => left.start - right.start);
 }
 
 export function contextReferenceLabel(reference: ContextReferenceOccurrence): string {
-  return reference.kind === "project" ? reference.label ?? `#${reference.payload}` : compactFileReferenceLabel(reference.payload);
+  return compactFileReferenceLabel(reference.payload);
 }
 
 /** Presentation extracts real @tokens from readable source. Historical marker

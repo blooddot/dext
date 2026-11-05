@@ -18,7 +18,6 @@ import { harnessPresetOrDefault } from "../features/agents/domain/harnessPresetD
 import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { dedupeSkillIds, withoutSkills } from "../features/conversations/domain/agentSelection.js";
 import type { McpServerConfig } from "../features/mcp/host/mcpRegistry.js";
-import { formatProjectReference, type ProjectReferenceCandidate, type ProjectObjectReference } from "../features/project/knowledge/projectReference.js";
 import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import { FileSearchController } from "../features/workspace/host/fileSearchController.js";
 import { ReadyMessageQueue } from "../shared/lib/readyMessageQueue.js";
@@ -66,10 +65,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private composerLog: vscode.OutputChannel | undefined;
   private readonly attachments = new AttachmentStore();
   private readonly conversation: ConversationServices;
-  private projectReferences?: {
-    search(query: string): Promise<ProjectReferenceCandidate[]> | ProjectReferenceCandidate[];
-    open(objectId: string): Promise<void>;
-  };
   // MCP manifest generation is an Agent-backed operation too, but it is not a
   // conversation turn and therefore does not belong in the execution
   // coordinator. Keeping its controller separately lets the shared Stop button
@@ -126,9 +121,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       isTrustedLocalWorkspace: () => this.application.isTrustedLocalWorkspace(),
       readPlan: (planPath) => this.readPlanText(planPath),
       knownPlan: (reference) => Boolean(this.application.planUri(reference)),
-      preparePlanBuild: (path, document, previous) => this.application.preparePlanBuild(path, document, previous),
-      startPlanProject: context => this.application.startPlanProject(context),
-      finishPlanProject: (context, summary, signal) => this.application.finishPlanProject(context, summary, signal),
       activeSessionId: () => this.activeSession.id,
       disposed: () => this.disposed,
       maxEventTextLength: () => vscode.workspace.getConfiguration("dext").get<number>("history.maxOutputLength", DEFAULT_HISTORY_LIMITS.maxOutputLength),
@@ -176,11 +168,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     } catch {
       // A test harness or an unusual host may not offer an output channel.
     }
-  }
-
-  /** Data for explicit # completion/navigation only. This provider never participates in send. */
-  setProjectReferenceSource(source: NonNullable<DextSidebarProvider["projectReferences"]>): void {
-    this.projectReferences = source;
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -436,13 +423,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.startConversation(false, { type, scope });
   }
 
-  /** Opens the Resources editor on one saved norm, skipping the resource picker. */
-  async editProjectNorm(id: string): Promise<void> {
-    const saved = (await this.application.listResources("project")).find((entry) => entry.path === id);
-    const target = saved ? await this.application.readResource("project", "project", id, saved.name) : undefined;
-    await this.startConversation(false, { type: "project", scope: "project", ...(target ? { target } : {}) });
-  }
-
   addMcp(): void {
     this.postWhenReady({ type: "mcpAssistant" });
   }
@@ -580,15 +560,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   async referenceConversation(text: string): Promise<void> {
     const attachment = await this.storeTextAttachment("conversation", text);
     this.postWhenReady({ type: "insertFileReferences", expressions: [`@${attachment.relativePath}`] });
-  }
-
-  async planFromProjectObject(reference: ProjectObjectReference): Promise<void> {
-    await this.newConversation();
-    const selection = this.conversation.controller.selection(this.activeSession.id) ?? this.application.state().agentSelection;
-    this.conversation.controller.setSelection(this.activeSession.id, { ...selection, mode: "plan" });
-    await this.conversation.controller.postConversationState();
-    this.setInput(`${formatProjectReference(reference)} `);
-    this.showChat();
   }
 
   editTurnInput(sessionId: string, turnId: string): void {
@@ -938,19 +909,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           }
         case "openFileReference":
           await this.openReference(request.reference);
-          break;
-        case "searchProjectReferences": {
-          try {
-            const items = this.projectReferences ? await this.projectReferences.search(request.query) : [];
-            await this.post({ type: "projectReferenceSearchResult", requestId: request.requestId, items });
-          } catch (error) {
-            await this.post({ type: "projectReferenceSearchResult", requestId: request.requestId, items: [], error: error instanceof Error ? error.message : String(error) });
-          }
-          break;
-        }
-        case "openProjectReference":
-          if (!this.projectReferences) throw new Error("Project knowledge is not available in this workspace.");
-          await this.projectReferences.open(request.objectId);
           break;
         case "openBuiltinApiDefinition":
           // Every built-in API is declared in the generated `dext.d.ts` now, so

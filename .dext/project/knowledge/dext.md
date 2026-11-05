@@ -1,1 +1,0 @@
-VS Code 扩展形态的 AI 对话与类型化工作流系统，运行时由扩展宿主、Webview 页面与 Code 模式 Node 内核组成；对外提供 Ask/Agent/Plan/Code 四种模式、Skills、MCP 工具与 Project 知识。

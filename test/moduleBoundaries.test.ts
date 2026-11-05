@@ -24,14 +24,14 @@ const {
 const flags = (sources: Record<string, string>, text: string) => checkModuleBoundaries(sources).join("\n").includes(text);
 
 describe("layer boundaries", () => {
-  it("allows the seven registered pure type edges and normal cross-feature contracts", () => {
+  it("allows the registered pure type edges and normal cross-feature contracts", () => {
     expect(checkModuleBoundaries({
       "src/features/resources/contracts/resourceDocuments.ts": 'import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";',
       "src/platform/editor-tabs/editorTabState.ts": "export interface EditorTabState { readonly page: string }",
       "src/features/a/domain/use.ts": 'import type { B } from "../../b/contracts/b.js";',
       "src/features/b/contracts/b.ts": "export interface B {}"
     })).toEqual([]);
-    expect(declaredTypeEdges).toHaveLength(7);
+    expect(declaredTypeEdges).toHaveLength(4);
   });
 
   it("rejects an unregistered pure type edge and any runtime host edge", () => {
@@ -93,7 +93,7 @@ describe("layer boundaries", () => {
       "src/features/workflow/host/runtime.ts": 'import { DefaultAgentRunner } from "../../agents/host/agentRouter.js";',
       "src/features/agents/host/agentRouter.ts": "export class DefaultAgentRunner {}"
     })).toEqual([]);
-    expect(crossFeatureHostCouplings).toHaveLength(4);
+    expect(crossFeatureHostCouplings).toHaveLength(3);
   });
 
   it("keeps the webview and the runner out of host and feature code", () => {

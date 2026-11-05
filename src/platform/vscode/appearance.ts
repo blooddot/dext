@@ -13,7 +13,7 @@ export interface AppearanceDisposable {
 
 /**
  * One appearance decision for the whole extension. The sidebar, History and every
- * Project/resource editor tab are separate webview documents, so the choice lives
+ * resource editor tab are separate webview documents, so the choice lives
  * in `globalState` here and is broadcast; a per-document `localStorage` value would
  * let one surface switch while the others stayed on the previous palette.
  */

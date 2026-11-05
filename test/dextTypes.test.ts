@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
-import { dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../src/features/workflow/domain/dextApiTypes.js";
+import { dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextStorageFiles, dextTsconfig } from "../src/features/workflow/domain/dextApiTypes.js";
 import { parseMcpManifest } from "../src/features/mcp/domain/mcpManifest.js";
 import { methodResultType } from "../src/features/workflow/domain/methodSignature.js";
 
@@ -335,6 +335,32 @@ describe("generated Dext TypeScript surface", () => {
     expect(JSON.stringify(files)).not.toContain(":/");
   });
 
+  it("maps `dext` for the global API root beside the declaration", { timeout: 60_000 }, async () => {
+    const files = dextStorageFiles();
+    expect(files.map((file) => file.path)).toEqual(["tsconfig.json", "package.json"]);
+    // The storage layout is a workspace's `.dext` directory: `api/`, `dext/dext.d.ts`.
+    const config = JSON.parse(files[0]!.content) as { compilerOptions: { paths: Record<string, string[]> } };
+    expect(config.compilerOptions.paths).toEqual({
+      dext: ["./dext/dext.d.ts"],
+      "dext/api/*": ["./api/*.ts", "./api/*.mts", "./api/*/index.ts"]
+    });
+    expect(files[1]!.createOnly).toBe(true);
+    // A global API is a real file in Dext's storage, so a real tsc has to accept it.
+    const root = await tempWorkspace();
+    for (const file of files) await writeFile(join(root, file.path), file.content);
+    await mkdir(join(root, "dext"), { recursive: true });
+    await writeFile(join(root, "dext", "dext.d.ts"), dextSharedDeclaration());
+    await mkdir(join(root, "api", "git"), { recursive: true });
+    await writeFile(join(root, "api", "shared.ts"), "export function answer(): number { return 42; }\n");
+    await writeFile(join(root, "api", "git", "commit.ts"), [
+      'import { agent, type AgentResult } from "dext";',
+      'import { answer } from "dext/api/shared";',
+      'export const asked = await agent({ input: `x ${answer()}` });',
+      'export type Result = AgentResult;'
+    ].join("\n"));
+    await run(process.execPath, [tsc, "-p", join(root, "tsconfig.json"), "--noEmit"]);
+  });
+
   it("sets erasableSyntaxOnly and nodenext in the generated tsconfig", () => {
     const config = JSON.parse(dextTsconfig()) as {
       compilerOptions: Record<string, unknown>;
@@ -499,15 +525,15 @@ describe("generated Dext TypeScript surface", () => {
     expect(await readFile(manifest, "utf8")).toBe(content);
   });
 
-  it("maps the API directories a project configures", async () => {
-    // The kernel resolves `dext/api/<id>` against `.dext/api` plus the project's own
-    // `apiDirs`, so the generated project has to map those too — relatively, because
-    // the file is committed — and `--check` has to read the same settings.
+  it("maps the API directories the workspace settings configure", async () => {
+    // The kernel resolves `dext/api/<id>` against `.dext/api` plus `dext.apiDirectories`,
+    // so the generated project has to map those too — relatively, because the file is
+    // committed — and `--check` has to read the same settings.
     const root = await tempWorkspace();
     await mkdir(join(root, ".dext", "api"), { recursive: true });
-    await writeFile(join(root, ".dext", "project.json"), `${JSON.stringify({
-      version: 22,
-      paths: { planDirectory: ".dext/plans", apiDirs: [".dext/api", "tools/api"], skillDirs: [], mcpDirs: [".dext/mcp"] }
+    await mkdir(join(root, ".vscode"), { recursive: true });
+    await writeFile(join(root, ".vscode", "settings.json"), `${JSON.stringify({
+      "dext.apiDirectories": [".dext/api", "tools/api"]
     }, null, 2)}\n`, "utf8");
     await mkdir(join(root, "tools", "api"), { recursive: true });
     await writeFile(join(root, "tools", "api", "greet.ts"), [
@@ -546,15 +572,15 @@ describe("generated Dext TypeScript surface", () => {
     ]);
   });
 
-  it("reads the MCP directories a project's settings add", async () => {
-    // The extension searches `.dext/mcp` plus the project's own `mcpDirs`, and the
-    // committed declaration has to be the same text it writes — so `--check` has to
-    // read those settings too, or a project that moved its manifests fails its CI.
+  it("reads the MCP directories the workspace settings add", async () => {
+    // The extension searches `.dext/mcp` plus `dext.mcpDirectories`, and the committed
+    // declaration has to be the same text it writes — so `--check` has to read those
+    // settings too, or a workspace that moved its manifests fails its CI.
     const root = await tempWorkspace();
     await mkdir(join(root, ".dext"), { recursive: true });
-    await writeFile(join(root, ".dext", "project.json"), `${JSON.stringify({
-      version: 22,
-      paths: { planDirectory: ".dext/plans", apiDirs: [".dext/api"], skillDirs: [".dext/skills"], mcpDirs: [".dext/mcp", "tools/mcp"] }
+    await mkdir(join(root, ".vscode"), { recursive: true });
+    await writeFile(join(root, ".vscode", "settings.json"), `${JSON.stringify({
+      "dext.mcpDirectories": ["tools/mcp"]
     }, null, 2)}\n`, "utf8");
     const tools = join(root, "tools", "mcp");
     await mkdir(tools, { recursive: true });

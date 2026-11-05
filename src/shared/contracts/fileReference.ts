@@ -18,7 +18,7 @@ export interface FileReferenceOccurrence {
 }
 
 export interface ContextReferenceOccurrence extends FileReferenceOccurrence {
-  kind: "file" | "dir" | "symbol" | "selection" | "activeFile" | "project";
+  kind: "file" | "dir" | "symbol" | "selection" | "activeFile";
   label?: string;
 }
 

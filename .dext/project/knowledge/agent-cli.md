@@ -1,1 +1,0 @@
-用户自行安装并认证的 Agent 命令行后端：Codex CLI、Claude CLI、DeepSeek Harness、Pi CLI。Dext 复用其凭据运行，不负责安装或修复；`dext.agentCli` 决定 Agent 列表里显示哪些后端。

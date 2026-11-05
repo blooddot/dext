@@ -38,7 +38,7 @@ try {
     throw new Error(`Timed out waiting for ${label}`);
   };
 
-  const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { buildResourceList, renderResourceDefinition, buildResourceDefinition } from "./src/features/resources/presentation/resourceDocuments.ts"; export { renderApiList } from "./src/features/resources/presentation/apiPanel.ts"; export { renderGlobalResources } from "./src/features/resources/presentation/globalResourcesPanel.ts"; export { renderProjectPanel } from "./src/features/project/presentation/projectPanel.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
+  const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { buildResourceList, renderResourceDefinition, buildResourceDefinition } from "./src/features/resources/presentation/resourceDocuments.ts"; export { renderApiList } from "./src/features/resources/presentation/apiPanel.ts"; export { renderGlobalResources } from "./src/features/resources/presentation/globalResourcesPanel.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
   const ui = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
   // Build the real Webview entries so the API detail fixture renders Mermaid under
   // the page CSP. Mermaid is a separate lazy bundle now; both files are served from
@@ -72,7 +72,6 @@ try {
     ], returnType: 'Promise<AgentResult>'
   };
   entries[1].api = { signature: 'main(input?: string): Promise<AskResult>', parameters: [{ name: 'input', type: 'string', required: false }], returnType: 'Promise<AskResult>' };
-  const project = { overview: { name: 'Dext', root: 'C:/github/blooddot/dext', objects: 0, accepted: 0, drafts: 0, needsVerification: 0, initialization: { status: 'uninitialized' }, aiCli: [{ id: 'codex', label: 'Codex', models: [] }] }, objects: [], architecture: { diagrams: [] } };
   const artifacts = resolve('.tmp-tb/editor-tabs-ui'); await mkdir(artifacts, { recursive: true });
   async function load(body, options = {}, bootstrap = '') {
     pageHtml = ui.renderEditorTabHtml('<script>' + bootstrap + 'window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin, { mermaidUri: `${origin}/mermaid.js`, ...options });
@@ -243,112 +242,9 @@ try {
         await writeFile(join(artifacts, `file-api-detail-${page}-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       }
 
-      await load(ui.renderProjectPanel('overview', { ...project, overview: { ...project.overview,
-        workspaceSettings: { planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
-        workspaceSettingsVersion: 3,
-        evidenceSettings: { depth: 'standard', include: ['src/**'], files: 234 }, evidenceSettingsVersion: 3
-      } }));
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-facts')).display`), 'grid');
-      assert.equal(await evaluate(`document.querySelector('[data-project-initialization-state]').getAttribute('data-project-initialization-state')`), 'uninitialized');
-      assert.equal(await evaluate(`!!document.querySelector('[data-project-initialize]')`), true);
-      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
-      // This select shared its rule with the retired scan/renderer controls, so the surviving
-      // declarations are asserted here instead of only being eyeballed in a screenshot. min-width is
-      // width-dependent (the narrow layout relaxes it), so the stable declarations are used.
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).minHeight`), width <= 650 ? '44px' : '28px');
-      assert.equal(await evaluate(`getComputedStyle(document.querySelector('.project-ai-cli select')).borderRadius`), '4px');
-      assert.equal(await evaluate(`document.querySelector('[data-project-settings] details').open`), false);
-      await evaluate(`document.querySelector('[data-project-settings] summary').click()`);
-      assert.equal(await evaluate(`document.querySelector('[data-project-settings] details').open`), true);
-      await evaluate(`const apiDirs=document.querySelector('input[name="apiDirs"]'); apiDirs.value='tools/api, more/api'; apiDirs.dispatchEvent(new Event('input',{bubbles:true})); new Promise(resolve=>setTimeout(resolve,650))`);
-      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectSettings', settings: { workspace: { planDirectory: '.project/plans', apiDirs: ['tools/api', 'more/api'], skillDirs: ['.dext/skills', 'tools/skills'], mcpDirs: ['.dext/mcp', 'tools/mcp'] }, evidence: { depth: 'standard', include: ['src/**'], files: 234 }, tool: { structureQuery: true, projectQuery: true } }, version: 3 });
-      await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',version:4}}))`);
-      await evaluate(`document.querySelector('.project-evidence-settings details').open=true; document.querySelector('[name="depth"]').value='whole'; document.querySelector('[name="depth"]').dispatchEvent(new Event('change',{bubbles:true}));`);
-      assert.equal(await evaluate(`document.querySelector('[name="chars"]').placeholder`), '1200000');
-      assert.equal(await evaluate(`document.querySelector('[name="files"]').value`), '234', 'explicit overrides remain visible');
-      await evaluate(`document.querySelector('[data-evidence-use-preset]').click(); document.querySelector('[name="include"]').value='src/**\\ndocs/**'; document.querySelector('[name="include"]').dispatchEvent(new Event('input',{bubbles:true})); new Promise(resolve=>setTimeout(resolve,650))`);
-      assert.deepEqual(await evaluate(`messages.at(-1)`), { type: 'projectSettings', settings: { workspace: { planDirectory: '.project/plans', apiDirs: ['tools/api', 'more/api'], skillDirs: ['.dext/skills', 'tools/skills'], mcpDirs: ['.dext/mcp', 'tools/mcp'] }, evidence: { depth: 'whole', include: ['src/**', 'docs/**'] }, tool: { structureQuery: true, projectQuery: true } }, version: 4 });
-      assert.equal(await evaluate(`document.querySelector('[data-project-settings-fields]').disabled`), true);
-      await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',error:'Save failed'}}))`);
-      assert.equal(await evaluate(`document.querySelector('[data-project-settings-fields]').disabled`), false);
-      assert.equal(await evaluate(`document.querySelector('[name="depth"]').value`), 'whole');
-      assert.match(await evaluate(`document.querySelector('[data-project-settings-status]').textContent`), /Save failed/);
-      await evaluate(`document.querySelector('[data-project-settings]').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); new Promise(resolve=>setTimeout(resolve,650)); window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',version:5}}))`);
-      assert.equal(await evaluate(`document.querySelector('[data-project-settings]').dataset.version`), '5');
-      assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'expanded settings fit the viewport');
-      await evaluate(`document.querySelector('.project-evidence-settings').scrollIntoView({block:'start'})`);
-      await writeFile(join(artifacts, `project-settings-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
-      await evaluate(`messages=[]`);
-      await evaluate(`document.querySelector('button[data-project-page="knowledge"]').click()`);
-      assert.equal(await evaluate(`messages[0].page`), 'knowledge');
-      await load(ui.renderProjectPanel('knowledge', project));
-      assert.equal(await evaluate(`document.querySelectorAll('.architecture-tools, .diagram-adapter-controls, .architecture-graph, .project-scan-folders, .diagram-versions, .architecture-relations').length`), 0);
-      await writeFile(join(artifacts, `project-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
-      // Topic reading and Mermaid interactions are covered by checkProjectReaderUi.mjs.
-
     }
   }
-  // Missing evidence must be confirmed, including when the reader keeps the displayed defaults.
-  await load(ui.renderProjectPanel('overview', { ...project, overview: { ...project.overview,
-    workspaceSettings: { planDirectory: '.dext/plans', apiDirs: [], skillDirs: [], mcpDirs: [] },
-    workspaceSettingsVersion: 0, evidenceSettingsVersion: 0,
-    evidenceSettings: { depth: 'standard', include: [] }, evidenceConfigured: false
-  } }));
-  await evaluate(`document.querySelector('[data-project-settings] summary').click(); document.querySelector('[data-project-initialize]').click()`);
-  assert.equal(await evaluate(`messages.length`), 0, 'missing evidence never starts indexing');
-  assert.equal(await evaluate(`document.activeElement.name`), 'include', 'the prompt focuses the reading scope');
-  assert.equal(await evaluate(`document.querySelector('.project-advanced-settings').open`), true);
-  assert.match(await evaluate(`document.querySelector('[data-project-settings-status]').textContent`), /Save the reading depth and scope/);
-  await evaluate(`document.querySelector('[data-project-evidence-save]').click(); new Promise(resolve=>setTimeout(resolve,650))`);
-  assert.deepEqual(await evaluate(`messages.at(-1).settings.evidence`), { depth: 'standard', include: [] });
-  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',error:'Conflict'}})); document.querySelector('[data-project-initialize]').click()`);
-  assert.equal(await evaluate(`messages.some(m=>m.type==='projectInitialize')`), false, 'a failed save keeps the configuration gate');
-  await evaluate(`document.querySelector('[data-project-evidence-save]').click(); new Promise(resolve=>setTimeout(resolve,650))`);
-  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',version:1}}))`);
-  assert.equal(await evaluate(`!!document.querySelector('[data-project-evidence-required]')`), false);
-  assert.equal(await evaluate(`!!document.querySelector('[data-project-evidence-save]')`), false);
-  // Even a configured project must not run with an unsaved scope while autosave is pending.
-  await evaluate(`const scope=document.querySelector('[name="include"]'); scope.value='src/**'; scope.dispatchEvent(new Event('input',{bubbles:true})); document.querySelector('[data-project-initialize]').click()`);
-  assert.equal(await evaluate(`messages.some(m=>m.type==='projectInitialize')`), false, 'pending edits cannot be bypassed by Build');
-  await evaluate(`new Promise(resolve=>setTimeout(resolve,650))`);
-  assert.deepEqual(await evaluate(`messages.at(-1).settings.evidence.include`), ['src/**']);
-  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'projectSettingsSaved',version:2}})); document.querySelector('[data-project-initialize]').click()`);
-  assert.equal(await evaluate(`messages.filter(m=>m.type==='projectInitialize').length`), 1, 'saved settings permit indexing');
-  // Match the populated Overview from the reported screenshot, including the configuration notice and the custom model picker (not just the native CLI select).
-  const populated = { ...project, overview: { ...project.overview,
-    structure: { hash: 'fixture', files: 3500, parsed: 3400, modules: 28, responsibilities: 42, failed: 1, unsupported: 12, unresolved: 45,
-      issues: [{ path: 'src/optional/generated/module.py', reason: 'Syntax errors; structure is partial' }] },
-    evidenceConfigured: false, selectedAiCli: 'codex', selectedAiModel: 'gpt-6-astra',
-    selectedAiReasoning: 'ultra', selectedAiSpeed: 'fast',
-    workspaceSettings: { planDirectory: '.project/plans', apiDirs: ['tools/api'], skillDirs: ['tools/skills'], mcpDirs: ['tools/mcp'] },
-    workspaceSettingsVersion: 3,
-    initialization: { status: 'completed', intentGenerated: true, diagramsGenerated: 1 },
-    aiCli: [{ id: 'codex', label: 'Codex CLI', models: [{ id: 'gpt-6-astra', label: 'GPT-6-Astra', reasoningEfforts: ['high', 'ultra'], speedTiers: ['standard', 'fast'] }] }]
-  } };
-  for (const width of [320, 701, 792, 1000, 1132]) {
-    await send('Emulation.setDeviceMetricsOverride', { width, height: 600, deviceScaleFactor: 1, mobile: false });
-    await load(ui.renderProjectPanel('overview', populated));
-    assert.match(await evaluate(`document.querySelector('.project-structure-summary').textContent`), /3400 source files · 28 directory groups · 42 knowledge modules/);
-    await writeFile(join(artifacts, `project-populated-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
-    assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, `populated Overview fits ${width}px`);
-    // Help text, status lines and the AI control rows used to end at 780, 680 and 734 px
-    // inside the same 1040 px panel, so the Overview showed three right edges and read as
-    // clipped text at a narrow capture. They now share one measure.
-    const edges = await evaluate(`['.project-help','[data-project-evidence-required]','.project-ai-cli','.project-ai-model','.project-initialization-result'].map(selector => { const node = document.querySelector(selector); return node ? Math.round(node.getBoundingClientRect().right) : -1; })`);
-    assert.equal(new Set(edges).size, 1, `Overview text shares one right edge at ${width}px: ${JSON.stringify(edges)}`);
-    assert.ok(edges[0] >= 0 && edges[0] <= width - 24, `Overview text stays inside the page at ${width}px: ${edges[0]}`);
-    // The configuration notice is advisory: its text keeps the normal foreground and only
-    // the left rule carries the warning colour. Painting the whole paragraph in Dark+'s
-    // #CCA700 was reported as "why is every word yellow" and turned the code chips gold too.
-    const notice = await evaluate(`(() => { const style = getComputedStyle(document.querySelector('[data-project-evidence-required]')); return { color: style.color, body: getComputedStyle(document.body).color, border: style.borderLeftColor, width: style.borderLeftWidth }; })()`);
-    assert.equal(notice.color, notice.body, `notice text keeps the normal foreground: ${JSON.stringify(notice)}`);
-    assert.equal(notice.border, 'rgb(204, 167, 0)', `notice keeps the warning accent: ${JSON.stringify(notice)}`);
-    assert.equal(notice.width, '3px', `notice shows the warning rule: ${JSON.stringify(notice)}`);
-    await evaluate(`document.querySelector('[data-project-model-trigger]').click(); document.querySelector('[data-project-model-category="model"]').click()`);
-    const bounds = await evaluate(`Array.from(document.querySelectorAll('[data-project-model-menu], [data-project-model-submenu]')).map(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; })`);
-    assert.ok(bounds.every(r => r.left >= 0 && r.right <= width && r.top >= 0 && r.bottom <= 600), `model menus fit ${width}px: ${JSON.stringify(bounds)}`);
-  }
-  console.log('PASS: editor styles and navigation under CSP; populated Project Overview and model menus at 320/701/792/1000/1132px. Screenshots: .tmp-tb/editor-tabs-ui');
+  console.log('PASS: editor styles and navigation under CSP. Screenshots: .tmp-tb/editor-tabs-ui');
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

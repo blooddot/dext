@@ -23,6 +23,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { parse as parseJsonc } from "jsonc-parser";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 /** The declaration the extension ships; `esbuild.mjs` writes it. */
@@ -80,24 +81,30 @@ export async function buildDeclaration() {
 }
 
 /**
- * A workspace's project settings, as `.dext/project.json` records them. The file is
+ * The workspace's `dext.*Directories` settings from `.vscode/settings.json`. The file is
  * committed, so the CLI can read the same paths the extension reads for that
  * workspace — which is what makes `--check` mean something for a project that keeps
  * its manifests or APIs somewhere other than the default.
  */
-async function projectPaths(root) {
+async function workspaceSettings(root) {
   try {
-    const settings = JSON.parse(await readFile(path.join(root, ".dext", "project.json"), "utf8"));
-    return settings?.paths ?? {};
+    // VS Code's own file: JSONC with comments and trailing commas is legal here.
+    const settings = parseJsonc(await readFile(path.join(root, ".vscode", "settings.json"), "utf8"));
+    return settings ?? {};
   } catch {
     return {};
   }
 }
 
-/** The MCP directories a workspace's project settings add, on top of `.dext/mcp`. */
-function projectMcpDirectories(root, paths) {
+function directorySetting(settings, key) {
+  const configured = settings?.[key];
+  return Array.isArray(configured) ? configured : [];
+}
+
+/** The MCP directories the workspace settings add, on top of `.dext/mcp`. */
+function projectMcpDirectories(root, settings) {
   const directories = [path.join(root, ".dext", "mcp")];
-  const configured = paths?.mcpDirs;
+  const configured = directorySetting(settings, "dext.mcpDirectories");
   if (Array.isArray(configured)) {
     for (const entry of configured) {
       if (typeof entry === "string" && entry.trim()) directories.push(path.resolve(root, entry));
@@ -108,9 +115,9 @@ function projectMcpDirectories(root, paths) {
 
 /** The directories `dext/api/<id>` resolves against that belong to the project,
  * which is what its generated `paths` project can name relatively. */
-function projectApiDirectories(paths) {
+function projectApiDirectories(settings) {
   const directories = [".dext/api"];
-  const configured = paths?.apiDirs;
+  const configured = directorySetting(settings, "dext.apiDirectories");
   if (Array.isArray(configured)) {
     for (const entry of configured) if (typeof entry === "string" && entry.trim()) directories.push(entry);
   }
@@ -124,11 +131,11 @@ function projectApiDirectories(paths) {
  * generated project still describes the built-in surface, and the error belongs to
  * the manifest rather than to the types.
  */
-async function projectMcpMethods(generator, workspace, paths) {
+async function projectMcpMethods(generator, workspace, settings) {
   const root = path.resolve(workspace);
   const methods = [];
   const seenServers = new Set();
-  for (const directory of projectMcpDirectories(root, paths)) {
+  for (const directory of projectMcpDirectories(root, settings)) {
     let entries;
     try { entries = await readdir(directory); }
     catch { continue; }
@@ -158,10 +165,10 @@ async function projectMcpMethods(generator, workspace, paths) {
  * directories its settings add. */
 export async function buildWorkspaceLayout(workspace) {
   const generator = await loadGenerator();
-  const paths = await projectPaths(path.resolve(workspace));
+  const settings = await workspaceSettings(path.resolve(workspace));
   return generator.dextFiles(
-    await projectMcpMethods(generator, workspace, paths),
-    projectApiDirectories(paths)
+    await projectMcpMethods(generator, workspace, settings),
+    projectApiDirectories(settings)
   );
 }
 

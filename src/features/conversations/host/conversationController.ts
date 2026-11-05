@@ -247,7 +247,6 @@ export class ConversationController {
       selection: this.conversationSelections.get(this.activeSession.id)
         ?? this.options.application.currentSelection(),
       ...(this.activeSession.activePlanPath ? { planPath: this.activeSession.activePlanPath } : {}),
-      ...(this.activeSession.projectContext ? { projectContext: this.activeSession.projectContext } : {}),
       planStatus: this.activeSession.planStatus ?? "new",
       ...(this.activeSession.resource ? { resource: this.activeSession.resource } : {}),
       ...(switchId !== undefined ? { switchId } : {}),
@@ -282,7 +281,6 @@ export class ConversationController {
       activeId: session.id,
       selection,
       ...(session.activePlanPath ? { planPath: session.activePlanPath } : {}),
-      ...(session.projectContext ? { projectContext: session.projectContext } : {}),
       planStatus: session.planStatus ?? "new",
       ...(session.resource ? { resource: session.resource } : {}),
       ...(switchId !== undefined ? { switchId } : {}),
@@ -522,24 +520,20 @@ export class ConversationController {
     }
   }
 
-  async savePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string): Promise<void> {
+  async savePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (session) session.planProgress = { path, todos: todos.map((item) => ({ ...item })), ...(documentHash ? { documentHash } : {}) };
-    await this.history.updatePlanProgress(sessionId, path, todos, documentHash);
+    if (session) session.planProgress = { path, todos: todos.map((item) => ({ ...item })) };
+    await this.history.updatePlanProgress(sessionId, path, todos);
   }
 
-  async savePlanContext(sessionId: string, path: string | undefined, status: NonNullable<DextHistorySession["planStatus"]>, projectContext?: DextHistorySession["projectContext"]): Promise<void> {
+  async savePlanContext(sessionId: string, path: string | undefined, status: NonNullable<DextHistorySession["planStatus"]>): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session) {
       if (path) session.activePlanPath = path;
       else delete session.activePlanPath;
       session.planStatus = status;
-      if (projectContext) session.projectContext = structuredClone(projectContext);
-      // No assessment means none belongs to this plan any more: a revised or newly
-      // chosen plan must not keep the previous verdict.
-      else delete session.projectContext;
     }
-    await this.history.updatePlanContext(sessionId, path, status, projectContext);
+    await this.history.updatePlanContext(sessionId, path, status);
   }
 
   async saveResource(session: DextHistorySession): Promise<void> {
@@ -550,7 +544,7 @@ export class ConversationController {
   }
 
   async postPlanContext(): Promise<void> {
-    await this.options.publisher.post({ type: "planContext", ...(this.activeSession.activePlanPath ? { path: this.activeSession.activePlanPath } : {}), status: this.activeSession.planStatus ?? "new", ...(this.activeSession.projectContext ? { projectContext: this.activeSession.projectContext } : {}) });
+    await this.options.publisher.post({ type: "planContext", ...(this.activeSession.activePlanPath ? { path: this.activeSession.activePlanPath } : {}), status: this.activeSession.planStatus ?? "new" });
   }
 
   markDisposed(): void {

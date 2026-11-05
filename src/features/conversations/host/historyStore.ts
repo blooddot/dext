@@ -14,7 +14,6 @@ import {
   type PlanStatus,
   type TurnRecordContext
 } from "../contracts/history.js";
-import { planProjectContextSchema, type PlanProjectContext } from "../../../shared/contracts/planProject.js";
 import { truncateMiddle } from "../domain/truncation.js";
 
 /** Whole-history key from before conversations had keys of their own. Only
@@ -247,7 +246,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
     });
   }
 
-  async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus, projectContext?: PlanProjectContext): Promise<void> {
+  async updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void> {
     await this.mutate(async () => {
       const sessions = await this.load([sessionId]);
       const session = sessions.find((item) => item.id === sessionId);
@@ -255,14 +254,11 @@ export class DextHistoryStore implements ConversationHistoryStore {
       if (activePlanPath) session.activePlanPath = activePlanPath;
       else delete session.activePlanPath;
       session.planStatus = planStatus;
-      if (projectContext) session.projectContext = planProjectContextSchema.parse(projectContext);
-      // No assessment means none belongs to this plan any more.
-      else delete session.projectContext;
       await this.persist(sessions, [sessionId]);
     });
   }
 
-  async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string): Promise<void> {
+  async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void> {
     await this.mutate(async () => {
       const sessions = await this.load([sessionId]);
       let session = sessions.find((item) => item.id === sessionId);
@@ -270,7 +266,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
         session = { id: sessionId, createdAt: Date.now(), updatedAt: Date.now(), turns: [], activePlanPath: path, planStatus: "running" };
         sessions.push(session);
       }
-      session.planProgress = { path, todos: todos.map((item) => ({ ...item })), ...(documentHash ? { documentHash } : {}) };
+      session.planProgress = { path, todos: todos.map((item) => ({ ...item })) };
       await this.persist(sessions, [sessionId]);
     });
   }

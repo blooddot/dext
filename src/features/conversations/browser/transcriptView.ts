@@ -292,7 +292,6 @@ export class TranscriptView {
   }
 
   private referenceIcon(kind: ContextReferenceOccurrence["kind"]): string {
-    if (kind === "project") return "symbol-module";
     if (kind === "dir") return "folder";
     if (kind === "symbol") return "symbol-method";
     return "file";
@@ -322,9 +321,7 @@ export class TranscriptView {
       ...descriptor,
       modifierClass: "output-file-reference",
       icon: this.referenceIcon(reference.kind),
-      ...(reference.kind === "file" || reference.kind === "project"
-        ? { onOpen: () => this.host.openReference(reference) }
-        : {})
+      ...(reference.kind === "file" ? { onOpen: () => this.host.openReference(reference) } : {})
     });
   }
 
