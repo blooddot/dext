@@ -304,6 +304,24 @@ describe("skill pack import", () => {
     expect((result.draft.files ?? []).some((file) => file.path.endsWith("run.sh"))).toBe(true);
   });
 
+  it.each(["js", "mjs", "cjs"])("preserves UTF-8 %s source containing NUL without executing it", async (extension) => {
+    const content = "throw new Error('must not execute');\nconst key = `code\u0000message`;\n";
+    const files = archive({ "skills/review/SKILL.md": skill("review"), [`skills/review/diagnostics.${extension}`]: content });
+    const result = await importSkillPack("https://github.com/acme/skills", { archive: files });
+    expect(result.draft.files).toContainEqual({ path: `skills/review/diagnostics.${extension}`, content });
+    expect(result.manifest.skills[0]?.warnings.join("\n")).not.toContain("Skipped binary");
+  });
+
+  it("still rejects binary SKILL.md and skips binary or invalid UTF-8 support", async () => {
+    const files = archive({ "skills/review/SKILL.md": skill("review") });
+    files.files.set("skills/review/blob.bin", new Uint8Array([0, 1, 2, 3]));
+    files.files.set("skills/review/invalid.mjs", new Uint8Array([0, 0xff]));
+    const result = await importSkillPack("https://github.com/acme/skills", { archive: files });
+    expect(result.draft.files?.some((file) => /blob\.bin|invalid\.mjs/.test(file.path))).toBe(false);
+    files.files.set("skills/review/SKILL.md", encoder.encode(skill("review", "# Text\u0000")));
+    await expect(importSkillPack("https://github.com/acme/skills", { archive: files })).rejects.toThrow("binary SKILL.md");
+  });
+
   it("preflights existing pack and skill directories and warns about cross-scope shadowing", async () => {
     const result = await importSkillPack("https://github.com/acme/ponytail", { archive: archive(ponytailFiles()) });
     await expect(preflightSkillPack(result.draft, { exists: async (path) => path === "skill-packs/ponytail" }))

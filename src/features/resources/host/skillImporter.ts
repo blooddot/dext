@@ -397,7 +397,8 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
       const relative = candidate.directory === ""
         ? file
         : file === candidate.skillPath ? "SKILL.md" : file.slice(candidate.directory.length + 1);
-      if (isBinary(bytes)) {
+      // JavaScript template literals can contain NUL without being binary data.
+      if (isBinary(bytes) && !(/\.(?:js|mjs|cjs)$/i.test(relative) && decodeText(bytes) !== undefined)) {
         if (relative === "SKILL.md") throw new Error(`Skill '${candidate.id}' has a binary SKILL.md.`);
         warnings.push(`Skipped binary supporting file '${relative}'.`);
         continue;
