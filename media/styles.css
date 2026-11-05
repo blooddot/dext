@@ -269,6 +269,13 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   box-shadow: inset 0 1px 0 0 var(--vscode-tab-activeBorderTop, var(--vscode-focusBorder));
 }
 
+/* Editor tabs draw the hairline only between two inactive tabs, so the active
+   tab joins its neighbours instead of sitting in a box. */
+.conversation-tab.active,
+.conversation-tab:has(+ .conversation-tab.active) {
+  border-right-color: transparent;
+}
+
 .conversation-tab-label {
   min-width: 0;
   padding: 0;
