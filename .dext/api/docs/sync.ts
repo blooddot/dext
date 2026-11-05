@@ -19,12 +19,17 @@ const UPDATE_RULES = ["docs-update.md", "docs-style.md"];
 const LINK_PATTERN = /\]\(([^)\s]+)\)/gu;
 const EXTERNAL_TARGET = /^(?:[a-z][a-z0-9+.-]*:|#|\/)/iu;
 
-function composeAuditInput(input: string): string {
-  return ["审计项目代码与 docs/ 文档之间的漂移，只读，不修改任何文件。", `用户请求：${input}`].join("\n\n");
+/** 目录既是唯一参数也是范围，两段 prompt 共用这一句。 */
+function describeRequest(directory: string): string {
+  return `用户请求：只同步与 ${directory} 相关的文档。`;
 }
 
-function composeDraftInput(input: string, audit: string): string {
-  return ["根据用户请求与下列审计结论更新 docs/ 下的项目文档。", `用户请求：${input}`, "审计结论：", audit].join("\n\n");
+function composeAuditInput(directory: string): string {
+  return ["审计项目代码与 docs/ 文档之间的漂移，只读，不修改任何文件。", describeRequest(directory)].join("\n\n");
+}
+
+function composeDraftInput(directory: string, audit: string): string {
+  return ["根据用户请求与下列审计结论更新 docs/ 下的项目文档。", describeRequest(directory), "审计结论：", audit].join("\n\n");
 }
 
 async function auditDocs(input: string): Promise<AskResult> {
@@ -123,9 +128,13 @@ async function verifyDocLinks(): Promise<string[]> {
   return problems;
 }
 
-export async function sync(input: string): Promise<AgentResult> {
-  const audit = await auditDocs(composeAuditInput(input));
-  const draft = await draftDocs(composeDraftInput(input, audit.text));
+export async function sync(directory: string): Promise<AgentResult> {
+  const present = await exists(directory);
+  if (present === false) {
+    throw new Error(`目录不存在：${directory}。传入要同步的目录路径，例如 "src/mcp" 或 "docs/guide"。`);
+  }
+  const audit = await auditDocs(composeAuditInput(directory));
+  const draft = await draftDocs(composeDraftInput(directory, audit.text));
   const changes = changedFiles(draft);
   const unchanged = changes.length === 0;
   if (unchanged) {
