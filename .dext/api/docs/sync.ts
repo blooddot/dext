@@ -14,8 +14,8 @@ import {
 } from "dext";
 
 const DOCS_DIRECTORY = "docs";
-const AUDIT_RULES = ["docs-audit.md", "docs-style.md"];
-const UPDATE_RULES = ["docs-update.md", "docs-style.md"];
+const AUDIT_RULES = ["docs/audit.md", "docs/style.md"];
+const UPDATE_RULES = ["docs/update.md", "docs/style.md"];
 const LINK_PATTERN = /\]\(([^)\s]+)\)/gu;
 const EXTERNAL_TARGET = /^(?:[a-z][a-z0-9+.-]*:|#|\/)/iu;
 

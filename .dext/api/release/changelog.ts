@@ -7,7 +7,7 @@ import { ask, terminal, type AskResult, type TerminalResult } from 'dext';
 const CHANGELOG_PATH = 'CHANGELOG.md';
 const PACKAGE_PATH = 'package.json';
 const HEAD_COMMAND = 'git rev-parse HEAD';
-const RULES = ['release-changelog.md'];
+const RULES = ['release/changelog.md'];
 const GIT_TIMEOUT_MS = 60000;
 const MAX_ENTRY_LENGTH = 200;
 const MAX_ENTRIES = 60;
@@ -570,7 +570,7 @@ function composeAskInput(material: AskMaterial): string {
     current,
     '来源四非空时是就地更新：仍成立的旧条目保留它的事实，但措辞可以按预算压缩。',
     `预算：entries 最多 ${MAX_ENTRIES} 条，每条正文不超过 ${MAX_ENTRY_LENGTH} 字符；超出会被拒绝。`,
-    '按 rules/release-changelog.md 的分类与写法返回 JSON 对象，不要输出 JSON 以外的文字。',
+    '按 rules/release/changelog.md 的分类与写法返回 JSON 对象，不要输出 JSON 以外的文字。',
   ].join('\n\n');
 }
 

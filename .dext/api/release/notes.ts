@@ -6,7 +6,7 @@ import { ask, terminal, type AskResult, type TerminalResult } from 'dext';
 // 每个 terminal/ask 各占一个具名 wrapper；解析、渲染与告警都在普通 helper 里。
 const PACKAGE_PATH = 'package.json';
 const CHANGELOG_PATH = 'CHANGELOG.md';
-const RULES = ['release-notes.md'];
+const RULES = ['release/notes.md'];
 const GIT_TIMEOUT_MS = 60_000;
 const STAT_CHAR_LIMIT = 20_000;
 const PATCH_CHAR_LIMIT = 120_000;
@@ -302,7 +302,7 @@ function composeDraftInput(parts: NotesPackage): string {
   const changelogBody = changelog.text === '' ? '（不存在）' : limitText(changelog.text, SECTION_CHAR_LIMIT);
   return [
     `为 ${parts.local.versions.name} ${version} 写 ${parts.local.date} 的发布说明。`,
-    '严格按 .dext/rules/release-notes.md 的分类、写法与输出契约返回一个 JSON 对象：不要 markdown 围栏，不要散文，不要额外的顶层键。',
+    '严格按 .dext/rules/release/notes.md 的分类、写法与输出契约返回一个 JSON 对象：不要 markdown 围栏，不要散文，不要额外的顶层键。',
     [
       '## 已确定的事实',
       `- 版本：${version}`,

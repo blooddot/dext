@@ -8,7 +8,7 @@ const GIT_TIMEOUT_MS = 60_000;
 const CHECK_TIMEOUT_MS = 600_000;
 const CHECK_COMMAND = "npm run check";
 const DEFAULT_BASELINE_PATH = ".dext/release-audit-baseline.md";
-const AUDIT_RULES = ["release-audit.md"];
+const AUDIT_RULES = ["release/audit.md"];
 const FILE_LIMIT = 50;
 const LINE_LIMIT = 5_000;
 const DIFF_CHAR_LIMIT = 120_000;
@@ -694,7 +694,7 @@ function composeJudgeInput(parts: JudgePackage): string {
   const checkHow = `${parts.check.command} → 退出码 ${parts.check.exit_code}（${parts.check.status}）`;
   return [
     `你是 Dext 发布前的只读审查员：判断当前 HEAD 是否可以发布为 package.json 里的版本 ${version}。只报告真正阻塞发布的问题。`,
-    "严格按 .dext/rules/release-audit.md 的判据与输出契约返回一个 JSON 对象：不要 markdown 围栏，不要散文，不要额外的顶层键。",
+    "严格按 .dext/rules/release/audit.md 的判据与输出契约返回一个 JSON 对象：不要 markdown 围栏，不要散文，不要额外的顶层键。",
     [
       "## 已确定的事实",
       `- since（原样）：${parts.since}`,
