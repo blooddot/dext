@@ -236,7 +236,7 @@ describe("sidebar panel layout", () => {
     expect(css).not.toMatch(/#dext-main \{[^}]*?width:/);
     expect(css).not.toContain("width: min(888px");
     expect(css).not.toContain("width: min(1120px");
-    expect(css).toMatch(/#result-body \.markdown-body,[\s\S]*?\.history-record-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
+    expect(css).toMatch(/#result-body \.markdown-body:not\(\.agent-todo-text\),[\s\S]*?\.history-record-body \.markdown-body:not\(\.agent-todo-text\) \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
   });
 
   it("offers Plan beside Agent, Ask, and Code and lands its result as a document", async () => {
@@ -424,7 +424,7 @@ describe("sidebar panel layout", () => {
     expect(layout).not.toContain(".reading-mode-button");
     // Process and Output now use the shared canvas width rather than a second,
     // narrower reading column centered inside it.
-    expect(layout).toMatch(/#result-body \.markdown-body,[\s\S]*?\.history-record-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
+    expect(layout).toMatch(/#result-body \.markdown-body:not\(\.agent-todo-text\),[\s\S]*?\.history-record-body \.markdown-body:not\(\.agent-todo-text\) \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
     expect(layout).not.toContain("min(100%, 56rem)");
     expect(layout).not.toContain("min(100%, 60rem)");
   });

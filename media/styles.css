@@ -224,7 +224,7 @@ button.primary.plan-build.conflict:hover:not(:disabled) {
   padding: 6px 0;
 }
 .agent-todo-item > .codicon { flex: 0 0 16px; margin-top: 2px; color: var(--vscode-descriptionForeground); }
-.agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; color: inherit; font-size: inherit; overflow-wrap: anywhere; white-space: normal; }
+.agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; color: inherit; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 .agent-todo-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
 .agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
 .agent-todo-item.active {
@@ -3212,6 +3212,11 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section[data-t
 .turn-section-meta { color: inherit; font-size: inherit; font-variant-numeric: tabular-nums; }
 .turn-section[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 
+/* The todo list's own markers start the line, so the fold chevron shares their
+   16px column instead of sitting inset from them. */
+.agent-todos > summary { padding-inline: 0; }
+.agent-todos > summary > .disclosure-chevron { flex: 0 0 16px; width: 16px; }
+
 /* Section copy controls sit at the trailing edge of the title bar, not over the
    content they copy. */
 .turn-section-actions {
@@ -3333,9 +3338,10 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
 /* Process and Output share the conversation's own width. The canvas is
    already capped on .app-shell, so letting the prose fill it keeps the
    transcript, its section headings and the composer edge-aligned instead of
-   centering a narrower strip inside a wider panel. */
-#result-body .markdown-body,
-.history-record-body .markdown-body {
+   centering a narrower strip inside a wider panel. Todo rows render Markdown
+   as list metadata, so they keep .markdown-body's own 14px/1.5 instead. */
+#result-body .markdown-body:not(.agent-todo-text),
+.history-record-body .markdown-body:not(.agent-todo-text) {
   max-width: 100%;
   margin-inline: 0;
   font-size: 15px;
