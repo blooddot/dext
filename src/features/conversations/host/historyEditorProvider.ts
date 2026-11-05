@@ -237,15 +237,26 @@ export class DextHistoryPanel implements vscode.Disposable {
       target.dataset.historyLoading = 'true';
       vscode.postMessage({ type: 'loadHistorySession', sessionId });
     }, true);
+    // An open turn keeps its actions over the short Worked line instead of
+    // covering the prompt, which is the row label now.
+    document.addEventListener('toggle', (event) => {
+      const record = event.target instanceof HTMLDetailsElement && event.target.classList.contains('history-record') ? event.target : null;
+      const actions = record?.querySelector(':scope > summary > .history-turn-actions');
+      const body = record?.querySelector(':scope > .history-record-body');
+      const summary = record?.querySelector(':scope > summary');
+      if (!actions || !body || !summary) return;
+      (record?.open ? body : summary).append(actions);
+    }, true);
     window.addEventListener('message', (event) => {
       const message = event.data;
       if (message?.type === 'historyTurnTitle' && typeof message.title === 'string') {
         const target = [...document.querySelectorAll('details.history-record')].find((item) =>
           item.dataset.sessionId === message.sessionId && item.dataset.turnId === message.turnId);
-        const label = target?.querySelector(':scope > summary > .history-summary-input');
-        if (label) {
+        const title = target?.querySelector(':scope > summary > .output-turn-title');
+        const label = title?.querySelector(':scope > .output-turn-title-name');
+        if (title && label) {
           label.textContent = message.title;
-          label.classList.toggle('named', message.named === true);
+          label.hidden = message.named !== true;
         }
         return;
       }

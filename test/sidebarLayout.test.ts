@@ -51,19 +51,21 @@ describe("sidebar panel layout", () => {
     const extension = await source("src/extension.ts");
     expect(extension).toContain('vscode.Uri.joinPath(context.extensionUri, "media", "pi-extension.mjs")');
   });
-  it("uses prose typography and compact refs for sent Input without changing composer chips", async () => {
+  it("keeps prose typography and the composer's larger chips", async () => {
     const css = await source("media/styles.css");
     expect(css).not.toContain("--dext-input-line-height");
     expect(await source('src/webview/codeEditor.ts')).toContain('lineHeight: 24');
     expect(css).toMatch(/\.attachment-chip \{[^}]*height: 24px;/);
-    expect(css).toMatch(/\.output-turn-input > pre\.dext-source,\s*\.markdown-body \{\s*font: 14px\/1.5 var\(--vscode-font-family\);/);
-    expect(css).toMatch(/\.output-turn-input \.attachment-chip \{\s*height: 20px;\s*margin-block: 2px;/);
-    expect(css).toMatch(/\.output-turn-input \.attachment-open \{\s*height: 18px;\s*font: inherit;/);
+    expect(css).toMatch(/\.markdown-body \{\s*font: 14px\/1\.5 var\(--vscode-font-family\);/);
+    expect(css).not.toContain(".output-turn-input");
   });
 
-  it("shares title-to-body spacing across Input, Process, and Output without stacking first-item gaps", async () => {
+  it("shares title-to-body spacing without stacking first-item gaps", async () => {
     const css = await source("media/styles.css");
-    expect(css).toMatch(/\.turn-section > \.turn-section-body \{\s*padding: 8px 4px 8px 18px;/);
+    // The prompt and timeline align with the row title; the answer is separated
+    // by its own divider instead of a section header.
+    expect(css).toMatch(/\.output-turn-body \{[\s\S]*?padding: 2px 4px 12px 22px;/);
+    expect(css).toMatch(/\.turn-output \{\s*position: relative;\s*margin-top: 14px;\s*padding: 14px 0 16px;/);
     expect(css).toMatch(/\.turn-section-body > :first-child,\s*\.turn-section-body > \.execution-result:first-child > :first-child,\s*\.turn-section-body > \.agent-stream-panel > :first-child \{\s*margin-top: 0;/);
     expect(css).toMatch(/\.turn-section-body > \.agent-stream-panel \{\s*padding-top: 0;/);
   });
@@ -89,7 +91,7 @@ describe("sidebar panel layout", () => {
     const manifest = await source("package.json");
     const extension = await source("src/extension.ts");
     expect(html).toContain('<section id="input-section" class="input-section">');
-    expect(html).toContain('id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true"');
+    expect(html).not.toContain('id="input-heading"');
     expect(html).not.toContain('id="view-methods"');
     expect(manifest).toContain('"command": "dext.viewApis"');
     // The directory dialogs are gone; the commands open editor tabs instead.
@@ -101,7 +103,7 @@ describe("sidebar panel layout", () => {
     expect(extension).toContain("editors.globalResources?.showList()");
     expect(html).not.toContain('id="methods-section"');
     expect(html.indexOf('id="result-section"')).toBeLessThan(html.indexOf('id="input-section"'));
-    expect(html).toMatch(/id="input-body" class="collapsible-body input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
+    expect(html).toMatch(/id="input-body" class="input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
     expect(html.match(/class="icon-button panel-fullscreen"/g)).toBeNull();
   });
 
@@ -120,14 +122,42 @@ describe("sidebar panel layout", () => {
     expect(main).not.toContain('resourceCreatorDialog');
   });
 
-  it("uses the shared mouse and keyboard disclosure behavior", async () => {
+  it("keeps one row, one Worked line and an unfolded answer", async () => {
+    const css = await source("media/styles.css");
+    const html = await source("src/app/sidebarProvider.ts");
+    // No decorative section titles survive: the composer has no heading and the
+    // conversation heading keeps only its collapse control.
+    expect(html).not.toContain("<span>Input</span>");
+    expect(html).not.toContain("<span>Conversation</span>");
+    expect(css).toMatch(/\.output-turn \{[\s\S]*?margin: 0;/);
+    expect(css).toMatch(/\.output-turn > summary \{[\s\S]*?min-height: 30px;[\s\S]*?padding: 0 4px;/);
+    expect(css).toMatch(/\.output-turn > summary > \.disclosure-chevron,[\s\S]*?opacity: 0;/);
+    expect(css).toMatch(/\.output-turn > summary:hover \{\s*background: color-mix\(in srgb, var\(--vscode-foreground\) 5\.5%, transparent\);/);
+    expect(css).toMatch(/\.turn-output \{[\s\S]*?margin-top: 14px;[\s\S]*?border-top: 1px solid color-mix\(in srgb, var\(--vscode-foreground\) 16%, transparent\);/);
+    // An open row keeps its chevron, and a running turn swaps in a spinner.
+    expect(css).toMatch(/\.output-turn\[open\] > summary > \.disclosure-chevron,[\s\S]*?opacity: 1;/);
+    expect(css).toMatch(/\.turn-running:not\(\[hidden\]\) \+ \.disclosure-chevron \{\s*display: none;/);
+    // Opening a turn changes ink and weight only, so the row cannot jump.
+    expect(css).toMatch(/\.output-turn-title \{[\s\S]*?font-size: 13px;[\s\S]*?line-height: 1\.6;/);
+    expect(css).toMatch(/\.output-turn\[open\] > summary \.output-turn-title,[\s\S]*?\.history-record\[open\] > summary \.output-turn-title \{[\s\S]*?color: var\(--vscode-foreground\);[\s\S]*?font-weight: 500;/);
+    expect(css).not.toMatch(/\.output-turn\[open\] > summary \.output-turn-title[\s\S]{0,200}?font-size: 15px/);
+    // History timestamps use the conversation's quiet mono style.
+    expect(css).toMatch(/\.history-meta\.history-record-time,[\s\S]*?\.history-meta\.history-session-time \{[\s\S]*?color-mix\(in srgb, var\(--vscode-foreground\) 42%, transparent\);[\s\S]*?font-family: var\(--vscode-editor-font-family\);/);
+    // The answer is never a fold target again.
+    expect(css).not.toContain('.turn-section[data-turn-section="output"]');
+  });
+
+  it("keeps the conversation open and the composer free of collapse controls", async () => {
     const main = await source("src/webview/main.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const transcript = await source("src/features/conversations/browser/transcriptView.ts");
-    expect(main).toContain('inputHeading: element<HTMLElement>("input-heading")');
-    expect(main).toContain('inputBody: element<HTMLElement>("input-body")');
-    expect(transcript).toContain('const input = this.section(turnPresentation.input, true, this.host.copy(source));');
-    expect(main).toMatch(/elements\.inputHeading\.addEventListener\("click",[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
-    expect(main).toMatch(/elements\.inputHeading\.addEventListener\("keydown",[\s\S]*event\.key === "Enter" \|\| event\.key === " "[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
+    // Both section headings are gone: the conversation starts at its first turn.
+    expect(html).not.toContain('id="result-heading"');
+    expect(html).not.toContain('id="result-toggle"');
+    expect(main).not.toContain("toggleSection");
+    expect(main).not.toContain("syncResultToggle");
+    // The turns themselves are still native disclosures.
+    expect(transcript).toContain('const disclosure = document.createElement("details");');
   });
 
   it("uses exactly Mode, Agent, and Model controls for the input footer", async () => {
@@ -205,7 +235,7 @@ describe("sidebar panel layout", () => {
     expect(css).not.toMatch(/#dext-main \{[^}]*?width:/);
     expect(css).not.toContain("width: min(888px");
     expect(css).not.toContain("width: min(1120px");
-    expect(css).toMatch(/#result-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
+    expect(css).toMatch(/#result-body \.markdown-body,[\s\S]*?\.history-record-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
   });
 
   it("offers Plan beside Agent, Ask, and Code and lands its result as a document", async () => {
@@ -393,7 +423,7 @@ describe("sidebar panel layout", () => {
     expect(layout).not.toContain(".reading-mode-button");
     // Process and Output now use the shared canvas width rather than a second,
     // narrower reading column centered inside it.
-    expect(layout).toMatch(/#result-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
+    expect(layout).toMatch(/#result-body \.markdown-body,[\s\S]*?\.history-record-body \.markdown-body \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
     expect(layout).not.toContain("min(100%, 56rem)");
     expect(layout).not.toContain("min(100%, 60rem)");
   });
@@ -584,7 +614,6 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 0 1 var\(--input-editor-height\);/);
     expect(css).toMatch(/\.code-editor \{[\s\S]*?height: 100%;[\s\S]*?min-height: 0;[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
-    expect(css).toMatch(/\.input-section\.section-collapsed,[\s\S]*?\.result-section\.section-collapsed \{[\s\S]*?flex: 0 0 auto;/);
     expect(css).toMatch(/\.result-section \{[\s\S]*?flex: 1 1 0;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?flex-basis: 0;[\s\S]*?min-height: 0;[\s\S]*?overflow: auto;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?scrollbar-gutter: stable;/);
@@ -626,9 +655,8 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/activateTurn: \(turn\) => activateNavigationTurn\(turn\)/);
     expect(main).toMatch(/jumpToPrevTurn\.addEventListener\("click", \(\) => \{\s*scroll\.jumpToPreviousTurn\(\);/);
     expect(main).toMatch(/jumpToNextTurn\.addEventListener\("click", \(\) => \{\s*scroll\.jumpToNextTurn\(\);/);
-    // Expanding an exchange reveals its Input and Output and folds the one the
-    // reader is leaving.
-    expect(main).toMatch(/function activateNavigationTurn\(target: HTMLElement\): void \{[\s\S]*?if \(row !== target\) row\.open = false;[\s\S]*?turn\.outputDisclosure\.open = true;/);
+    // Expanding an exchange folds the one the reader is leaving.
+    expect(main).toMatch(/function activateNavigationTurn\(target: HTMLElement\): void \{[\s\S]*?if \(row !== target\) row\.open = false;[\s\S]*?turn\.disclosure\.open = true;/);
     // Expanding or folding an exchange moves the navigation anchor, and the
     // boundary controls have to be re-evaluated with it.
     expect(main).toMatch(/elements\.result\.addEventListener\("toggle", rememberNavigationTurn, true\);[\s\S]*?elements\.result\.addEventListener\("toggle", syncJumpToLatest, true\);/);
@@ -661,7 +689,8 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/case "renameTurn":[\s\S]*?sessionId: request.sessionId/);
     expect(main).toMatch(/retryTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "retryTurn", sessionId, turnId \}\)/);
     expect(main).toMatch(/forkFromTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "forkFromTurn", sessionId, turnId \}\)/);
-    expect(transcript).toContain("summary.append(chevron, title, planExecutionStatus, time, actions);");
+    expect(main).toMatch(/turn\.runningIcon\.hidden = !running;/);
+    expect(transcript).toContain("summary.append(runningIcon, chevron, title,");
     const actionOrder = [...transcript.matchAll(/this\.actionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
     expect(actionOrder).toEqual([
       "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_ACTION", "TURN_ADD_TO_INPUT_ACTION", "TURN_DELETE_ACTION"
@@ -690,9 +719,15 @@ describe("sidebar panel layout", () => {
     expect(stored).toMatchObject({ id: turnId, mode: "plan", input: "retry me" });
     expect(active.turns.at(-1)?.id).toBe(turnId);
     h.dispose();
-    expect(css).toMatch(/\.output-turn > summary:hover \.output-turn-actions,[\s\S]*?opacity: 1;/);
+    expect(css).toMatch(/\.output-turn:hover \.output-turn-actions,[\s\S]*?\.output-turn:has\(:focus-visible\) \.output-turn-actions \{[\s\S]*?opacity: 1;/);
+    // A mouse click must not leave the bar pinned open via focus.
+    expect(css).not.toContain(".output-turn:focus-within");
+    expect(css).not.toContain(".history-record:focus-within");
     expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn actions";');
-    expect(css).toMatch(/\.history-record > summary:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
+    expect(css).toMatch(/\.history-record:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
+    // An open turn parks its actions over the Worked line, clear of the prompt.
+    expect(css).toMatch(/\.output-turn-body > \.output-turn-actions \{[\s\S]*?top: 4px;[\s\S]*?transform: none;/);
+    expect(css).toMatch(/\.history-record-body > \.history-turn-actions \{[\s\S]*?top: 4px;[\s\S]*?transform: none;/);
     expect(history).toContain('<summary title="${SESSION_ACTION_HINT}">');
   });
 

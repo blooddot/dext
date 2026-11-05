@@ -1389,20 +1389,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     </div>
     <main id="dext-main">
     <section id="result-section" class="result-section" aria-live="polite">
-      <div id="result-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
-        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Conversation</span></span>
-        <div class="section-heading-actions">
-          <button id="result-toggle" class="icon-button" type="button" title="Collapse conversation" aria-label="Collapse conversation"><i class="codicon codicon-collapse-all"></i></button>
-        </div>
-      </div>
       <div id="result-body" class="collapsible-body result-body" tabindex="-1"><div id="result"></div></div>
     </section>
 
     <section id="input-section" class="input-section">
-      <div id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
-        <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Input</span></span>
-      </div>
-      <div id="input-body" class="collapsible-body input-body">
+      <div id="input-body" class="input-body">
         <div id="plan-toolbar" class="plan-toolbar" hidden>
           <div class="plan-target-group">
             <button id="plan-target" class="plan-target" type="button" title="Select a plan"><i class="codicon codicon-checklist"></i><span id="plan-target-label">New plan</span></button>

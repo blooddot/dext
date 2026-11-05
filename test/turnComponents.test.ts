@@ -1,31 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderTurnResult, renderTurnSection, renderTurnMessage, renderTurnJson, turnHtmlAdapter } from "../src/features/conversations/presentation/turnComponents.js";
-import { presentTurn } from "../src/features/conversations/presentation/turnPresentation.js";
+import { renderTurnResult, renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMessage, renderTurnJson, turnHtmlAdapter } from "../src/features/conversations/presentation/turnComponents.js";
+import { presentTurn, presentTurnMode } from "../src/features/conversations/presentation/turnPresentation.js";
 import { presentAgentMessage } from "../src/features/conversations/presentation/agentMessagePresentation.js";
 
 describe("shared turn rendering", () => {
   it("escapes model text and gives only Process an elapsed-time field", () => {
-    const model = presentTurn({ source: '<script>alert("input")</script>', mode: "agent", durationMs: 1000 });
-    const input = renderTurnSection(turnHtmlAdapter, model.input!).disclosure.html;
-    expect(input).toContain('data-mode="agent"');
-    expect(input).not.toContain("script");
+    const model = presentTurn({ durationMs: 1000 });
+    const mode = renderTurnMode(turnHtmlAdapter, presentTurnMode("agent"));
+    expect(mode.html).toContain('data-mode="agent"');
+    expect(mode.html).toContain("Submitted in Agent mode");
+    expect(renderTurnMode(turnHtmlAdapter, presentTurnMode("ask")).html).toContain(">Ask<");
     model.process.detail = '<img src=x onerror="alert(1)">';
     const process = renderTurnSection(turnHtmlAdapter, model.process).disclosure.html;
     expect(process).toContain("&lt;img");
     expect(process).not.toContain("<img");
-    const output = renderTurnSection(turnHtmlAdapter, model.output).disclosure.html;
+    const output = renderTurnOutput(turnHtmlAdapter, [{ html: "<p>answer</p>" }], { html: "<button></button>" }).section.html;
     expect(output).not.toContain("Worked");
-    expect(output).not.toContain("button");
+    expect(output).not.toContain("<summary");
   });
 
   it("keeps section actions in the title bar after its metadata", () => {
-    const model = presentTurn({ source: "hello", mode: "agent" });
+    const model = presentTurn({ durationMs: 1_000 });
     const action = turnHtmlAdapter.element("button", { class: "copy-button" }, []);
-    const html = renderTurnSection(turnHtmlAdapter, model.input!, [], true, action).disclosure.html;
+    const html = renderTurnSection(turnHtmlAdapter, model.process, [], true, action).disclosure.html;
     const summary = html.slice(0, html.indexOf("</summary>"));
     expect(summary).toContain('class="turn-section-actions"');
     expect(summary).toContain('class="copy-button"');
-    expect(summary.indexOf('class="turn-mode"')).toBeLessThan(summary.indexOf("turn-section-actions"));
+    expect(summary.indexOf("Worked for")).toBeLessThan(summary.indexOf("turn-section-actions"));
     expect(html.slice(html.indexOf("</summary>"))).not.toContain("copy-button");
   });
 

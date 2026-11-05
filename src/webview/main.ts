@@ -5,7 +5,7 @@ import type { DextHistoryRecord, DextHistorySession } from "../features/conversa
 import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
 import { prepareHistoryTrace } from "../features/conversations/domain/agentTraceReplay.js";
 import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
-import { renderTurnInput, renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
+import { renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
 import {
   formatTurnTokenUsage,
   presentTurn,
@@ -108,8 +108,6 @@ const elements = {
   uiDialogBody: element<HTMLElement>("ui-dialog-body"),
   uiDialogActions: element<HTMLElement>("ui-dialog-actions"),
   inputSection: element<HTMLElement>("input-section"),
-  inputHeading: element<HTMLElement>("input-heading"),
-  inputBody: element<HTMLElement>("input-body"),
   inputShell: element<HTMLElement>("input-shell"),
   inputError: element<HTMLElement>("input-error"),
   inputErrorMessage: element<HTMLElement>("input-error-message"),
@@ -144,10 +142,8 @@ const elements = {
   runLabel: element<HTMLElement>("run-label"),
   problems: element<HTMLButtonElement>("problems"),
   resultSection: element<HTMLElement>("result-section"),
-  resultHeading: element<HTMLElement>("result-heading"),
   resultBody: element<HTMLElement>("result-body"),
   result: element<HTMLElement>("result"),
-  resultToggle: element<HTMLButtonElement>("result-toggle"),
   planToolbar: element<HTMLElement>("plan-toolbar"),
   planTarget: element<HTMLButtonElement>("plan-target"),
   planChoose: element<HTMLButtonElement>("plan-choose"),
@@ -360,7 +356,7 @@ const transcript = new TranscriptView({
   copy: (source) => copyButton(source),
   copyLive: (read) => copyButtonFrom(read),
   edit: (source) => editor.setValue(source),
-  openInput: () => setSectionOpen(elements.inputHeading, elements.inputBody, true),
+  openInput: () => editor.focus(),
   retryTurn: (sessionId, turnId) => vscode.postMessage({ type: "retryTurn", sessionId, turnId }),
   renameTurn: (sessionId, turnId) => vscode.postMessage({ type: "renameTurn", sessionId, turnId }),
   forkFromTurn: (sessionId, turnId) => vscode.postMessage({ type: "forkFromTurn", sessionId, turnId }),
@@ -371,7 +367,6 @@ const transcript = new TranscriptView({
   createTodos: () => new AgentTodoView(),
   createQuestions: (turnId, sessionId) => createTurnQuestions(turnId, sessionId),
   openReference: (reference) => openInputReference(reference),
-  syncResultToggle: () => syncResultToggle(),
   colorizeSource: (pre) => colorizeSource(pre)
 });
 
@@ -384,7 +379,6 @@ const trace = new AgentTraceView({
   progressState: () => agentProgressState,
   updateProgress: (label) => updateAgentProgress(label),
   revealResult: () => elements.resultSection.classList.remove("hidden"),
-  syncResultToggle: () => syncResultToggle(),
   requestFrame: (callback) => requestAnimationFrame(callback),
   cancelFrame: (handle) => cancelAnimationFrame(handle)
 });
@@ -454,7 +448,6 @@ function clearVisibleConversation(): void {
   jumpToNextTurn.hidden = true;
   elements.resultBody.dataset.loading = "true";
   elements.resultBody.setAttribute("aria-busy", "true");
-  syncResultToggle();
 }
 
 function finishConversationLoading(): void {
@@ -581,8 +574,10 @@ function updateRunState(): void {
   elements.run.classList.toggle("stopping", stopping);
   elements.run.classList.toggle("executing", executing);
   for (const [turnId, turn] of transcript.entries()) {
-    turn.processDisclosure.classList.toggle("running-process",
-      executing && turnId === activeTurnId && activeExecutionSessionId === browser.activeId);
+    const running = executing && turnId === activeTurnId && activeExecutionSessionId === browser.activeId;
+    // The spinner replaces the chevron in the leading slot while it runs, so the
+    // row is identifiable in the collapsed list without widening the gutter.
+    turn.runningIcon.hidden = !running;
   }
   const parts = [
     problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
@@ -830,32 +825,6 @@ function applySidebarTheme(state: SidebarState): void {
   editor.refreshLanguageState();
 }
 
-function setResultDetailsOpen(open: boolean): void {
-  elements.result.querySelectorAll<HTMLDetailsElement>("details").forEach((detail) => {
-    detail.open = open;
-  });
-  syncResultToggle();
-}
-
-function syncResultToggle(): void {
-  const details = [...elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")];
-  // Show the collapse action as soon as any conversation content is open.
-  const open = details.length === 0 || details.some((detail) => detail.open);
-  const icon = elements.resultToggle.querySelector("i");
-  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
-  const title = open ? "Collapse conversation" : "Expand conversation";
-  elements.resultToggle.title = title;
-  elements.resultToggle.setAttribute("aria-label", title);
-}
-
-function toggleResultDetails(): void {
-  const details = [...elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")];
-  // The button is a collapse action whenever at least one turn is open. In a
-  // mixed state it must therefore collapse everything, rather than expand the
-  // closed turns just because one happens to be closed.
-  setResultDetailsOpen(!details.some((detail) => detail.open));
-}
-
 // The host-level appearance bundle writes `data-dext-theme` before dispatching
 // this. Monaco and already-rendered Mermaid diagrams cannot recolour themselves
 // from CSS alone, so they are rebuilt with the new light/dark base.
@@ -863,22 +832,6 @@ document.addEventListener("dext-appearance-change", () => {
   if (lastSidebarState) applySidebarTheme(lastSidebarState);
   rerenderMarkdownDiagrams(elements.result);
 });
-
-function setSectionOpen(heading: HTMLElement, body: HTMLElement, open: boolean): void {
-  heading.setAttribute("aria-expanded", String(open));
-  body.classList.toggle("collapsed", !open);
-  heading.parentElement?.classList.toggle("section-collapsed", !open);
-  const icon = heading.querySelector<HTMLElement>(".section-chevron");
-  if (icon) icon.className = `section-chevron codicon codicon-chevron-${open ? "down" : "right"}`;
-  // A collapsed body is display:none, which drops the scroll offset. Reopening
-  // the conversation while following its output has to end at the newest reply
-  // again rather than at the top of the earliest turn.
-  if (open && body === elements.resultBody) pinResultToBottom();
-}
-
-function toggleSection(heading: HTMLElement, body: HTMLElement): void {
-  setSectionOpen(heading, body, heading.getAttribute("aria-expanded") !== "true");
-}
 
 function displayOptionValue(value: string): string {
   return value
@@ -1774,7 +1727,6 @@ function renderResult(response: InputExecutionResponse): void {  const target = 
   }).filter(Boolean).join("\n\n");
   transcript.active?.setOutputCopy?.(outputCopy);
   elements.resultSection.classList.remove("hidden");
-  syncResultToggle();
 }
 
 function clearInputError(): void {
@@ -1798,7 +1750,6 @@ function renderOutputError(message: unknown): void {
   target.append(summary);
   transcript.active?.setOutputCopy?.("");
   elements.resultSection.classList.remove("hidden");
-  syncResultToggle();
 }
 
 function renderError(message: unknown): void {
@@ -1834,10 +1785,6 @@ function activateNavigationTurn(target: HTMLElement): void {
     if (row !== target) row.open = false;
   }
   turn.disclosure.open = true;
-  const input = turn.input?.closest<HTMLDetailsElement>("details.output-turn-section");
-  if (input) input.open = true;
-  turn.outputDisclosure.open = true;
-  syncResultToggle();
 }
 
 /** Expanding a row by hand is also a navigation choice; it becomes the turn the
@@ -2044,26 +1991,16 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
     }
     const planPath = record.planPath ?? planResult?.planPath;
     if (planPath) turn.title.setPlanPath(planPath);
-    // Older records have no execution metadata until their response is parsed.
-    // Remove the generic shell before rendering the internal build prompt.
-    turn.input?.closest(".output-turn-section")?.remove();
-    delete turn.input;
   }
 
   agentRunStartedAt = Date.now();
-  if (turn.input && turn.input.childElementCount === 0) {
-    // Hydrated history renders the persisted source exactly as authored, in the colors
-    // the composer wrote it in: a record's mode says whether that source was code.
-    const inputCopy = renderTurnInput(turnDomAdapter(document), transcript.renderInputSource(record.input, record.mode));
-    turn.input.append(inputCopy);
-  }
   const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
   for (const event of replay) renderAgentEvent(event);
   turn.setProcessCopy?.(trace.copyText());
   if (agentStream) finishAgentProgress();
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   if (turn.processMeta) turn.processMeta.textContent = presentTurn({
-    source: record.input, mode: record.mode, durationMs: duration, process: record.process
+    durationMs: duration, process: record.process
   }).process.detail ?? "";
   turn.todos.setRunning(false);
   turn.processDisclosure.open = false;
@@ -2073,8 +2010,6 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
     turn.output.append(jsonOutput(record.output));
     turn.setOutputCopy?.(record.output);
   }
-  turn.outputDisclosure.open = true;
-  syncResultToggle();
 }
 
 function hydrateOutputTurnOnOpen(event: Event): void {
@@ -2133,7 +2068,6 @@ function renderOutputSession(session: DextHistorySession): void {
     browser.renderedSignature = signature;
     elements.resultSection.classList.remove("hidden");
     finishConversationLoading();
-    syncResultToggle();
     syncJumpToLatest();
     scrollResultToBottom();
     return;
@@ -2180,7 +2114,6 @@ function renderOutputSession(session: DextHistorySession): void {
   browser.renderedId = session.id;
   browser.renderedSignature = signature;
   elements.resultSection.classList.remove("hidden");
-  syncResultToggle();
   syncJumpToLatest();
   // Let the empty viewport paint first. This prevents a large restored turn
   // from blocking wheel/touch input for the duration of Markdown rendering.
@@ -2191,7 +2124,6 @@ function renderOutputSession(session: DextHistorySession): void {
       // hydration has its own trace state, so both can remain visible.
       latestTurn?.hydrate?.();
       finishConversationLoading();
-      syncResultToggle();
       syncJumpToLatest();
       scrollResultToBottom();
     }, 0);
@@ -2220,7 +2152,6 @@ function renderOutputSessionRef(sessionId: string, signature: string, switchId?:
   browser.renderedSignature = signature;
   elements.resultSection.classList.remove("hidden");
   finishConversationLoading();
-  syncResultToggle();
   syncJumpToLatest();
   scrollResultToBottom();
 }
@@ -2303,16 +2234,11 @@ document.addEventListener("click", (event) => {
     window.setTimeout(() => button.classList.replace("codicon-check", "codicon-copy"), 900);
   });
 });
-elements.resultToggle.addEventListener("click", (event) => {
-  event.stopPropagation();
-  toggleResultDetails();
-});
 elements.result.addEventListener("toggle", hydrateOutputTurnOnOpen, true);
 elements.result.addEventListener("toggle", rememberNavigationTurn, true);
 // Opening or closing a turn can move the navigation anchor or change which
 // exchange is adjacent, so the stepping controls are refreshed with it.
 elements.result.addEventListener("toggle", syncJumpToLatest, true);
-elements.result.addEventListener("toggle", syncResultToggle, true);
 // Expanding a command's output or a stored turn changes the height under the
 // reader. A following reader keeps the newest output in view; one who scrolled
 // away is left where they are.
@@ -2461,28 +2387,6 @@ elements.uiDialog.addEventListener("cancel", (event) => {
   cancelUi();
 });
 elements.uiDialogForm.addEventListener("submit", (event) => event.preventDefault());
-elements.inputHeading.addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  toggleSection(elements.inputHeading, elements.inputBody);
-});
-elements.inputHeading.addEventListener("keydown", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    toggleSection(elements.inputHeading, elements.inputBody);
-  }
-});
-elements.resultHeading.addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  toggleSection(elements.resultHeading, elements.resultBody);
-});
-elements.resultHeading.addEventListener("keydown", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    toggleSection(elements.resultHeading, elements.resultBody);
-  }
-});
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
 for (const button of [elements.resourceSourceDescribe, elements.resourceSourceImport]) {
   button.addEventListener("click", () => {
@@ -2704,7 +2608,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     flushAgentEventBatches();
     const turn = transcript.get(message.turnId);
     if (turn) {
-      setSectionOpen(elements.resultHeading, elements.resultBody, true);
       turn.hydrate?.();
       turn.disclosure.open = true;
       // The host is asking the reader to answer a card, and focusRequest brings
@@ -2748,7 +2651,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       transcript.active?.todos.setRunning(true);
       transcript.active?.questions?.setRunning(true);
       elements.resultSection.classList.remove("hidden");
-      setSectionOpen(elements.resultHeading, elements.resultBody, true);
       syncJumpToLatest();
     } else {
       scroll.consumeForcedInitialScroll();
@@ -2759,9 +2661,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       finishAgentProgress();
       if (transcript.active) {
         transcript.active.processDisclosure.open = false;
-        transcript.active.outputDisclosure.open = true;
-        // Collapsing the process timeline and opening the stored output change
-        // the height around the reader; a following reader keeps the reply end.
+        // Collapsing the process timeline changes the height around the reader;
+        // a following reader keeps the reply end.
         pinResultToBottom();
       }
       syncJumpToLatest();
@@ -2787,7 +2688,6 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "setInput") {
     editor.setValue(message.source);
-    setSectionOpen(elements.inputHeading, elements.inputBody, true);
     editor.focus();
   }
   if (message.type === "focusEditor" || message.type === "focusInput") editor.focus();
@@ -2805,5 +2705,4 @@ window.addEventListener("unload", () => {
 });
 
 updateRunState();
-syncResultToggle();
 vscode.postMessage({ type: "ready" });

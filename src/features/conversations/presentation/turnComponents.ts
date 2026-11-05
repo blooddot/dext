@@ -1,5 +1,5 @@
 import type { ApplyResult, DextResult } from "../../../shared/contracts/types.js";
-import type { TurnSectionPresentation } from "./turnPresentation.js";
+import type { TurnModePresentation, TurnRenderModel } from "./turnPresentation.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
 import { formatJsonOutput } from "../../../shared/lib/jsonOutput.js";
@@ -10,28 +10,39 @@ export interface TurnRenderAdapter<E> {
   element(this: void, tag: string, attributes: Record<string, string | boolean>, children: readonly (E | string)[]): E;
 }
 
+/** The process line: one light `Worked …` row that unfolds into the timeline.
+ * It never renders a section label of its own. */
 export function renderTurnSection<E>(
-  adapter: TurnRenderAdapter<E>, section: TurnSectionPresentation, children: readonly E[] = [],
+  adapter: TurnRenderAdapter<E>, process: TurnRenderModel["process"], children: readonly E[] = [],
   open = false, action?: E
 ): { disclosure: E; body: E; meta: E } {
   const el = adapter.element;
-  const meta = section.kind === "input"
-    ? el("span", { class: "turn-mode", "data-mode": section.mode.value, title: section.mode.title }, [section.mode.label])
-    : el("span", { class: "turn-section-meta disclosure-meta" }, [section.kind === "process" ? section.detail ?? "" : ""]);
+  const meta = el("span", { class: "turn-section-meta disclosure-meta" }, [process.detail ?? ""]);
   const summary = el("summary", {}, [
     el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []),
-    el("span", {}, [section.label]), meta,
+    meta,
     ...(action ? [el("span", { class: "turn-section-actions" }, [action])] : [])
   ]);
   const body = el("div", { class: "turn-section-body" }, children);
-  return { disclosure: el("details", { class: "turn-section", "data-turn-section": section.kind, open }, [summary, body]), body, meta };
+  return { disclosure: el("details", { class: "turn-section", "data-turn-section": "process", open }, [summary, body]), body, meta };
+}
+
+/** The answer is never a fold target: one divider separates it from the timeline. */
+export function renderTurnOutput<E>(adapter: TurnRenderAdapter<E>, children: readonly E[], copy?: E): { section: E; body: E } {
+  const el = adapter.element;
+  const body = el("div", { class: "turn-output-body" }, children);
+  return {
+    section: el("section", { class: "turn-output", "data-turn-section": "output" }, [...(copy ? [copy] : []), body]),
+    body
+  };
+}
+
+/** The submitted mode is plain metadata beside the prompt, not a pill. */
+export function renderTurnMode<E>(adapter: TurnRenderAdapter<E>, mode: TurnModePresentation): E {
+  return adapter.element("span", { class: "turn-mode", "data-mode": mode.value, title: mode.title }, [mode.label]);
 }
 
 /** Copy controls belong to the section title bar, not to the content they copy. */
-export function renderTurnInput<E>(adapter: TurnRenderAdapter<E>, source: E): E {
-  return adapter.element("div", { class: "output-turn-input" }, [source]);
-}
-
 export function renderTurnMarkdown<E>(adapter: TurnRenderAdapter<E>, body: E): E {
   return adapter.element("div", { class: "output-text-copyable" }, [body]);
 }

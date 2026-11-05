@@ -13,11 +13,8 @@
   --dext-row-action-background: #252526;
   /* Compact conversation rhythm, shared by the transcript and composer. */
   --dext-composer-height: clamp(96px, 12vh, 128px);
-  --dext-section-height: 28px;
   --dext-conversation-gap: 8px;
-  --dext-turn-surface: color-mix(in srgb, var(--vscode-foreground) 4%, var(--vscode-sideBar-background));
   --dext-quiet-divider: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
-  --dext-record-border: transparent;
   --resource-api-accent: #79b8ff;
   --resource-mcp-accent: #c2a3ff;
   --resource-rule-accent: #dfb45c;
@@ -57,7 +54,6 @@ body.vscode-high-contrast-light {
      high-contrast chrome. Reserve those outlines for actual HC themes. */
   --dext-full-access-accent: var(--vscode-foreground);
   --dext-quiet-divider: var(--vscode-contrastBorder, var(--vscode-foreground));
-  --dext-record-border: var(--dext-quiet-divider);
 }
 
 html,
@@ -652,19 +648,12 @@ button {
   display: none !important;
 }
 
-.section-heading-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
 .icon-button.compact {
   width: 22px;
   height: 22px;
 }
 
-.action-row,
-.section-heading {
+.action-row {
   display: flex;
   align-items: center;
 }
@@ -748,18 +737,20 @@ main {
   display: none;
 }
 
-.history-session,
-.history-record {
+.history-session {
   border-top: 1px solid var(--vscode-panel-border);
 }
 
-.history-session:first-child,
-.history-record:first-child {
+.history-session:first-child {
   border-top: 0;
 }
 
+/* Turn rows are a continuous list: the hover surface marks their bounds. */
+.history-record {
+  margin: 0 8px 0 0;
+}
+
 .history-session > summary,
-.history-record > summary,
 .history-disclosure > summary {
   min-height: 30px;
   padding: 2px 4px;
@@ -772,10 +763,25 @@ main {
   position: relative;
 }
 
+.history-record > summary {
+  min-height: 30px;
+  padding: 0 8px 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+
 .history-session > summary:hover,
-.history-record > summary:hover,
 .history-disclosure > summary:hover {
   background: var(--vscode-list-hoverBackground);
+}
+
+.history-record > summary:hover {
+  background: color-mix(in srgb, var(--vscode-foreground) 5.5%, transparent);
 }
 
 .history-view .disclosure-chevron {
@@ -803,6 +809,15 @@ main {
    its first message. */
 .history-summary-input.named {
   color: var(--vscode-foreground);
+}
+
+/* History timestamps read like the conversation's: quiet, mono, tabular. */
+.history-meta.history-record-time,
+.history-meta.history-session-time {
+  color: color-mix(in srgb, var(--vscode-foreground) 42%, transparent);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .history-meta {
@@ -848,11 +863,19 @@ main {
 .history-session > summary:hover .history-session-actions,
 .history-session > summary:focus-visible .history-session-actions,
 .history-session > summary:has(:focus-visible) .history-session-actions,
-.history-record > summary:hover .history-turn-actions,
-.history-record > summary:focus-visible .history-turn-actions,
-.history-record > summary:has(:focus-visible) .history-turn-actions {
+.history-record:hover .history-turn-actions,
+.history-record:has(:focus-visible) .history-turn-actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+.history-record-body {
+  position: relative;
+}
+
+.history-record-body > .history-turn-actions {
+  top: 4px;
+  transform: none;
 }
 
 .history-session-action {
@@ -876,14 +899,14 @@ main {
 }
 
 .history-session-body {
-  padding: 2px 0 14px 16px;
+  padding: 2px 0 14px 8px;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
 }
 
 .history-record-body {
-  padding: 2px 0 12px 16px;
+  padding: 2px 0 12px 20px;
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
@@ -924,8 +947,7 @@ main {
   overflow: hidden;
 }
 
-.history-disclosure > .disclosure-body,
-.history-disclosure > .dext-source {
+.history-disclosure > .disclosure-body {
   margin-left: 16px;
 }
 
@@ -935,12 +957,20 @@ main {
 
 .history-execution > .history-disclosure {
   margin: 4px 0;
-}.history-disclosure.process-event {
-  overflow: hidden;
-  border: 1px solid var(--vscode-widget-border);
-  border-radius: 4px;
-}.history-disclosure.process-event > summary {
-  padding: 4px 7px;
+}
+/* Process rows are a timeline, not a stack of cards. */
+.history-disclosure.process-event {
+  border: 0;
+  background: transparent;
+}
+.history-disclosure.process-event > summary {
+  min-height: 22px;
+  padding: 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
 }
 
 .process-group > .disclosure-body {
@@ -1061,12 +1091,6 @@ main {
   font: 12px/1.45 var(--vscode-editor-font-family);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.dext-source {
-  padding: 8px 4px;
-  font-weight: 400;
-  white-space: pre;
 }
 
 .terminal-text {
@@ -2385,7 +2409,8 @@ button.primary:disabled {
   opacity: 0.55;
 }
 
-/* A running turn uses the same subtle light sweep on Stop and Process.
+/* A running turn lights up Stop with a subtle light sweep; the Process line
+   paints its sweep on the label's own glyphs instead (see below).
    Only the highlight moves; both controls keep their existing dimensions. */
 button.primary.executing {
   --running-accent: var(--composer-accent-fill, var(--vscode-button-background));
@@ -2395,8 +2420,7 @@ button.primary.plan-build.executing {
   --running-accent: var(--plan-accent-fill);
 }
 
-button.primary.executing::after,
-.running-process > summary::after {
+button.primary.executing::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -2414,23 +2438,7 @@ button.primary.executing::after,
   animation: dext-running-sheen 2.2s linear infinite;
 }
 
-.running-process > summary {
-  position: relative;
-  overflow: hidden;
-  border-radius: 4px;
-}
-
-.running-process > summary::after {
-  background: linear-gradient(
-    108deg,
-    transparent 28%,
-    color-mix(in srgb, var(--vscode-foreground) 12%, transparent) 50%,
-    transparent 72%
-  );
-}
-
-button.primary.executing > *,
-.running-process > summary > * {
+button.primary.executing > * {
   position: relative;
   z-index: 1;
 }
@@ -2444,8 +2452,7 @@ button.primary.executing > *,
   button.primary.executing { animation: none; }
   /* Reduced motion still gets a static highlight instead of losing the
      running-state affordance entirely. */
-  button.primary.executing::after,
-  .running-process > summary::after {
+  button.primary.executing::after {
     animation: none;
     transform: none;
   }
@@ -2541,7 +2548,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode
 
 .result-section {
   margin-top: 0;
-  padding-top: 0;
+  /* The rows carry their own inset; the section adds no side gutter. */
+  padding: 0;
   border-top: 0;
   min-height: 34px;
   min-width: 0;
@@ -2553,59 +2561,6 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .input-section #mode
   flex-direction: column;
   overflow: hidden;
   position: relative;
-}
-
-.section-heading {
-  width: 100%;
-  height: var(--dext-section-height);
-  flex: 0 0 var(--dext-section-height);
-  margin: 0;
-  padding: 0 4px;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--vscode-descriptionForeground);
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.collapsible-heading {
-  cursor: pointer;
-  user-select: none;
-  border-radius: 4px;
-}
-
-.collapsible-heading:hover {
-  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
-}
-
-.section-heading-actions .icon-button {
-  color: var(--vscode-descriptionForeground);
-}
-
-.section-heading-actions .icon-button:hover {
-  color: var(--vscode-foreground);
-}
-
-.collapsible-heading:focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
-  outline-offset: -1px;
-}
-
-.section-heading-label {
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.section-chevron {
-  width: 12px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-}
-
-.collapsible-body.collapsed {
-  display: none;
 }
 
 /* A closed disclosure must not keep its content in the layout. Chromium lays
@@ -2621,20 +2576,9 @@ details:not([open]) > :not(summary) {
   display: none;
 }
 
-.input-section.section-collapsed,
-.result-section.section-collapsed {
-  flex: 0 0 auto;
-  max-height: none;
-}
-
 @media (max-height: 480px) {
   main {
     padding-top: 4px;
-  }
-
-  .section-heading {
-    height: 28px;
-    flex-basis: 28px;
   }
 
   .input-section {
@@ -2740,9 +2684,9 @@ button.primary.stopping {
      re-anchoring moved the view off the newest output while the reader was
      following it; main.ts pins the end explicitly instead. */
   overflow-anchor: none;
-  /* One gutter for the whole transcript. It shrinks on a narrow sidebar so
-     the content, not the gutter, keeps the space. */
-  padding-inline: clamp(14px, 3.2vw, 24px);
+  /* The rows own their own breathing room; a second transcript gutter only
+     wasted width on both sides of the conversation. */
+  padding-inline: 0;
 }
 
 
@@ -2870,17 +2814,17 @@ button.primary.stopping {
   display: none;
 }
 
+/* A turn row is a list item, not a table cell: no separators, the hover
+   surface is the only thing that marks its bounds. */
 .output-turn {
-  border-top: 1px solid var(--dext-record-border);
-}
-
-.output-turn:first-child {
-  border-top: 0;
+  /* The hover surface spans the transcript width; no column is wasted on a
+     margin the composer beside it does not have. */
+  margin: 0;
 }
 
 .output-turn > summary {
-  min-height: 32px;
-  padding: 3px 4px;
+  min-height: 30px;
+  padding: 0 4px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2891,15 +2835,78 @@ button.primary.stopping {
   position: relative;
 }
 
-/* Open turns own the visual emphasis; closed turns stay readable without
-   making every historical row another horizontal rule. */
-.output-turn[open] > summary {
-  background: var(--dext-turn-surface);
+/* The chevron keeps its column so hovering cannot shift the title. */
+.output-turn > summary > .disclosure-chevron,
+.history-record > summary > .disclosure-chevron {
+  flex: 0 0 12px;
+  width: 12px;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
 }
 
-.output-turn[open] > summary .output-turn-title {
+.output-turn > summary:hover > .disclosure-chevron,
+.output-turn > summary:focus-visible > .disclosure-chevron,
+.output-turn > summary:has(:focus-visible) > .disclosure-chevron,
+.history-record > summary:hover > .disclosure-chevron,
+.history-record > summary:focus-visible > .disclosure-chevron,
+.history-record > summary:has(:focus-visible) > .disclosure-chevron,
+/* An opened row keeps its chevron, so the list shows which turns are open. */
+.output-turn[open] > summary > .disclosure-chevron,
+.history-record[open] > summary > .disclosure-chevron,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .output-turn > summary > .disclosure-chevron,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .history-record > summary > .disclosure-chevron {
+  opacity: 1;
+}
+
+/* While a turn runs the spinner takes the leading slot, so the row is
+   identifiable even when collapsed. */
+.turn-running {
+  flex: 0 0 12px;
+  width: 12px;
+  font-size: 12px;
+  color: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+}
+
+/* The codicon font sets display on every icon, so this needs its specificity. */
+.output-turn > summary > .turn-running[hidden] {
+  display: none;
+}
+
+.turn-running:not([hidden]) + .disclosure-chevron {
+  display: none;
+}
+
+
+
+/* A multi-line prompt keeps the time and mode on its first line; baseline
+   alignment follows each font's own metrics instead of guessing an offset. */
+.output-turn[open] > summary,
+.history-record[open] > summary {
+  align-items: baseline;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.output-turn[open] > summary > .output-turn-time,
+.output-turn[open] > summary > .turn-mode,
+.history-record[open] > summary > .turn-mode,
+.history-record[open] > summary > .history-record-time {
+  line-height: 1;
+}
+
+/* The submitted mode belongs to the opened turn, not to the collapsed list. */
+.output-turn:not([open]) > summary > .turn-mode,
+.history-record:not([open]) > summary > .turn-mode {
+  display: none;
+}
+
+/* Dimmed metadata is a normal-theme luxury; high contrast keeps it readable. */
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .output-turn-time,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .history-record-time,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-mode,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section[data-turn-section="process"] > summary {
   color: var(--vscode-foreground);
-  font-weight: 600;
 }
 
 .output-turn > summary:focus-visible,
@@ -2913,30 +2920,101 @@ button.primary.stopping {
 }
 
 .output-turn > summary:hover {
-  background: var(--vscode-list-hoverBackground, color-mix(in srgb, var(--vscode-foreground) 6%, transparent));
+  background: color-mix(in srgb, var(--vscode-foreground) 5.5%, transparent);
 }
 
 .output-turn-time {
   flex: 0 0 auto;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
+  color: color-mix(in srgb, var(--vscode-foreground) 42%, transparent);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
+/* A collapsed row is a list title: smaller than the content it opens into. */
 .output-turn-title {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
   color: var(--vscode-descriptionForeground);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.output-turn > summary:hover .output-turn-actions,
-.output-turn > summary:focus-visible .output-turn-actions,
-.output-turn > summary:has(:focus-visible) .output-turn-actions {
+/* Opening a turn changes its ink and weight, never the type scale, so the
+   row cannot jump as it expands. */
+.output-turn[open] > summary .output-turn-title,
+.history-record[open] > summary .output-turn-title {
+  color: var(--vscode-foreground);
+  font-weight: 500;
+}
+
+.output-turn-title-name {
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The prompt is the row label: one clipped line closed, all of it open. It is
+   rendered once and never repeated in the body. */
+.output-turn-prompt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.output-turn[open] > summary .output-turn-prompt,
+.history-record[open] > summary .output-turn-prompt {
+  display: block;
+  margin-top: 2px;
+}
+
+/* A named turn shows only its name until it is opened. */
+.output-turn:not([open]) > summary .output-turn-title:has(> .output-turn-title-name:not([hidden])) > .output-turn-prompt,
+.history-record:not([open]) > summary .output-turn-title:has(> .output-turn-title-name:not([hidden])) > .output-turn-prompt {
+  display: none;
+}
+
+/* A Code submission is source, so it keeps the composer's monospace face. */
+.output-turn-title.code-prompt .output-turn-prompt {
+  font-family: var(--vscode-editor-font-family);
+}
+
+/* Read-only @path chips fit the prompt's prose, not the composer's controls. */
+.output-turn-prompt .attachment-chip {
+  height: 20px;
+  margin-block: 1px;
+  vertical-align: bottom;
+}
+
+.output-turn-prompt .attachment-open {
+  height: 18px;
+  font: inherit;
+}
+
+.output-turn-prompt .attachment-open .codicon {
+  font-size: 13px;
+}
+
+/* focus-visible, not focus-within: a clicked action must not pin the bar open
+   after the pointer has left the row. */
+.output-turn:hover .output-turn-actions,
+.output-turn:has(:focus-visible) .output-turn-actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Opened turns park the bar over the short Worked line, clear of the prompt. */
+.output-turn-body {
+  position: relative;
+}
+
+.output-turn-body > .output-turn-actions {
+  top: 4px;
+  transform: none;
 }
 
 .output-turn-action:disabled {
@@ -2949,28 +3027,80 @@ button.primary.stopping {
 }
 
 .output-turn-body {
-  padding: 4px 0 12px var(--dext-conversation-gap);
+  /* Aligns the prompt and the timeline with the row title after the chevron. */
+  padding: 2px 4px 12px 22px;
 }
 
+/* The process line is the only fold target left in a turn. */
 .turn-section {
   margin: 0;
   border: 0;
-  border-top: 1px solid var(--dext-record-border);
   border-radius: 0;
   background: transparent;
 }
 
-.turn-section:first-child {
-  border-top: 0;
-}
-
 .turn-section > .turn-section-body {
-  padding: 8px 4px 8px 18px;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
 }
+
+.turn-section[data-turn-section="process"] {
+  margin: 2px 0 0;
+}
+
+.turn-section[data-turn-section="process"] > summary {
+  min-height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, var(--vscode-foreground) 62%, transparent);
+  font-size: 12px;
+}
+
+.turn-section[data-turn-section="process"] > summary > .disclosure-chevron {
+  flex: 0 0 12px;
+  width: 12px;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+}
+
+.turn-section[data-turn-section="process"] > summary:hover > .disclosure-chevron,
+.turn-section[data-turn-section="process"] > summary:focus-visible > .disclosure-chevron,
+.turn-section[data-turn-section="process"] > summary:has(:focus-visible) > .disclosure-chevron,
+.turn-section[data-turn-section="process"][open] > summary > .disclosure-chevron,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section[data-turn-section="process"] > summary > .disclosure-chevron {
+  opacity: 1;
+}
+
+.turn-section[data-turn-section="process"][open] > summary {
+  color: color-mix(in srgb, var(--vscode-foreground) 70%, transparent);
+}
+
+/* An indented timeline, not a card: the divider is the only frame. */
+.turn-section[data-turn-section="process"] > .turn-section-body {
+  margin-left: 18px;
+  padding: 2px 4px 6px 14px;
+  border-left: 1px solid var(--dext-quiet-divider);
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+}
+
+/* The answer is never a fold target. */
+.turn-output {
+  position: relative;
+  margin-top: 14px;
+  padding: 14px 0 16px;
+  border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+}
+
+.turn-output > .turn-output-body > :first-child {
+  margin-top: 0;
+}
+
 
 /* The section owns the title-to-content gap, not the first result or message. */
 .turn-section-body > :first-child,
@@ -2981,33 +3111,6 @@ button.primary.stopping {
 
 .turn-section-body > .agent-stream-panel {
   padding-top: 0;
-}
-
-.output-turn-input {
-  position: relative;
-}
-
-.output-turn-input > pre.dext-source {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  white-space: pre-wrap;
-}
-
-/* Read-only refs fit the prose rhythm; composer chips keep their larger targets. */
-.output-turn-input .attachment-chip {
-  height: 20px;
-  margin-block: 2px;
-}
-
-.output-turn-input .attachment-open {
-  height: 18px;
-  font: inherit;
-}
-
-.output-turn-input .attachment-open .codicon {
-  font-size: 14px;
 }
 
 .result-meta {
@@ -3050,19 +3153,9 @@ button.primary.stopping {
   list-style: none;
 }
 
-.turn-section[data-turn-section="output"][open] {
-  margin-top: var(--dext-conversation-gap);
-  border-top-color: var(--dext-quiet-divider);
-}
-
-.turn-section[data-turn-section="output"][open] > summary {
-  font-weight: 600;
-}
-
 .turn-section > summary::-webkit-details-marker { display: none; }
-.turn-section > summary:hover { background: var(--vscode-list-hoverBackground); }
-.turn-section-meta { color: var(--vscode-descriptionForeground); font-size: 12px; font-variant-numeric: tabular-nums; }
-.turn-section .disclosure-chevron { flex: 0 0 12px; width: 12px; font-size: 12px; }
+.turn-section > summary:hover { background: color-mix(in srgb, var(--vscode-foreground) 5.5%, transparent); }
+.turn-section-meta { color: inherit; font-size: inherit; font-variant-numeric: tabular-nums; }
 .turn-section[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 
 /* Section copy controls sit at the trailing edge of the title bar, not over the
@@ -3072,6 +3165,15 @@ button.primary.stopping {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.turn-section > summary:hover .turn-section-actions,
+.turn-section > summary:focus-visible .turn-section-actions,
+.turn-section > summary:has(:focus-visible) .turn-section-actions,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section-actions {
+  opacity: 1;
 }
 .turn-section-actions > .copy-button,
 .turn-section-actions > .output-copy,
@@ -3121,35 +3223,27 @@ button.primary.stopping {
   overflow-wrap: anywhere;
 }
 
+/* The submitted mode is metadata beside the prompt, not a pill. */
 .turn-mode {
-  flex: 0 0 auto;
   display: inline-flex;
-  align-self: center;
   align-items: center;
-  padding: 0 5px;
-  border-radius: 4px;
   color: var(--vscode-descriptionForeground);
-  background: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
-  font-size: 12px;
   font-weight: 400;
-  height: 18px;
-  box-sizing: border-box;
+  /* Match the timestamp's box so both baselines line up on the row. */
   line-height: 1;
 }
 
+/* Same colors as the composer's mode menu, so a turn reads as its mode. */
 .turn-mode[data-mode="ask"] {
   color: var(--vscode-terminal-ansiGreen, #73c991);
-  background: color-mix(in srgb, var(--vscode-terminal-ansiGreen, #73c991) 14%, transparent);
 }
 
 .turn-mode[data-mode="plan"] {
   color: var(--dext-plan-label);
-  background: color-mix(in srgb, var(--dext-plan-fill) 14%, transparent);
 }
 
 .turn-mode[data-mode="code"] {
   color: var(--vscode-terminal-ansiCyan, #4fc1ff);
-  background: color-mix(in srgb, var(--vscode-terminal-ansiCyan, #4fc1ff) 14%, transparent);
 }
 
 /* GitHub Markdown supplies typography, spacing and content colors. These
@@ -3162,8 +3256,6 @@ button.primary.stopping {
   overflow-wrap: anywhere;
 }
 
-/* Sent Input is prose too, not another instance of the input editor. */
-.output-turn-input > pre.dext-source,
 .markdown-body {
   font: 14px/1.5 var(--vscode-font-family);
 }
@@ -3188,7 +3280,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
    already capped on .app-shell, so letting the prose fill it keeps the
    transcript, its section headings and the composer edge-aligned instead of
    centering a narrower strip inside a wider panel. */
-#result-body .markdown-body {
+#result-body .markdown-body,
+.history-record-body .markdown-body {
   max-width: 100%;
   margin-inline: 0;
   font-size: 15px;
@@ -3214,11 +3307,6 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
 .markdown-body hr,
 .markdown-body :is(h1, h2) { border-bottom-color: var(--vscode-panel-border); }
 .markdown-body code { border-radius: 4px; }
-
-/* Code-mode submissions still need a monospace source display. */
-.turn-section:has(> summary > .turn-mode[data-mode="code"]) .dext-source {
-  font-family: var(--vscode-editor-font-family);
-}
 
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
@@ -3277,6 +3365,30 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
 .markdown-code-copy:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
+}
+
+/* The answer's copy control floats over its top-right corner and appears on
+   hover or keyboard focus, like the rest of the row controls. */
+.turn-output > :is(.copy-button, .output-copy),
+.turn-output > .output-copy.icon-button {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.turn-output:hover > :is(.copy-button, .output-copy),
+.turn-output:hover > .output-copy.icon-button,
+.turn-output:focus-within > :is(.copy-button, .output-copy),
+.turn-output:focus-within > .output-copy.icon-button,
+.turn-output > :is(.copy-button, .output-copy):focus-visible,
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-output > :is(.copy-button, .output-copy),
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-output > .output-copy.icon-button {
+  opacity: 1;
 }
 
 .markdown-body .markdown-code-block {
@@ -3451,7 +3563,7 @@ pre {
 }
 
 /* Command labels are single-line so a long shell invocation truncates instead of
- * pushing the chevron out of view. */
+ * pushing the chevron out of view. The tool name is mono, the row is prose. */
 .agent-stream-summary-label,
 .agent-trace-command-label {
   flex: 0 1 auto;
@@ -3459,12 +3571,15 @@ pre {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
 }
 
 .agent-trace-glyph {
   flex: none;
-  font-size: 14px;
-  opacity: 0.8;
+  font-size: 11px;
+  color: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground));
+  opacity: 0.9;
 }
 
 .agent-stream-item.agent-trace-tool > summary > .disclosure-chevron,
@@ -3478,16 +3593,17 @@ pre {
   margin: 3px 0 6px 18px;
 }
 
+/* A step's output is part of the timeline, not a card of its own. */
 .agent-trace-command-body {
   max-height: 320px;
   margin: 0;
-  padding: 8px 10px;
+  padding: 2px 0 6px;
   overflow: auto;
-  border: 1px solid var(--vscode-widget-border);
-  border-radius: 4px;
-  /* .terminal-output clears the background so ANSI colours win; the panel needs
-   * it back to read as a code block. */
-  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)) !important;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
   white-space: pre-wrap;
 }
 

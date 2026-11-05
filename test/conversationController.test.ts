@@ -99,7 +99,7 @@ describe("ConversationController", () => {
     await h.controller.renameTurn("session", "turn", "Readable name");
     expect(h.history.list()[0]?.turns[0]?.title).toBe("Readable name");
     expect(h.controller.session("session")?.turns[0]?.title).toBe("Readable name");
-    expect(h.messages.at(-1)).toMatchObject({ type: "turnRenamed", displayTitle: "Readable name" });
+    expect(h.messages.at(-1)).toMatchObject({ type: "turnRenamed", title: "Readable name", displayTitle: "Readable name" });
     await h.controller.renameTurn("session", "turn", "");
     expect(h.history.list()[0]?.turns[0]?.title).toBeUndefined();
     expect(h.controller.session("session")?.turns[0]?.title).toBeUndefined();

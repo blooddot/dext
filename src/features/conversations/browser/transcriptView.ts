@@ -18,26 +18,25 @@ import {
   TURN_RENAME_ACTION,
   TURN_RETRY_ACTION,
   presentTurn,
-  type TurnSectionPresentation
+  presentTurnMode,
+  type TurnRenderModel
 } from "../presentation/turnPresentation.js";
-import { renderTurnInput, renderTurnSection } from "../presentation/turnComponents.js";
+import { renderTurnMode, renderTurnOutput, renderTurnSection } from "../presentation/turnComponents.js";
 import { TurnTitle } from "./turnTitle.js";
 import { turnDomAdapter } from "./turnDomAdapter.js";
-
-export type InputMode = "agent" | "ask" | "plan" | "code";
 
 export interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
   title: TurnTitle;
+  /** The spinner that owns the leading slot while this turn runs. */
+  runningIcon: HTMLElement;
   planExecutionStatus?: HTMLElement;
-  input?: HTMLElement;
   process: HTMLElement;
   processDisclosure: HTMLDetailsElement;
   processMeta?: HTMLElement;
   todos: AgentTodoView;
   questions: AgentInputView;
   output: HTMLElement;
-  outputDisclosure: HTMLDetailsElement;
   /** The whole-section copy controls live in the title bar. Their payloads are
    * filled in as the turn streams or when a stored turn is hydrated. */
   setProcessCopy?: (text: string) => void;
@@ -82,10 +81,9 @@ export interface TranscriptHost {
   createTodos(): AgentTodoView;
   createQuestions(turnId: string, sessionId: string | undefined): AgentInputView;
   openReference(reference: ContextReferenceOccurrence): void;
-  syncResultToggle(): void;
   /** Optional composer grammar highlighter, injected by the browser entry so this
    * module never imports the webview implementation. */
-  colorizeSource?(pre: HTMLElement): void;
+  colorizeSource?(element: HTMLElement): void;
 }
 
 /**
@@ -146,13 +144,18 @@ export class TranscriptView {
     const { document } = this.host;
     source = normalizeInputReferenceSource(source);
     const lazy = options.lazy === true;
-    const turnPresentation = presentTurn({ source, mode: options.mode, hideInput: options.executePlan });
+    const turnPresentation = presentTurn({});
     for (const turn of this.turns.values()) turn.disclosure.open = false;
     const disclosure = document.createElement("details");
     disclosure.className = "output-turn";
     disclosure.open = options.open ?? !lazy;
     disclosure.dataset.turnId = turnId;
     const summary = document.createElement("summary");
+    const runningIcon = document.createElement("i");
+    runningIcon.className = "turn-running codicon codicon-loading codicon-modifier-spin";
+    runningIcon.hidden = true;
+    runningIcon.title = "Dext turn running";
+    runningIcon.setAttribute("aria-label", "Dext turn running");
     const chevron = document.createElement("i");
     chevron.className = "disclosure-chevron codicon codicon-chevron-right";
     const time = document.createElement("span");
@@ -160,13 +163,34 @@ export class TranscriptView {
     time.textContent = new Date(createdAt).toLocaleTimeString();
     const title = document.createElement("span");
     title.className = "output-turn-title";
-    const defaultTitle = options.executePlan && options.planPath
-      ? `Plan: ${options.planPath.split("/").pop() ?? options.planPath}`
-      : inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
-    const turnTitle = new TurnTitle(title, defaultTitle, options.title);
+    const titleName = document.createElement("span");
+    titleName.className = "output-turn-title-name";
+    title.append(titleName);
+    const sourceLabel = inputReferenceDisplayText(source);
+    const defaultTitle = options.executePlan
+      ? `Plan: ${options.planPath?.split("/").pop() ?? ""}`.trim() || "Dext turn"
+      : sourceLabel.split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
+    // The prompt is the row label: one clipped line closed, all of it open. It
+    // never repeats in the body below.
+    let prompt: HTMLSpanElement | undefined;
+    if (!options.executePlan && sourceLabel) {
+      prompt = document.createElement("span");
+      prompt.className = "output-turn-prompt";
+      for (const part of inputReferenceDisplayParts(source)) {
+        prompt.append(part.kind === "ref" ? this.referenceChip(part.reference) : document.createTextNode(part.value));
+      }
+      // Code was written by the reader as source, so it keeps the composer's
+      // colors; prose stays prose.
+      if (options.mode === "code") {
+        title.classList.add("code-prompt");
+        this.host.colorizeSource?.(prompt);
+      }
+      title.append(prompt);
+    }
+    const turnTitle = new TurnTitle(titleName, defaultTitle, options.title, prompt);
     const sessionId = options.sessionId ?? this.host.activeSessionId();
     // Scope native actions to this title only, leaving selection menus in the
-    // Input, Process and Output bodies intact. Refresh at invocation so cached
+    // Process and Output bodies intact. Refresh at invocation so cached
     // rows and completed executions cannot retain stale running-state flags.
     const updateContext = (): void => {
       summary.dataset.vscodeContext = JSON.stringify({
@@ -219,20 +243,9 @@ export class TranscriptView {
     planExecutionStatus.className = "plan-status";
     planExecutionStatus.hidden = !options.executePlan;
     planExecutionStatus.textContent = "Running";
-    summary.append(chevron, title, planExecutionStatus, time, actions);
-    let inputBody: HTMLElement | undefined;
-    if (turnPresentation.input) {
-      // The source is known as soon as the row exists, so Input can offer its
-      // copy control from the title bar even before a lazy body hydrates.
-      const input = this.section(turnPresentation.input, true, this.host.copy(source));
-      input.disclosure.open = !lazy;
-      inputBody = input.body;
-      if (!lazy) {
-        const inputText = this.renderInputSource(source, options.mode);
-        input.body.append(renderTurnInput(turnDomAdapter(document), inputText));
-      }
-      body.append(input.disclosure);
-    }
+    summary.append(runningIcon, chevron, title,
+      ...(options.executePlan ? [] : [renderTurnMode(turnDomAdapter(document), presentTurnMode(options.mode))]),
+      planExecutionStatus, time);
     // Process and Output fill in as events stream, so their copy payloads are
     // read when clicked instead of being fixed at row creation.
     const processCopyText = { value: "" };
@@ -242,28 +255,30 @@ export class TranscriptView {
     const outputCopy = this.host.copyLive(() => outputCopyText.value);
     outputCopy.hidden = true;
     // Process is a timeline the reader opens on demand, never the default view
-    // of a new turn. While the turn runs, its summary still carries the live
-    // "Worked for" duration and event count, and expanding it mid-run keeps
-    // appending events at the live end.
+    // of a new turn. Its single "Worked" line keeps updating while it runs.
     const process = this.section(turnPresentation.process, false, processCopy);
     const todos = this.host.createTodos();
     const questions = this.host.createQuestions(turnId, this.host.activeSessionId());
-    const output = this.section(turnPresentation.output, !lazy, outputCopy);
-    body.append(todos.element, questions.element, process.disclosure, output.disclosure);
+    const output = renderTurnOutput(turnDomAdapter(document), [], outputCopy);
+    body.append(todos.element, questions.element, process.disclosure, output.section);
     disclosure.append(summary, body);
+    // An open turn keeps its actions over the short Worked line instead of
+    // covering the prompt, which is the row label now.
+    const hostActions = (): void => { (disclosure.open ? body : summary).append(actions); };
+    hostActions();
+    disclosure.addEventListener("toggle", hostActions);
     this.host.result.append(disclosure);
     const turn: OutputTurnElements = {
       disclosure,
       title: turnTitle,
+      runningIcon,
       planExecutionStatus,
-      ...(inputBody ? { input: inputBody } : {}),
       process: process.body,
       processDisclosure: process.disclosure,
       processMeta: process.meta,
       todos,
       questions,
       output: output.body,
-      outputDisclosure: output.disclosure,
       setProcessCopy: (text: string) => {
         processCopyText.value = text;
         processCopy.hidden = text.length === 0;
@@ -276,11 +291,10 @@ export class TranscriptView {
     };
     this.turns.set(turnId, turn);
     this.active = turn;
-    this.host.syncResultToggle();
     return turn;
   }
 
-  private section(section: TurnSectionPresentation, open: boolean, action?: HTMLElement): {
+  private section(section: TurnRenderModel["process"], open: boolean, action?: HTMLElement): {
     disclosure: HTMLDetailsElement;
     body: HTMLElement;
     meta: HTMLElement;
@@ -291,36 +305,14 @@ export class TranscriptView {
     return { ...view, disclosure: view.disclosure as HTMLDetailsElement };
   }
 
-  private referenceIcon(kind: ContextReferenceOccurrence["kind"]): string {
-    if (kind === "dir") return "folder";
-    if (kind === "symbol") return "symbol-method";
-    return "file";
-  }
-
-  /** Renders readable @path tokens as the same chips used by the editor.
-   * The source remains unchanged for copy and history replay. A Code turn's text is
-   * colorized with the composer's own grammar and theme; the chips stay where they are. */
-  renderInputSource(source: string, mode?: InputMode): HTMLPreElement {
-    const { document } = this.host;
-    const pre = document.createElement("pre");
-    pre.className = "dext-source";
-    for (const part of inputReferenceDisplayParts(source)) {
-      pre.append(part.kind === "ref" ? this.inputReferenceChipElement(part.reference) : document.createTextNode(part.value));
-    }
-    if (mode === "code") this.host.colorizeSource?.(pre);
-    return pre;
-  }
-
-  private inputReferenceChipElement(reference: ContextReferenceOccurrence): HTMLElement {
-    const descriptor = fileReferenceChipDescriptor(
-      contextReferenceLabel(reference),
-      reference.payload
-    );
+  /** The prompt's @path tokens stay readable chips, at prose size. */
+  private referenceChip(reference: ContextReferenceOccurrence): HTMLElement {
+    const descriptor = fileReferenceChipDescriptor(contextReferenceLabel(reference), reference.payload);
     return createFileReferenceChip({
       document: this.host.document,
       ...descriptor,
-      modifierClass: "output-file-reference",
-      icon: this.referenceIcon(reference.kind),
+      modifierClass: "turn-prompt-reference",
+      icon: reference.kind === "dir" ? "folder" : reference.kind === "symbol" ? "symbol-method" : "file",
       ...(reference.kind === "file" ? { onOpen: () => this.host.openReference(reference) } : {})
     });
   }

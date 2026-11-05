@@ -36,29 +36,11 @@ export function presentTurnMode(mode?: TurnMode): TurnModePresentation {
   };
 }
 
-export type TurnSectionKind = "input" | "process" | "output";
-
-/** The common immutable shape of the three turn sections.
- *
- * History renders this model to safe HTML in the extension host, while the
- * Conversation renders it to DOM and then adds live stream state. Keeping the
- * state-free part here prevents their section labels, mode chips, and timing
- * policy from drifting apart. */
-export interface TurnInputPresentation {
-  kind: "input";
-  label: "Input";
-  source: string;
-  mode: TurnModePresentation;
-}
-
-export type TurnSectionPresentation = TurnInputPresentation
-  | { kind: "process"; label: "Process"; detail?: string }
-  | { kind: "output"; label: "Output" };
-
+/** The state-free part of a turn both renderers share: one `Worked` line and the
+ * answer below it. Neither has a decorative heading of its own. */
 export interface TurnRenderModel {
-  input?: TurnInputPresentation;
-  process: TurnSectionPresentation & { kind: "process"; label: "Process" };
-  output: TurnSectionPresentation & { kind: "output"; label: "Output" };
+  process: { kind: "process"; detail?: string };
+  output: { kind: "output" };
 }
 
 /** Use the same provider-reported count during streaming and after replay. */
@@ -106,15 +88,12 @@ export function updateTurnTokenUsage(previous: AgentTokenUsage | undefined, next
 }
 
 export function presentTurn(options: {
-  source: string;
-  mode?: TurnMode | undefined;
-  hideInput?: boolean | undefined;
   durationMs?: number | undefined;
   process?: readonly AgentStreamEvent[] | undefined;
 }): TurnRenderModel {
   const duration = options.durationMs;
   const timing = duration !== undefined && Number.isFinite(duration) && duration > 0
-    ? `Worked for ${formatDuration(duration)}` : "";
+    ? `Worked ${formatDuration(duration)}` : "";
   // Usage events are snapshots, just like the live header: keep the latest
   // report instead of adding repeated updates or cached input a second time.
   let usage: AgentTokenUsage | undefined;
@@ -123,11 +102,8 @@ export function presentTurn(options: {
   }
   const detail = [timing, formatTurnTokenUsage(usage)].filter(Boolean).join(" · ");
   return {
-    ...(options.hideInput ? {} : {
-      input: { kind: "input", label: "Input", source: options.source, mode: presentTurnMode(options.mode) }
-    }),
-    process: { kind: "process", label: "Process", ...(detail ? { detail } : {}) },
-    output: { kind: "output", label: "Output" }
+    process: { kind: "process", ...(detail ? { detail } : {}) },
+    output: { kind: "output" }
   };
 }
 

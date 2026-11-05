@@ -178,9 +178,7 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --dext-plan-label: #6f5800;
   --dext-full-access-accent: #7f4338;
   --dext-row-action-background: #fffaf1;
-  --dext-turn-surface: #efe7d9;
   --dext-quiet-divider: #d8cbb8;
-  --dext-record-border: transparent;
   --resource-api-accent: #1769b5;
   --resource-mcp-accent: #7546b6;
   --resource-rule-accent: #886000;
@@ -329,9 +327,7 @@ body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast
   --dext-plan-label: #e0c34c;
   --dext-full-access-accent: #d99a8f;
   --dext-row-action-background: #252526;
-  --dext-turn-surface: #29251f;
   --dext-quiet-divider: #3a342b;
-  --dext-record-border: transparent;
   --resource-api-accent: #79b8ff;
   --resource-mcp-accent: #c2a3ff;
   --resource-rule-accent: #dfb45c;

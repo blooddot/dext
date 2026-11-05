@@ -144,7 +144,7 @@ describe("agent task progress", () => {
     const html = renderHistoryRecord(turn);
     expect(html).toContain("New title");
     expect(html).not.toContain("Old title");
-    expect(html.indexOf(">Todo</span>")).toBeLessThan(html.indexOf(">Process</span>"));
+    expect(html.indexOf(">Todo</span>")).toBeLessThan(html.indexOf("data-turn-section=\"process\""));
     expect(html).toContain("Paused");
     expect(html).not.toContain("codicon-modifier-spin");
     expect(renderHistoryRecord({ ...turn, process: [agentTodoEvent([])] })).not.toContain(">Todo</span>");

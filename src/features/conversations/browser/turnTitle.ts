@@ -3,9 +3,12 @@
  * a title without the renderer reaching into the live DOM tree. */
 export class TurnTitle {
   constructor(
-    private readonly element: Pick<HTMLElement, "textContent">,
+    private readonly element: Pick<HTMLElement, "textContent" | "hidden">,
     private fallback: string,
-    private name?: string
+    private name?: string,
+    /** The rendered prompt. Without a name it is the row label itself, so the
+     * name element stays hidden instead of repeating it. */
+    private readonly prompt?: object
   ) {
     this.render();
   }
@@ -23,5 +26,6 @@ export class TurnTitle {
 
   private render(): void {
     this.element.textContent = this.name || this.fallback;
+    this.element.hidden = !this.name && this.prompt !== undefined;
   }
 }

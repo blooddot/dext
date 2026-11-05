@@ -4,16 +4,11 @@ import type { DextResult } from "../src/shared/contracts/types.js";
 import { TurnTitle } from "../src/features/conversations/browser/turnTitle.js";
 
 describe("turn title presentation", () => {
-  it("keeps the shared Input, Process, and Output presentation stable", () => {
-    expect(presentTurn({ source: "prompt", mode: "agent", durationMs: 1_234 })).toEqual({
-      input: {
-        kind: "input", label: "Input", source: "prompt",
-        mode: { value: "agent", label: "Agent", title: "Submitted in Agent mode" }
-      },
-      process: { kind: "process", label: "Process", detail: "Worked for 1s234ms" },
-      output: { kind: "output", label: "Output" }
+  it("keeps the shared Process and Output presentation stable", () => {
+    expect(presentTurn({ durationMs: 1_234 })).toEqual({
+      process: { kind: "process", detail: "Worked 1s234ms" },
+      output: { kind: "output" }
     });
-    expect(presentTurn({ source: "internal", hideInput: true }).input).toBeUndefined();
   });
 
   it("distinguishes editing input from renaming the title", () => {
@@ -27,9 +22,9 @@ describe("turn title presentation", () => {
       { phase: "status" as const, text: "", usage: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 234 } },
       { phase: "message" as const, text: "Done" }
     ];
-    expect(presentTurn({ source: "prompt", durationMs: 1_234, process }).process.detail)
-      .toBe("Worked for 1s234ms · 1.2k tokens");
-    expect(presentTurn({ source: "prompt", process }).process.detail).toBe("1.2k tokens");
+    expect(presentTurn({ durationMs: 1_234, process }).process.detail)
+      .toBe("Worked 1s234ms · 1.2k tokens");
+    expect(presentTurn({ process }).process.detail).toBe("1.2k tokens");
   });
 
   it("keeps billed usage when a later snapshot only carries context occupancy", () => {
@@ -37,7 +32,7 @@ describe("turn title presentation", () => {
       { phase: "status" as const, text: "", usage: { totalTokens: 900 } },
       { phase: "status" as const, text: "", usage: { contextTokens: 12_345, contextWindowTokens: 1_000_000 } }
     ];
-    expect(presentTurn({ source: "prompt", process }).process.detail).toBe("900 tokens");
+    expect(presentTurn({ process }).process.detail).toBe("900 tokens");
   });
 
   it.each([
@@ -60,7 +55,7 @@ describe("turn title presentation", () => {
 
   it("does not invent elapsed time when a stored duration is unavailable or invalid", () => {
     for (const durationMs of [undefined, 0, -1, NaN, Infinity]) {
-      expect(presentTurn({ source: "prompt", durationMs }).process.detail).toBeUndefined();
+      expect(presentTurn({ durationMs }).process.detail).toBeUndefined();
     }
   });
 
@@ -73,7 +68,7 @@ describe("turn title presentation", () => {
   });
 
   it("restores a stored name and preserves it when a Plan turn is hydrated", () => {
-    const label = { textContent: "" };
+    const label = { textContent: "", hidden: false };
     const title = new TurnTitle(label, "Original input", "My title");
     expect(label.textContent).toBe("My title");
     title.setPlanPath(".dext/plans/implementation.md");
@@ -83,7 +78,7 @@ describe("turn title presentation", () => {
   });
 
   it("keeps renamed cached titles through later hydration and restores the original on reset", () => {
-    const label = { textContent: "" };
+    const label = { textContent: "", hidden: false };
     const title = new TurnTitle(label, "Original input");
     title.rename('<New & "title">', "Original input");
     expect(label.textContent).toBe('<New & "title">');
@@ -93,5 +88,20 @@ describe("turn title presentation", () => {
     expect(label.textContent).toBe("Original input");
     title.setPlanPath(".dext/plans/plan.md");
     expect(label.textContent).toBe("Plan: plan.md");
+  });
+
+  it("uses the prompt as the label until a name is given", () => {
+    const label = { textContent: "", hidden: false };
+    const title = new TurnTitle(label, "first line", undefined, {});
+    expect(label.hidden).toBe(true);
+    title.rename("Custom name", "first line");
+    expect(label.hidden).toBe(false);
+    expect(label.textContent).toBe("Custom name");
+    title.rename(undefined, "first line");
+    expect(label.hidden).toBe(true);
+    // A Plan turn has no prompt element, so its Plan label always shows.
+    const plan = { textContent: "", hidden: true };
+    new TurnTitle(plan, "Plan: a.md");
+    expect(plan.hidden).toBe(false);
   });
 });

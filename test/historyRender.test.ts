@@ -73,7 +73,7 @@ describe("Dext history rendering", () => {
     expect(html).toContain("Custom &lt;answer&gt;");
     expect(html).not.toContain("private-value");
     expect(html).not.toContain("<form");
-    expect(html.indexOf("agent-input-card")).toBeLessThan(html.indexOf("<span>Process</span>"));
+    expect(html.indexOf("agent-input-card")).toBeLessThan(html.indexOf('data-turn-section="process"'));
   });
   it("keeps every choice a submitted form offered, marking what was picked", () => {
     const form = parseUiForm({ title: "Question", fields: [{
@@ -149,12 +149,16 @@ describe("Dext history rendering", () => {
 
   it.each([
     ["agent", "Agent"], ["ask", "Ask"], ["plan", "Plan"], ["code", "Code"], [undefined, "Unknown"]
-  ] as const)("shows the recorded input mode %s without changing the copied prompt", (mode, label) => {
+  ] as const)("shows the recorded input mode %s without repeating the prompt", (mode, label) => {
     const turn: DextHistoryRecord = { id: "turn", createdAt: 1, input: "prompt", output: "answer", process: [], ...(mode ? { mode } : {}) };
     const html = renderHistoryRecord(turn, "session");
-    expect(html).toContain(`<span>Input</span><span class="turn-mode" data-mode="${mode ?? "unknown"}"`);
-    expect(html).toContain(`>${label}</span>`);
-    if (!mode) expect(html).toContain("Mode was not recorded for this turn");
+    const summary = html.slice(0, html.indexOf("</summary>"));
+    // The prompt is the row label itself, so it is rendered once inside it.
+    expect(summary).toContain(`<span class="output-turn-title${mode === "code" ? " code-prompt" : ""}"><span class="output-turn-title-name" hidden>prompt</span><span class="output-turn-prompt">prompt</span></span><span class="turn-mode" data-mode="${mode ?? "unknown"}"`);
+    expect(summary).toContain(`>${label}</span>`);
+    if (!mode) expect(summary).toContain("Mode was not recorded for this turn");
+    const body = html.slice(html.indexOf("</summary>"));
+    expect(body).not.toContain("prompt");
     expect(historyTurnMarkdown(turn)).toContain("### Input\n\nprompt");
   });
 
@@ -186,8 +190,8 @@ describe("Dext history rendering", () => {
   it("renders an escaped custom turn title without renaming the parent or changing the copied input", () => {
     const turn: DextHistoryRecord = { id: "turn-1", title: '<New & "name">', createdAt: 1, input: "original question", output: "answer", process: [] };
     const html = renderHistorySession({ id: "session-1", createdAt: 1, updatedAt: 1, turns: [turn] });
-    expect(html).toContain('class="history-summary-input named">&lt;New &amp; &quot;name&quot;&gt;</span>');
-    expect(html.slice(0, html.indexOf("</summary>"))).toContain("original question");
+    expect(html).toContain('class="output-turn-title"><span class="output-turn-title-name">&lt;New &amp; &quot;name&quot;&gt;</span><span class="output-turn-prompt">original question</span>');
+    expect(html.slice(html.lastIndexOf("</summary>"))).not.toContain("original question");
     expect(historyTurnTitle(turn)).toBe(turn.title);
     expect(historyTurnTitle({ ...turn, title: "" })).toBe("original question");
     expect(historyTurnMarkdown(turn, 2)).toContain("## Turn 3");
@@ -307,13 +311,13 @@ describe("Dext history rendering", () => {
       }
     };
     const html = renderHistoryRecord(record);
-    expect(html).toContain('Worked for 1s234ms · 1.2k tokens');
+    expect(html).toContain('Worked 1s234ms · 1.2k tokens');
     const output = html.slice(html.indexOf('data-turn-section="output"'));
     expect(output).not.toContain("1s234ms");
     expect(output).not.toContain("tokens");
-    const outputSummary = output.slice(0, output.indexOf("</summary>"));
-    expect(outputSummary).toContain('class="turn-section-actions"');
-    expect(outputSummary).toContain('data-copy="hello"');
+    // Output has no head of its own; the copy control floats over the answer.
+    expect(output).not.toContain("<summary");
+    expect(output).toContain('data-copy="hello"');
     expect(output.match(/data-copy="hello"/g)).toHaveLength(1);
   });
 
@@ -608,108 +612,39 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("40499 ms");
   });
 
-  it("renders readable @ reference tokens as Chips while retaining raw copy source", () => {
-    const token = "@src/pathx.py#L55,1-L66,32";
+  it("renders reference tokens as their readable labels in the row title", () => {
     const record: DextHistoryRecord = {
-      id: "reference",
-      createdAt: 1,
-      input: 'agent(input="Explain ' + token + '")',
-      process: [],
-      output: ""
+      id: "reference", createdAt: 1, input: 'agent(input="Explain @src/pathx.py#L55,1-L66,32")', process: [], output: ""
     };
-
     const html = renderHistoryRecord(record);
-    expect(html).toContain("history-file-reference");
-    expect(html).toContain("pathx.py 55-66");
-    expect(html).toContain(token);
+    expect(html).toContain("agent(input=&quot;Explain pathx.py 55-66&quot;)");
+    // The prompt itself keeps a clickable chip with the same readable label.
+    expect(html).toContain('class="attachment-chip turn-prompt-reference"');
+    expect(html).toContain('data-open-file-reference="src/pathx.py#L55,1-L66,32"');
   });
 
-  it("does not syntax-highlight conversational prose in history input", () => {
-    const attachment = "@.dext-global/attachments/0123456789abcdef01234567.png";
+  it("keeps ordinary prose and attachment references readable without syntax highlighting", () => {
     const record: DextHistoryRecord = {
-      id: "plain-prose",
-      createdAt: 1,
-      input: `${attachment} 还有Build按钮要不要改成plan的主题色（深金色）?`,
-      process: [],
-      output: ""
+      id: "plain-prose", createdAt: 1,
+      input: "@.dext-global/attachments/0123456789abcdef01234567.png 还有Build按钮要不要改成plan的主题色（深金色）?",
+      process: [], output: ""
     };
-
     const html = renderHistoryRecord(record);
-    expect(html).toContain("还有Build按钮要不要改成plan的主题色");
-    expect(html).toContain("history-file-reference");
+    expect(html).toContain("0123456789abcdef01234567.png 还有Build按钮要不要改成plan的主题色");
     expect(html).not.toContain("tok-variableName");
     expect(html).not.toContain("tok-keyword");
   });
 
-  it("renders code-mode Input as escaped plain text", () => {
+  it("renders trailing-slash directory references as their folder name", () => {
     const record: DextHistoryRecord = {
-      id: "highlighted-input",
-      createdAt: 1,
-      input: 'ui.select(label="Pick", options=["one", "two"], multiple=True)',
-      process: [],
-      output: ""
+      id: "directory-reference", createdAt: 1, input: 'ask(input="Inspect @src/components/")', process: [], output: ""
     };
-
     const html = renderHistoryRecord(record);
-    expect(html).toContain("ui.select(label=&quot;Pick&quot;, options=[&quot;one&quot;, &quot;two&quot;], multiple=True)");
-    expect(html).not.toContain('class="tok-');
-  });
-
-  it("renders recorded Code mode and Ask input as the same escaped text", () => {
-    const record: DextHistoryRecord = { id: "turn", createdAt: 1, mode: "code", input: '# comment\nif True:\n    print(text="<ok>")', process: [], output: "" };
-    const code = renderHistoryRecord(record);
-    expect(code).toContain("# comment");
-    expect(code).toContain("if True:");
-    expect(code).toContain("print(text=&quot;&lt;ok&gt;&quot;)");
-    expect(code).not.toContain('class="tok-');
-    const prose = renderHistoryRecord({ ...record, mode: "ask", input: 'print(text="Please explain")' });
-    expect(prose).toContain("print(text=&quot;Please explain&quot;)");
-    expect(prose).not.toContain('class="tok-');
-  });
-
-  it("renders image attachments as ordinary file reference Chips", () => {
-    const path = ".dext/attachments/0123456789abcdef01234567.png";
-    const record: DextHistoryRecord = {
-      id: "image-reference",
-      createdAt: 1,
-      input: `ask(input="Inspect @${path}")`,
-      process: [],
-      output: ""
-    };
-
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("data-open-file-reference");
-    expect(html).toContain("0123456789abcdef01234567.png");
-    expect(html).not.toContain("data-open-image-attachment");
-  });
-
-  it("renders trailing-slash directory references as folder Chips", () => {
-    const record: DextHistoryRecord = {
-      id: "directory-reference",
-      createdAt: 1,
-      input: 'ask(input="Inspect @src/components/")',
-      process: [],
-      output: ""
-    };
-
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("history-file-reference");
+    // The prompt renders the directory as a read-only chip, not plain text.
+    expect(html).toContain('class="attachment-chip turn-prompt-reference"');
     expect(html).toContain("codicon-folder");
     expect(html).toContain("components");
     expect(html).not.toContain("data-open-file-reference");
-  });
-
-  it("renders source separators around file reference Chips", () => {
-    const record: DextHistoryRecord = {
-      id: "inline-reference",
-      createdAt: 1,
-      input: 'ask(input="before @src/a.ts after")',
-      process: [],
-      output: ""
-    };
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("before <span class=\"attachment-chip");
-    expect(html).toContain("</span> after");
   });
 
   it("groups continuous turns under one collapsible conversation", () => {

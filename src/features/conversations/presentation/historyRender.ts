@@ -1,13 +1,13 @@
 import { answerChoices, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerFieldPresentation } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "../domain/historyResponse.js";
-import { renderTurnSection, renderTurnInput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
+import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession } from "../contracts/history.js";
 import {
-  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn, resultCopyText,
-  type TurnSectionPresentation
+  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn,
+  presentTurnMode, resultCopyText, type TurnRenderModel
 } from "./turnPresentation.js";
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
 import { prepareHistoryTrace } from "../domain/agentTraceReplay.js";
@@ -51,7 +51,7 @@ function copyButton(value: string): string {
 
 /** Thin host adapter; shared components own section structure and result dispatch. */
 function historyTurnSection(
-  section: TurnSectionPresentation, body: string,
+  section: TurnRenderModel["process"], body: string,
   options: { open?: boolean; action?: string } = {}
 ): string {
   const action = options.action === undefined ? undefined : { html: options.action };
@@ -121,27 +121,17 @@ function referenceIcon(reference: ContextReferenceOccurrence): string {
   return "file";
 }
 
-/** History keeps readable source for copy/replay and renders @path tokens as
- * Chips in the rendered view. */
-function inputReferenceChip(reference: ContextReferenceOccurrence): string {
-  const label = contextReferenceLabel(reference);
-  const title = escapeHtml(reference.payload);
-  const open = reference.kind === "file"
-    ? ` data-open-file-reference="${title}"`
-    : "";
-  return `<span class="attachment-chip history-file-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${escapeHtml(label)}" aria-label="Open ${escapeHtml(label)}"${open}><i class="codicon codicon-${referenceIcon(reference)}"></i><span class="attachment-label">${escapeHtml(label)}</span></button></span>`;
-}
-
-function plainInputSource(source: string): string {
-  return inputReferenceDisplayParts(source).map((part) => part.kind === "ref"
-    ? inputReferenceChip(part.reference)
-    : escapeHtml(part.value)
-  ).join("");
-}
-
-/** References stay chips; everything around them is escaped text. */
+/** The prompt keeps readable @path tokens as chips; everything around them is
+ * escaped text. The raw source is preserved for copy and history replay. */
 function renderedInputSource(source: string): string {
-  return plainInputSource(normalizeInputReferenceSource(source));
+  return inputReferenceDisplayParts(source).map((part) => {
+    if (part.kind === "text") return escapeHtml(part.value);
+    const reference = part.reference;
+    const label = contextReferenceLabel(reference);
+    const title = escapeHtml(reference.payload);
+    const open = reference.kind === "file" ? ` data-open-file-reference="${title}"` : "";
+    return `<span class="attachment-chip turn-prompt-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${escapeHtml(label)}" aria-label="Open ${escapeHtml(label)}"${open}><i class="codicon codicon-${referenceIcon(reference)}"></i><span class="attachment-label">${escapeHtml(label)}</span></button></span>`;
+  }).join("");
 }
 
 function resultBody(result: DextResult, patchApplication?: RuntimeResponse["patchApplication"]): string {
@@ -201,7 +191,7 @@ function commandLabel(event: AgentStreamEvent): string {
 }
 
 function commandRow(event: AgentStreamEvent, className = "process-command"): string {
-  return `<details class="history-disclosure ${className}"><summary>${chevron()}<span>${escapeHtml(commandLabel(event))}</span></summary><pre class="terminal-text">${highlightTerminal(event.text)}</pre></details>`;
+  return `<details class="history-disclosure ${className}"><summary>${chevron()}<i class="codicon codicon-check agent-trace-glyph"></i><span class="agent-trace-command-label">${escapeHtml(commandLabel(event))}</span></summary><pre class="terminal-text">${highlightTerminal(event.text)}</pre></details>`;
 }
 
 function process(events: readonly AgentStreamEvent[]): { html: string; copyText: string } {
@@ -301,24 +291,30 @@ function dateLabel(timestamp: number): string {
 const TURN_ACTION_HINT = "Right-click for turn actions";
 const SESSION_ACTION_HINT = "Right-click for conversation actions";
 
-export function historyTurnTitle(record: DextHistoryRecord): string {
-  if (record.title) return record.title;
+/** The prompt a turn is read by: the Plan it ran, or its whole input. */
+export function historyTurnLabel(record: DextHistoryRecord): string {
   const planExecution = parsedResponse(record)?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
   const planPath = (record.executePlan ? record.planPath : undefined)
     ?? (planExecution?.result.kind === "plan" ? planExecution.result.planPath : undefined);
-  return planPath
-    ? `Plan: ${planPath.split("/").pop() ?? planPath}`
-    : inputReferenceDisplayText(normalizeInputReferenceSource(record.input)).split(/\r?\n/, 1)[0]!.slice(0, 140);
+  if (planPath) return `Plan: ${planPath.split("/").pop() ?? planPath}`;
+  return inputReferenceDisplayText(normalizeInputReferenceSource(record.input));
+}
+
+/** The name a renamed turn shows; without one the rendered prompt is the label. */
+export function historyTurnTitle(record: DextHistoryRecord): string {
+  return record.title || historyTurnLabel(record).split(/\r?\n/, 1)[0]!.slice(0, 140);
 }
 
 export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
-  const input = normalizeInputReferenceSource(record.input);
   const response = parsedResponse(record);
   const planExecution = response?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
   const executePlan = record.executePlan || !!planExecution;
-  const firstLine = historyTurnTitle(record);
+  // An executed Plan keeps its own label and hides the instruction it was given.
+  const promptHtml = executePlan ? "" : `<span class="output-turn-prompt">${renderedInputSource(record.input)}</span>`;
+  const modeHtml = executePlan ? "" : renderTurnMode(turnHtmlAdapter, presentTurnMode(record.mode)).html;
+  const titleClass = `output-turn-title${record.mode === "code" ? " code-prompt" : ""}`;
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
-  const turn = presentTurn({ source: input, mode: record.mode, hideInput: executePlan, durationMs: duration, process: record.process });
+  const turn = presentTurn({ durationMs: duration, process: record.process });
   const processView = process(record.process);
   const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
   const outputHtml = record.error
@@ -336,21 +332,14 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
     : "";
   const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
-  const inputHtml = turn.input
-    ? historyTurnSection(turn.input, renderTurnInput(turnHtmlAdapter,
-      { html: `<pre class="dext-source">${renderedInputSource(turn.input.source)}</pre>` }).html,
-    { action: copyButton(turn.input.source) })
-    : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
   const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
   const processSummary = historyTurnSection(turn.process, processView.html, {
     ...(processView.copyText ? { action: copyButton(processView.copyText) } : {})
   });
-  const outputSection = historyTurnSection(turn.output, outputHtml, {
-    open: true,
-    ...(outputCopy ? { action: copyButton(outputCopy) } : {})
-  });
-  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="history-summary-input${record.title ? " named" : ""}">${escapeHtml(firstLine)}</span>${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath)) : ""}</summary><div class="history-record-body">${inputHtml}${todoHtml}${processSummary}${outputSection}</div></details>`;
+  const outputSection = renderTurnOutput(turnHtmlAdapter, [{ html: outputHtml }],
+    outputCopy ? { html: copyButton(outputCopy) } : undefined).section.html;
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="${titleClass}"><span class="output-turn-title-name"${record.title ? "" : " hidden"}>${escapeHtml(historyTurnTitle(record))}</span>${promptHtml}</span>${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath)) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${outputSection}</div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line

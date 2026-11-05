@@ -30,7 +30,6 @@ export interface AgentTraceHost {
   progressState(): string;
   updateProgress(label: string): void;
   revealResult(): void;
-  syncResultToggle(): void;
   requestFrame(callback: FrameRequestCallback): number;
   cancelFrame(handle: number): void;
 }
@@ -206,7 +205,6 @@ export class AgentTraceView {
       this.scheduleMessageRender(item);
     }
     this.host.revealResult();
-    this.host.syncResultToggle();
   }
 
   /** Counts changed files without rendering patch content. */

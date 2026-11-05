@@ -4,7 +4,7 @@ import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
 import { readHistoryResponse } from "../src/features/conversations/domain/historyResponse.js";
 import { formatTurnTokenUsage, presentTurn } from "../src/features/conversations/presentation/turnPresentation.js";
-import { renderTurnInput, renderTurnResult } from "../src/features/conversations/presentation/turnComponents.js";
+import { renderTurnResult } from "../src/features/conversations/presentation/turnComponents.js";
 import { turnDomAdapter } from "../src/features/conversations/browser/turnDomAdapter.js";
 import { formatDuration } from "../src/shared/lib/duration.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
@@ -73,9 +73,8 @@ function harness() {
   let nextFrame = 10;
   const liveItem = { isConnected: true };
   const turn = {
-    input: { childElementCount: 0, append: vi.fn() },
     disclosure: new Disclosure(),
-    processDisclosure: { open: true }, processMeta: { textContent: "" }, outputDisclosure: { open: false },
+    processDisclosure: { open: true }, processMeta: { textContent: "" },
     todos: { setRunning: vi.fn() }, output: { append: vi.fn() }, hydrated: false
   };
   const record = { input: "Historical input", output: "Historical answer", process: [{ phase: "message", id: "shared", text: "Historical trace" }] as AgentStreamEvent[] };
@@ -84,8 +83,7 @@ function harness() {
   trace.queue.push(liveItem);
   const transcript = {
     active: liveTurn,
-    get: vi.fn((turnId: string) => turnId === "history" ? turn : undefined),
-    renderInputSource: vi.fn(() => ({ source: "input" }))
+    get: vi.fn((turnId: string) => turnId === "history" ? turn : undefined)
   };
   const state = {
     agentStream: { live: true }, agentRunStartedAt: 100, agentRunTimer: 42,
@@ -93,7 +91,7 @@ function harness() {
     pendingAgentEventBatches: [{ sessionId: "session", events: [{ phase: "message", text: "live delta" }] }], agentEventBatchFrame: 2
   };
   const context = {
-    readHistoryResponse, presentTurn, renderTurnInput, renderTurnResult, turnDomAdapter, formatDuration, formatTurnTokenUsage,
+    readHistoryResponse, presentTurn, renderTurnResult, turnDomAdapter, formatDuration, formatTurnTokenUsage,
     ...state, turn, record, executing: true, trace, transcript,
     browser: { activeId: "session" },
     scroll: { consumeForcedInitialScroll: () => false, setFollowing: vi.fn(), pin: vi.fn() },
@@ -103,7 +101,7 @@ function harness() {
     document: { createElement: () => ({ append: vi.fn(), setAttribute: vi.fn() }) },
     copyButton: vi.fn(), jsonOutput: vi.fn((text: string) => text),
     renderAgentEvent: vi.fn(), renderAgentMessageItem: vi.fn(),
-    updateAgentProgress: vi.fn(), syncResultToggle: vi.fn(), syncJumpToLatest: vi.fn(),
+    updateAgentProgress: vi.fn(), syncJumpToLatest: vi.fn(),
     pinResultToBottom: vi.fn(), scrollResultToBottom: vi.fn(),
     requestAnimationFrame: (callback: () => void) => { const id = ++nextFrame; frames.set(id, callback); return id; },
     cancelAnimationFrame: vi.fn((id: number) => frames.delete(id)), clearInterval: vi.fn()
@@ -144,27 +142,24 @@ describe("expanding history while a turn is streaming", () => {
     });
     runInNewContext("hydrateOutputTurnOnOpen(event)", context);
     expect(fragments).toEqual(["Recovered **answer**"]);
-    expect(turn.processMeta.textContent).toBe("Worked for 1ms");
+    expect(turn.processMeta.textContent).toBe("Worked 1ms");
     expect(turn.hydrated).toBe(true);
   });
 
-  it("hydrates Input, Process and Output immediately and preserves all live state", () => {
-    const { context, state, turn, transcript, liveTurn } = harness();
+  it("hydrates Process and Output immediately and preserves all live state", () => {
+    const { context, state, turn, liveTurn } = harness();
     context.renderAgentEvent.mockImplementation(() => { context.agentStream = { live: false }; });
     runInNewContext("hydrateOutputTurnOnOpen(event)", context);
     expect(turn.hydrated).toBe(true);
-    // The record carries no mode (legacy), so the source renderer is asked for plain text.
-    expect(transcript.renderInputSource).toHaveBeenCalledWith("Historical input", undefined);
     expect(context.renderAgentEvent).toHaveBeenCalledWith(context.record.process[0]);
     expect(turn.output.append).toHaveBeenCalledWith("Historical answer");
     expect(turn.processDisclosure.open).toBe(false);
-    expect(turn.outputDisclosure.open).toBe(true);
     for (const key of Object.keys(state) as Array<keyof typeof state>) expect(context[key], key).toBe(state[key]);
     expect(context.clearInterval).not.toHaveBeenCalled();
     expect(context.transcript.active).toBe(liveTurn);
     expect(state.agentStream).toBeDefined();
     runInNewContext("hydrateOutputTurnOnOpen(event)", context);
-    expect(transcript.renderInputSource).toHaveBeenCalledOnce();
+    expect(context.renderAgentEvent).toHaveBeenCalledOnce();
   });
 
   it("isolates colliding event IDs and paints history without losing queued live messages", () => {
@@ -190,8 +185,8 @@ describe("expanding history while a turn is streaming", () => {
   });
 
   it("restores the stream after a history rendering error and allows another attempt", () => {
-    const { context, state, turn, transcript, liveTurn } = harness();
-    transcript.renderInputSource.mockImplementationOnce(() => { throw new Error("Render failed"); });
+    const { context, state, turn, liveTurn } = harness();
+    turn.output.append.mockImplementationOnce(() => { throw new Error("Render failed"); });
     expect(() => { runInNewContext("hydrateOutputTurnOnOpen(event)", context); }).toThrow("Render failed");
     expect(turn.hydrated).toBe(false);
     for (const key of Object.keys(state) as Array<keyof typeof state>) expect(context[key], key).toBe(state[key]);

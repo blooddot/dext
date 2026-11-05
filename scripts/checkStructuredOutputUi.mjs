@@ -56,10 +56,11 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   await evaluate(`host({type:'execution',sessionId:'active',turnId:'t1',response:${JSON.stringify(response)}});
     host({type:'executing',value:false,sessionId:'active',turnId:'t1'});`);
   await settle();
-  assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked for .*1\.2k tokens/, 'completed usage');
-  for (const section of ['input', 'process', 'output']) {
-    assert.ok(await evaluate(`document.querySelector('[data-turn-section="${section}"] > summary .output-copy') !== null`), `${section} copy in the title bar`);
-  }
+  assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked .*1\.2k tokens/, 'completed usage');
+  // The prompt is the row body now, so only the process line keeps a title bar.
+  assert.equal(await evaluate(`document.querySelector('[data-turn-section="input"]')`), null, 'no Input section');
+  assert.ok(await evaluate(`document.querySelector('[data-turn-section="process"] > summary .output-copy') !== null`), 'process copy in the line');
+  assert.ok(await evaluate(`document.querySelector('[data-turn-section="output"] > .output-copy') !== null`), 'answer copy over the answer');
   const displayed = await evaluate(`document.querySelector('.json-output-text').textContent`);
   assert.deepEqual(JSON.parse(displayed), JSON.parse(raw));
   assert.equal(await evaluate(`document.querySelectorAll('.json-output strong,.json-output img').length`), 0);
@@ -93,10 +94,9 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   // Re-open the persisted workflow through Conversation's actual hydration path.
   await evaluate(`host({type:'outputSession',hostInitiated:true,session:{id:'active',createdAt:1,updatedAt:2,turns:[${JSON.stringify(record)}]}});`);
   await settle();
-  assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked for 4ms · 1\.2k tokens/, 'reopened usage');
-  for (const section of ['input', 'process', 'output']) {
-    assert.ok(await evaluate(`document.querySelector('[data-turn-section="${section}"] > summary .output-copy') !== null`), `reopened ${section} copy in the title bar`);
-  }
+  assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked 4ms · 1\.2k tokens/, 'reopened usage');
+  assert.ok(await evaluate(`document.querySelector('[data-turn-section="process"] > summary .output-copy') !== null`), 'reopened process copy');
+  assert.ok(await evaluate(`document.querySelector('[data-turn-section="output"] > .output-copy') !== null`), 'reopened answer copy');
   assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
   await click('.json-output .output-copy');
   assert.equal(await evaluate(`messages.findLast(m=>m.type==='clipboardWrite').text`), raw);
@@ -112,9 +112,8 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     await evaluate(`document.getElementById('history-fixture').innerHTML=${JSON.stringify(html)};
       document.querySelectorAll('details').forEach(el=>el.open=true);`);
     assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /1\.2k tokens/, 'History usage including records without duration');
-    for (const section of ['input', 'process', 'output']) {
-      assert.ok(await evaluate(`document.querySelector('[data-turn-section="${section}"] > summary [data-copy]') !== null`), `history ${section} copy in the title bar`);
-    }
+    assert.ok(await evaluate(`document.querySelector('[data-turn-section="process"] > summary [data-copy]') !== null`), 'history process copy');
+    assert.ok(await evaluate(`document.querySelector('[data-turn-section="output"] > [data-copy]') !== null`), 'history answer copy');
     assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
     await click('.json-output [data-copy]');
     assert.equal(await evaluate(`messages.findLast(m=>m.type==='copy').text`), raw, 'history HTML parsing preserves CRLF copy payload');

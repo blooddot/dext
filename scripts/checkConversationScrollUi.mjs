@@ -296,27 +296,36 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
   await settle();
   console.log('PASS a collapsed Process owns no scroll range');
 
-  // A Code turn's input is the code the user wrote, so the conversation paints it with
-  // the same grammar and theme as the composer instead of leaving it as plain text.
+  // The turn row is the only place its prompt is shown: one clipped line while
+  // closed, the whole submission once opened. No separate Input section repeats it.
   await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'code-turn',mode:'code',
     source:'import { commit } from "dext/api/git/commit";\\ncommit()',startedAt:Date.now()})`);
   await settle();
-  const highlighted = await evaluate(`(async()=>{
-    const pres=[...document.querySelectorAll('details.output-turn-section[data-turn-section="input"] pre.dext-source')];
-    const pre=pres.at(-1);
-    if(!pre)return 'no-input';
-    for(let i=0;i<40&&!pre.querySelector('span[class^="mtk"]');i++)await new Promise(r=>setTimeout(r,50));
-    const spans=[...pre.querySelectorAll('span[class^="mtk"]')];
-    return JSON.stringify({spans:spans.length,classes:[...new Set(spans.map(s=>s.className))].slice(0,6),text:pre.innerText});})()`);
-  const codeInput = JSON.parse(highlighted);
-  assert.ok(codeInput.spans > 0, 'a Code turn input is highlighted: ' + highlighted);
-  // Monaco's colorizer paints each line as its own box and writes spaces as `&nbsp;`, so
-  // the visible text is compared with both normalized; the copy button still uses the
-  // original string.
-  assert.equal(codeInput.text.replace(/\u00a0/g, ' ').replace(/\n+$/, ''),
+  const turnRow = await evaluate(`(()=>{
+    const rows=[...document.querySelectorAll('details.output-turn')];
+    const row=rows.at(-1);
+    if(!row)return 'no-row';
+    return JSON.stringify({inputSection:Boolean(row.querySelector('[data-turn-section="input"]')),
+      nameHidden:row.querySelector('.output-turn-title-name')?.hidden,
+      prompt:row.querySelector('.output-turn-prompt')?.textContent});})()`);
+  const codeTurn = JSON.parse(turnRow);
+  assert.equal(codeTurn.inputSection, false, 'the turn repeats no Input section: ' + turnRow);
+  assert.equal(codeTurn.nameHidden, true, 'the prompt itself is the row label: ' + turnRow);
+  assert.equal(codeTurn.prompt.replace(/\u00a0/g, ' ').replace(/\n+$/, ''),
     'import { commit } from "dext/api/git/commit";\ncommit()',
-    'highlighting keeps the authored source: ' + JSON.stringify(codeInput.text));
-  console.log('PASS a Code turn input is highlighted like the composer');
+    'the row holds the whole prompt once: ' + turnRow);
+  // A Code prompt is source, so it keeps the composer's grammar and theme.
+  const highlighted = await evaluate(`(async()=>{
+    const el=[...document.querySelectorAll('details.output-turn .output-turn-prompt')].at(-1);
+    if(!el)return 'no-prompt';
+    for(let i=0;i<40&&!el.querySelector('span[class^="mtk"]');i++)await new Promise(r=>setTimeout(r,50));
+    return JSON.stringify({spans:el.querySelectorAll('span[class^="mtk"]').length,text:el.innerText});})()`);
+  const codePrompt = JSON.parse(highlighted);
+  assert.ok(codePrompt.spans > 0, 'a Code prompt is highlighted: ' + highlighted);
+  assert.equal(codePrompt.text.replace(/\u00a0/g, ' ').replace(/\n+$/, ''),
+    'import { commit } from "dext/api/git/commit";\ncommit()',
+    'highlighting keeps the authored source: ' + JSON.stringify(codePrompt.text));
+  console.log('PASS a turn row carries its prompt without an Input section');
 
   const shot = await send('Page.captureScreenshot');
   await writeFile(join(artifacts, 'conversation-scroll.png'), Buffer.from(shot.data, 'base64'));
