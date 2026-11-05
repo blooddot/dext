@@ -78,6 +78,20 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
   close(Number.parseFloat(fit.zoom), (fit.image[2] / fit.natural[0]) * 100, 1.5, 'the zoom label reports the fit scale');
   console.log(`PASS fit on open ${fit.zoom}`);
 
+  // The note pane exists before the first mark: naming it and saying how to fill
+  // it is what keeps the reserved column from reading as wasted space.
+  const pane = await evaluate(`{const page=document.querySelector('.image-annotator'),list=document.querySelector('.image-annotator-list'),stage=document.querySelector('.image-annotator-stage');
+    ({page:page.getBoundingClientRect().width,list:list.getBoundingClientRect().width,stage:stage.getBoundingClientRect().width,
+      display:getComputedStyle(list).display,head:document.querySelector('.image-annotator-list-head').textContent,
+      hint:document.querySelector('.image-annotator-list-hint')?.textContent ?? ''})}`);
+  assert.notEqual(pane.display, 'none', 'the note column is there before the first mark');
+  assert.equal(pane.head, 'Annotations (0)', 'the empty column names itself');
+  assert.ok(pane.hint.length > 0, 'the empty column says how to fill it');
+  assert.ok(pane.list >= 240 && pane.stage + pane.list <= pane.page, `the stage and the note column share the page: ${JSON.stringify(pane)}`);
+  console.log(`PASS an empty note column (${Math.round(pane.list)}px) is named beside a ${Math.round(pane.stage)}px stage`);
+  const emptyShot = await send('Page.captureScreenshot');
+  await writeFile(join(artifacts, 'annotator-empty.png'), Buffer.from(emptyShot.data, 'base64'));
+
   // Ctrl+wheel keeps the pixel under the pointer where the pointer is. Both axes
   // are checked once the picture overflows them, since a picture smaller than the
   // stage is centred and has no scroll of its own to spend on the anchor.
@@ -109,6 +123,7 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
   const from = [view.stage[0] + view.stage[2] * 0.35, view.stage[1] + view.stage[3] * 0.35];
   await drag(from, [from[0] + 120, from[1] + 80]);
   assert.equal(await evaluate(`document.querySelectorAll('.image-annotator-mark').length`), 1, 'the drag creates one mark');
+  assert.equal(await evaluate(`Boolean(document.querySelector('.image-annotator-list-hint'))`), false, 'the first mark replaces the hint');
   const [mark] = await fractions();
   const firstLabel = (await labels())[0];
   // The host is the only thing that outlives this tab, so every mark has to reach it.

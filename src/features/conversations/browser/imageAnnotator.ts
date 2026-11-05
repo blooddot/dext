@@ -77,7 +77,6 @@ export class ImageAnnotator {
     this.stage.append(this.image, this.layers);
 
     this.list.className = "image-annotator-list";
-    this.list.hidden = true;
     this.error.className = "image-annotator-error";
     this.error.hidden = true;
 
@@ -366,7 +365,12 @@ export class ImageAnnotator {
     const head = document.createElement("div");
     head.className = "image-annotator-list-head";
     head.textContent = `Annotations (${this.marks.length})`;
-    this.list.replaceChildren(head, ...this.marks.map((mark, index) => {
+    // An empty pane still names itself and says how to fill it, so the column
+    // reserved beside the picture does not read as a gap.
+    const hint = document.createElement("div");
+    hint.className = "image-annotator-list-hint";
+    hint.textContent = "Drag on the picture to add a note.";
+    const rows = this.marks.map((mark, index) => {
       const row = document.createElement("div");
       row.className = "image-annotator-row";
       // The same chip the picture draws, so a row and its box read as one item.
@@ -406,8 +410,8 @@ export class ImageAnnotator {
       });
       row.append(badge, label, remove, note);
       return row;
-    }));
-    this.list.hidden = this.marks.length === 0;
+    });
+    this.list.replaceChildren(head, ...(rows.length ? rows : [hint]));
   }
 
   private insert(): void {

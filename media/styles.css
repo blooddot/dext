@@ -1503,8 +1503,8 @@ body.image-page {
 }
 
 /* Screenshot annotation page: hover selects a flat block, drag draws a box.
-   The picture owns its own column, so a new annotation row never resizes it and
-   the box you just drew stays under the pointer. */
+   The picture and its notes are two panes: the note column keeps its width so a
+   row never resizes the picture the marks were drawn on. */
 .image-annotator {
   flex: 1;
   min-height: 0;
@@ -1514,8 +1514,8 @@ body.image-page {
   grid-template-areas:
     "stage list"
     "tools actions";
-  gap: 8px;
-  padding: 12px;
+  gap: 6px;
+  padding: 6px;
 }
 
 .image-annotator .ui-dialog-actions {
@@ -1711,15 +1711,23 @@ body.image-page {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* The notes are their own pane, so the column reserved for them never reads as
+     an empty half of the picture. */
+  padding-left: 8px;
+  border-left: 1px solid var(--vscode-widget-border);
   overflow: auto;
 }
-
-.image-annotator-list[hidden] { display: none; }
 
 .image-annotator-list-head {
   color: var(--vscode-foreground);
   font-size: 12px;
   font-weight: 600;
+}
+
+.image-annotator-list-hint {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 /* Number and size on one line, the note under it: a 320px column leaves no room
