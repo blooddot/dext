@@ -108,14 +108,14 @@ export class OutputScrollController {
     // exchange. Unlike the old single control, arriving at the target does not
     // hide it: the reader can keep stepping through turns in that direction.
     this.viewport.jumpToPrevTurn.hidden = this.options.adjacentTurn?.(-1) === undefined;
-    // At the last exchange there is nowhere further to step, but scrolling up
-    // away from it still leaves the next control with its restore action. Keep
-    // it available until the open exchange is back on screen, so a reader at
-    // the top of a long transcript can press either turn control to return.
+    // At the last exchange there is nowhere further to step, but a title that
+    // scrolled away from the top edge still has its restore action. Keep the
+    // control available until the open exchange is aligned, so a reader deep in
+    // a long turn can press either turn control to return.
     const next = this.options.adjacentTurn?.(1);
     const current = next === undefined ? this.options.currentTurn?.() : undefined;
     this.viewport.jumpToNextTurn.hidden =
-      next === undefined && (current === undefined || this.isTurnVisible(current));
+      next === undefined && (current === undefined || this.atTurnStart(current));
   }
 
   /** The scroll offset where a turn's own title begins, measured against the
@@ -395,15 +395,14 @@ export class OutputScrollController {
     if (previous) this.activateAndScroll(previous);
   }
 
-  /** Step to the next exchange and reveal its Input and Output. When the
-   * exchange the reader is working in has scrolled out of view, the press
-   * returns there first, mirroring the previous-turn control. Otherwise a press
-   * at the very top of a long transcript would silently activate a turn far
-   * below instead of showing the conversation the reader left open. */
+  /** Step to the next exchange and reveal its Input and Output. A press while
+   * the current exchange is not aligned to the top edge realigns it first,
+   * exactly like the previous-turn control, so nobody reading the middle of a
+   * long turn is carried past the exchange they are on. */
   jumpToNextTurn(): void {
     const current = this.options.currentTurn?.();
     if (!current) return;
-    if (!this.isTurnVisible(current)) {
+    if (!this.atTurnStart(current)) {
       this.scrollToTurn(current);
       return;
     }
@@ -413,16 +412,6 @@ export class OutputScrollController {
 
   private atTurnStart(turn: HTMLElement): boolean {
     return Math.abs(this.viewport.body.scrollTop - this.turnJumpTarget(turn)) <= 2;
-  }
-
-  /** Whether any part of the turn currently intersects the scroll port. A tall
-   * open exchange counts as visible even when its title has scrolled above the
-   * viewport; only a fully off-screen turn pulls the next control back. */
-  private isTurnVisible(turn: HTMLElement): boolean {
-    const { body } = this.viewport;
-    const bodyRect = body.getBoundingClientRect();
-    const turnRect = turn.getBoundingClientRect();
-    return turnRect.bottom > bodyRect.top && turnRect.top < bodyRect.bottom;
   }
 
   private scrollToTurn(turn: HTMLElement): void {

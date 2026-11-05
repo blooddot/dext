@@ -632,12 +632,12 @@ describe("sidebar panel layout", () => {
     // boundary controls have to be re-evaluated with it.
     expect(main).toMatch(/elements\.result\.addEventListener\("toggle", rememberNavigationTurn, true\);[\s\S]*?elements\.result\.addEventListener\("toggle", syncJumpToLatest, true\);/);
     expect(scrollSource).toMatch(/jumpToPreviousTurn\(\): void \{[\s\S]*?if \(!this\.atTurnStart\(current\)\) \{[\s\S]*?this\.scrollToTurn\(current\);[\s\S]*?this\.activateAndScroll\(previous\);/);
-    // Next mirrors the restore behavior: an exchange that scrolled out of view
-    // is revealed again before the control steps forward.
-    expect(scrollSource).toMatch(/jumpToNextTurn\(\): void \{[\s\S]*?const current = this\.options\.currentTurn\?\.\(\);[\s\S]*?if \(!this\.isTurnVisible\(current\)\) \{[\s\S]*?this\.scrollToTurn\(current\);[\s\S]*?this\.activateAndScroll\(next\);/);
-    // The last exchange keeps the forward control available while it is off
-    // screen, because pressing it returns to that open exchange.
-    expect(scrollSource).toMatch(/syncJumpControls\(\): void \{[\s\S]*?const current = next === undefined \? this\.options\.currentTurn\?\.\(\) : undefined;[\s\S]*?jumpToNextTurn\.hidden =[\s\S]*?this\.isTurnVisible\(current\)/);
+    // Next mirrors the restore behavior: an exchange whose title scrolled away
+    // is realigned before the control steps forward.
+    expect(scrollSource).toMatch(/jumpToNextTurn\(\): void \{[\s\S]*?const current = this\.options\.currentTurn\?\.\(\);[\s\S]*?if \(!this\.atTurnStart\(current\)\) \{[\s\S]*?this\.scrollToTurn\(current\);[\s\S]*?this\.activateAndScroll\(next\);/);
+    // The last exchange keeps the forward control available while its title is
+    // not aligned, because pressing it returns to that open exchange.
+    expect(scrollSource).toMatch(/syncJumpControls\(\): void \{[\s\S]*?const current = next === undefined \? this\.options\.currentTurn\?\.\(\) : undefined;[\s\S]*?jumpToNextTurn\.hidden =[\s\S]*?this\.atTurnStart\(current\)/);
     expect(scrollSource).toMatch(/private activateAndScroll\(turn: HTMLElement\): void \{[\s\S]*?this\.options\.activateTurn\?\.\(turn\);[\s\S]*?this\.viewport\.body\.scrollTop = this\.turnJumpTarget\(turn\);/);
     expect(scrollSource).toMatch(/private turnTop\(turn: HTMLElement\): number \{[\s\S]*?turn\.getBoundingClientRect\(\)\.top/);
     // A title that cannot reach the top edge (the transcript ends below it)
