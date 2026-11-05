@@ -153,7 +153,7 @@ describe("OutputScrollController", () => {
       } as unknown as HTMLElement);
     return {
       controller, body, diagnostics, cancelled, navigation, turnAt,
-      jumpToPrevTurn, jumpToNextTurn, jumpToTop,
+      jumpToLatest, jumpToPrevTurn, jumpToNextTurn, jumpToTop,
       frameCount: () => frames.size,
       flush
     };
@@ -338,6 +338,19 @@ describe("OutputScrollController", () => {
     h.body.scrollHeight = 1100;
     h.controller.onScroll();
     expect(h.controller.following).toBe(true);
+  });
+
+  it("holds the reader's place when they unfold a block instead of pinning to the end", () => {
+    const h = harness();
+    h.body.scrollTop = 300;
+    h.controller.pin();
+    expect(h.frameCount()).toBe(1);
+    h.controller.holdPosition();
+    expect(h.controller.following).toBe(false);
+    expect(h.frameCount()).toBe(0);
+    h.flush();
+    expect(h.body.scrollTop).toBe(300);
+    expect(h.jumpToLatest.hidden).toBe(false);
   });
 
   it("treats a scrollbar drag against the end as a request for the newest output", () => {

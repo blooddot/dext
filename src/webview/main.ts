@@ -2256,20 +2256,12 @@ elements.result.addEventListener("toggle", syncJumpToLatest, true);
 // reader. A following reader keeps the newest output in view; one who scrolled
 // away is left where they are.
 elements.result.addEventListener("toggle", () => scroll.pin(), true);
-elements.result.addEventListener("toggle", (event) => {
-  const process = event.target instanceof HTMLDetailsElement
-    && event.target.classList.contains("output-turn-section")
-    && event.target.dataset.turnSection === "process"
-    ? event.target
-    : undefined;
-  if (!process || process !== transcript.active?.processDisclosure || !executing) return;
-  if (process.open) {
-    scroll.setFollowing(true);
-    scroll.pin();
-  } else {
-    scroll.setFollowing(false);
-    scroll.cancelScheduled();
-  }
+// The block the reader just unfolded is what they want to read, so the view
+// holds the header they clicked instead of being pulled to the live end.
+// Following resumes from the jump control or by scrolling back to the end.
+elements.result.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target : undefined;
+  if (target?.closest("summary") && !target.closest("button")) scroll.holdPosition();
 }, true);
 elements.resultBody.addEventListener("scroll", () => {
   scroll.onScroll();

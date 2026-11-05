@@ -1,3 +1,5 @@
+import { measureResultScroll } from "./scrollProbe.js";
+
 /** The scroll behavior of the rendered conversation: following the newest
  * output, recognizing the reader's own gestures, and owning every deferred
  * frame. The DOM is injected, so the controller can be tested without a
@@ -13,6 +15,9 @@ const RESULT_TRACK_END_TOLERANCE = 6;
 /** How far the port's range may exceed the content it paints before the
  * difference stops being a rounding artifact. */
 const RESULT_RANGE_TOLERANCE = 32;
+/** How far the range may reach past the last thing the reader can read before
+ * the difference stops being ordinary section padding. */
+const RESULT_BLANK_TOLERANCE = 120;
 
 export interface ScrollViewport {
   /** The scroll port (#result-body). */
@@ -66,6 +71,8 @@ export class OutputScrollController {
   private gesture = false;
   private forceInitialScroll = false;
   private reportedRangeFor: string | undefined;
+  // The measurement walks the transcript, so remember the range it described.
+  private measuredRange: { conversation: string; scrollHeight: number } | undefined;
 
   constructor(private readonly options: OutputScrollOptions) {}
 
@@ -156,6 +163,7 @@ export class OutputScrollController {
     this.followingEnd = true;
     this.gesture = false;
     this.reportedRangeFor = undefined;
+    this.measuredRange = undefined;
   }
 
   setFollowing(following: boolean): void {
@@ -175,41 +183,39 @@ export class OutputScrollController {
     return forced;
   }
 
-  /** A scroll range larger than the content makes the scrollbar lie: the thumb
-   * stops short of the newest output, and the end of the track is blank space.
+  /** A scroll range the reader cannot read makes the scrollbar lie: the range
+   * runs past the content, a box owns height without painting anything, or the
+   * content reaches past the range so its end can never be scrolled into view.
    * Measure the port against what it paints and name the box that owns the
    * difference instead of repeatedly moving the position. */
   reportStaleRange(): void {
     const { body, result } = this.viewport;
-    if (!result.childElementCount) return;
-    const bodyRect = body.getBoundingClientRect();
-    // A conversation shorter than its viewport does not make the port
-    // scrollable, so the range never starts below the viewport's own height.
-    const contentBottom = Math.max(
-      body.clientHeight,
-      result.getBoundingClientRect().bottom - bodyRect.top + body.scrollTop
-    );
-    const excess = body.scrollHeight - contentBottom;
-    if (excess <= RESULT_RANGE_TOLERANCE) return;
+    // The measurement walks the whole transcript, so take it at the one moment
+    // the reader can see the lie: nothing left to scroll.
+    if (!result.childElementCount || !this.isNearBottom()) return;
     const conversation = this.options.conversation.renderedId() ?? "unknown";
     if (this.reportedRangeFor === conversation) return;
+    if (this.measuredRange?.conversation === conversation && this.measuredRange.scrollHeight === body.scrollHeight) return;
+    this.measuredRange = { conversation, scrollHeight: body.scrollHeight };
+    const report = measureResultScroll(this.viewport);
+    const { excess, blank, unreachable } = report.content;
+    if (excess <= RESULT_RANGE_TOLERANCE && blank <= RESULT_BLANK_TOLERANCE && unreachable <= RESULT_RANGE_TOLERANCE) return;
     this.reportedRangeFor = conversation;
-    // Lowest boxes win: the length the port scrolls into is the union of them.
-    const boxes: Array<{ bottom: number; label: string }> = [];
-    for (const element of result.querySelectorAll<HTMLElement>("*")) {
-      const rect = element.getBoundingClientRect();
-      if (!rect.height && !rect.width) continue;
-      boxes.push({
-        bottom: rect.bottom - bodyRect.top + body.scrollTop - contentBottom,
-        label: `${element.tagName.toLowerCase()}.${String(element.className || "?").slice(0, 48)}`
-      });
-    }
-    boxes.sort((left, right) => right.bottom - left.bottom);
     const summary = [
       `port ${body.clientHeight}px view / ${body.scrollHeight}px range`,
-      `content ${Math.round(contentBottom)}px`,
-      `closed sections ${result.querySelectorAll("details:not([open])").length}`,
-      ...boxes.slice(0, 3).map((box) => `${Math.round(box.bottom)}px past content: ${box.label}`)
+      `painted ${Math.round(report.content.paintedBottom)}px`,
+      ...(excess > RESULT_RANGE_TOLERANCE ? [`${excess}px past content`] : []),
+      ...(blank > RESULT_BLANK_TOLERANCE ? [`${blank}px blank`] : []),
+      ...(unreachable > RESULT_RANGE_TOLERANCE ? [`${unreachable}px unreachable`] : []),
+      `pad ${report.margins.resultPaddingBottom}px`,
+      ...report.culprits.slice(0, 2).map((box) => `${Math.round(box.past)}px past content: ${box.label}`),
+      ...report.blankOwners.slice(0, 3).map((box) => `${Math.round(box.height)}px with no ink: ${box.label}`),
+      // Hover-only controls are small and always "unpainted"; only a box tall
+      // enough to explain the gap is worth naming.
+      ...report.unpainted.filter((box) => box.height >= RESULT_BLANK_TOLERANCE).slice(0, 2)
+        .map((box) => `${Math.round(box.height)}px not painted: ${box.label}`),
+      ...report.innerClips.slice(0, 2).map((box) => `${Math.round(box.past)}px clipped: ${box.label}`),
+      ...report.innerScrollers.slice(0, 3).map((box) => `scroller ${box}`)
     ].join(" · ");
     this.options.warn?.(`dext scroll range: ${summary}`);
     this.options.onDiagnostic(`Dext scroll diagnostic — ${summary}`);
@@ -259,6 +265,14 @@ export class OutputScrollController {
       });
     };
     pin(true);
+  }
+
+  /** The reader unfolded a block: the header they clicked keeps its place and
+   * new output no longer pulls the view away from it. */
+  holdPosition(): void {
+    this.followingEnd = false;
+    this.cancelScheduled();
+    this.syncJumpControls();
   }
 
   /** The reader asked for the newest output: the jump control, a drag released

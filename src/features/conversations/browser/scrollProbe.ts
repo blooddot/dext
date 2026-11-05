@@ -54,15 +54,36 @@ export interface ScrollProbeReport {
     phantom: number;
     /** Painted content the reader can never bring on screen. */
     unreachable: number;
+    /** Deepest edge that carries text or a picture, in scroll coordinates. */
+    inkBottom: number;
+    /** Range below the last ink: the reader scrolls into this and sees nothing. */
+    blank: number;
   };
   margins: { last: string; marginBottom: number; resultPaddingBottom: number };
   innerScrollers: string[];
   culprits: ScrollBox[];
   unpainted: ScrollBox[];
   innerClips: ScrollBox[];
+  /** Boxes that own the blank range below the last ink, innermost first. */
+  blankOwners: ScrollBox[];
 }
 
 const MAX_BOXES = 8;
+
+/** Tags that draw without a text node, so they end the ink like a word does. */
+const INK_TAGS = new Set(["img", "svg", "canvas", "video", "iframe"]);
+
+/** Whether this box paints something of its own: text it holds directly, or a
+ * picture. A box whose only content is other boxes is a container, and a
+ * container left over after the last word is exactly what lengthens the range
+ * without giving the reader anything to read. */
+function holdsInk(element: Element): boolean {
+  if (INK_TAGS.has(element.tagName.toLowerCase())) return true;
+  for (const node of element.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE && node.textContent && node.textContent.trim()) return true;
+  }
+  return false;
+}
 
 function number(value: number): number {
   return Math.round(value);
@@ -134,6 +155,8 @@ function paintState(element: Element, port: HTMLElement): { painted: boolean; cl
 }
 
 interface MeasuredBox extends ScrollBox {
+  /** This box draws text or a picture of its own. */
+  ink: boolean;
   /** Bottom edge in scroll coordinates, after any ancestor clip. */
   bottom: number;
   /** Bottom edge before an ancestor clip shortened it. */
@@ -164,6 +187,7 @@ export function measureResultScroll(targets: ScrollProbeTargets): ScrollProbeRep
     const rawBottom = toScroll(rect.bottom);
     boxes.push({
       label: label(element),
+      ink: holdsInk(element),
       bottom: toScroll(Math.min(rect.bottom, state.clippedBottom)),
       rawBottom,
       past: 0,
@@ -201,6 +225,20 @@ export function measureResultScroll(targets: ScrollProbeTargets): ScrollProbeRep
     .map((box) => ({ ...box, past: number(box.rawBottom - box.bottom) }))
     .sort((left, right) => right.past - left.past);
 
+  // The reading end is where the last ink sits, not where the last container
+  // ends: a box that outlives its content keeps the reader scrolling into a
+  // blank half screen and makes the scrollbar look wrong from both directions.
+  const inkBottom = Math.max(
+    body.clientHeight,
+    painted.filter((box) => box.ink).reduce((deepest, box) => Math.max(deepest, box.bottom), 0)
+  );
+  const blank = Math.max(0, body.scrollHeight - inkBottom);
+  const blankOwners = boxes
+    .filter((box) => box.painted && box.height >= 40 && box.bottom > inkBottom + 1)
+    .map((box) => ({ ...box, past: number(box.bottom - inkBottom) }))
+    .sort((left, right) => left.height - right.height)
+    .slice(0, MAX_BOXES);
+
   const last = result.lastElementChild;
   const lastMargin = last ? parseFloat(getComputedStyle(last).marginBottom) || 0 : 0;
   const portVisibleBottom = visibleBottom(body);
@@ -228,7 +266,9 @@ export function measureResultScroll(targets: ScrollProbeTargets): ScrollProbeRep
       inFlowBottom: number(inFlowBottom),
       excess: number(Math.max(0, body.scrollHeight - inFlowReachable)),
       phantom: number(Math.max(0, body.scrollHeight - reachable)),
-      unreachable: number(Math.max(0, paintedBottom - body.scrollHeight))
+      unreachable: number(Math.max(0, paintedBottom - body.scrollHeight)),
+      inkBottom: number(inkBottom),
+      blank: number(blank)
     },
     margins: {
       last: last ? label(last) : "",
@@ -238,7 +278,8 @@ export function measureResultScroll(targets: ScrollProbeTargets): ScrollProbeRep
     innerScrollers: innerScrollers.slice(0, 6),
     culprits: pastInFlow.slice(0, MAX_BOXES),
     unpainted: unpainted.slice(0, MAX_BOXES),
-    innerClips: innerClips.slice(0, MAX_BOXES)
+    innerClips: innerClips.slice(0, MAX_BOXES),
+    blankOwners
   };
 }
 
@@ -252,6 +293,7 @@ export function formatResultScroll(report: ScrollProbeReport): string {
     `excess ${content.excess}`,
     `phantom ${content.phantom}`,
     `unreachable ${content.unreachable}`,
+    `blank ${content.blank}`,
     `covered ${port.covered}`,
     `gap ${scroll.gap}`,
     `top ${scroll.scrollTop}/${scroll.max}`,
