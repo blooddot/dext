@@ -51,7 +51,7 @@ VSIX 压缩后约 **5 MB**（解压约 20 MB），几乎全部来自 Webview：
 
 ### API 执行流程包的取舍
 
-API 详情页还有第二个小型 Webview 入口 `src/features/resources/browser/apiFlow.ts`，构建为 `dist/webview/apiFlow.js`。扩展宿主从不渲染 Mermaid：`src/features/resources/presentation/apiFlowDiagram.ts` 只生成 Mermaid `flowchart LR` 源文本和普通 HTML 外壳，`extension.ts` 仅在页面正文包含 `data-api-flow` 时为它添加 `apiFlow.js` 的 `scriptUri`。没有流程图的页面因此既不会加载该脚本，也不会加载 Mermaid；Project reader 继续使用原来的 `project.js`。
+API 详情页还有第二个小型 Webview 入口 `src/features/resources/browser/apiFlow.ts`，构建为 `dist/webview/apiFlow.js`。扩展宿主从不渲染 Mermaid：`src/features/resources/presentation/apiFlowDiagram.ts` 只生成 Mermaid `flowchart LR` 源文本和普通 HTML 外壳，`extension.ts` 仅在页面正文包含 `data-api-flow` 时为它添加 `apiFlow.js` 的 `scriptUri`。没有流程图的页面因此既不会加载该脚本，也不会加载 Mermaid。
 
 该入口复用 `src/platform/browser/markdownDiagrams.ts` 的 `renderMermaidSvg`，所以 `securityLevel: "strict"`、`htmlLabels: false`、light/dark 主题检测和串行渲染队列都与会话 Markdown 共用，而不是再复制一套初始化逻辑。由于每个 Webview 入口都是独立的 IIFE，`apiFlow.js` 会再打包一份 Mermaid，无法复用 `main.js` 里的实例；代价是只在 API 详情页加载的第二份 Mermaid。`scripts/assertWebviewAssets.mjs` 会在构建产物和 VSIX 中都要求这个 bundle 存在且非空。
 
@@ -118,15 +118,10 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 类型擦除是原生能力，不需要额外依赖。只有当宿主运行时自身完全不支持 TypeScript 时，`dextLoader.mjs` 才会回退到 esbuild 转换；正因为这种回退很少见，esbuild 仍留在 devDependencies。
 
 
-### 项目知识、对话运行与编辑器 Tab
+### 对话运行与编辑器 Tab
 
-长期项目知识与单次运行记录分别存放，互不混用：
-
-- `src/features/project/host/persistence/projectStore.ts` 负责 `.dext/project.json`、AI 生成的 intent/diagram 文件、已接受的 `.dext/objects/<id>.json` 以及 `.dext/architecture.json`；它负责持久化已接受对象。并发写入按版本拒绝（`conflict`），不做合并。
-- `src/features/project/contracts/projectKnowledge.ts` 负责命名、稳定 ID，以及来源／确认／有效性／归属四个相互独立的维度。旧的 `status` 字段在读取时迁移；代码发生变化时，已接受对象保持已接受，同时标记为 `needs_verification`。
 - `src/app/sidebarProvider.ts` 只保留 Webview 生命周期与本轮范围外的功能。会话状态位于 `src/features/conversations/host/`（`conversationController.ts`、`turnExecutionCoordinator.ts`、`agentEventStream.ts`、`planController.ts`、`interactionController.ts`），由 `src/app/conversationSetup.ts` 统一装配一次。Plan 完成判定保留独立的自动验证轮次。参见 [conversation-development.zh-CN.md](conversation-development.zh-CN.md)。
-- 项目架构扫描为 TypeScript、Python、Rust 提供同一套模型。各解析器把无法解析或存在歧义的结构记录为 `unsupported` 并给出原因，而不是猜测；`cargo metadata` 不可用时，Rust 元数据降级并显式说明覆盖范围。
-- `src/platform/editor-tabs/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面；`src/features/project/host/projectEditorProvider.ts` 复用同一个稳定键。
+- `src/platform/editor-tabs/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面。
 - Resources 使用只读取文件的数据源：`src/features/resources/host/resourceEditorProvider.ts` 枚举与读取资源但不执行，`src/features/resources/presentation/resourceDocuments.ts` 负责渲染。API 列表也会通过 `src/features/workflow/host/apiSource.ts` 静态提取源码信息，复用 `src/platform/node/syntaxParser.ts` 的 Tree-sitter 加载器。Resources 与 APIs 共用签名、参数、返回类型和源码预览组件。类型来自显式标注或简单参数默认值；无法确定的类型显示为 `unknown`，不执行模块，也不运行 TypeScript 编译器。APIs 页面单独组合可调用契约、Node/JavaScript 参考和文件 API。Resources 不再读取运行时注册表或侧栏资源缓存；注册表继续负责执行分发和参数契约。
 
 导入直接指向符号所属的契约或实现。第一轮和第二轮遗留的转发文件、`src/core/`、根目录 `application.ts`/`sidebarProvider.ts` 都已删除；一旦被恢复或被引用（包括测试、脚本、注释和内嵌构建入口字符串），`scripts/checkModuleBoundaries.mjs` 会直接失败。

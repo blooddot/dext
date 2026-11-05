@@ -26,39 +26,18 @@ build entry string, a comment, or a restored file.
 | --- | --- |
 | `src/agentProfiles.ts` | contracts in `src/features/agents/contracts/agent.ts`, store/helpers in `src/features/agents/host/agentProfiles.ts` |
 | `src/apiEditorProvider.ts` | `src/features/resources/host/apiEditorProvider.ts` |
-| `src/core/archifyAdapter.ts` | `src/features/project/host/diagrams/archifyAdapter.ts` |
-| `src/core/projectAiGeneration.ts` | `src/features/project/host/generation/projectAiGeneration.ts` |
-| `src/core/projectArchitecture.ts` | `src/features/project/knowledge/projectArchitecture.ts` |
-| `src/core/projectContext.ts` | `src/features/project/knowledge/projectContext.ts` |
-| `src/core/projectDiagram.ts` | `src/features/project/contracts/projectDiagram.ts` |
-| `src/core/projectDiagramAdapter.ts` | `src/features/project/contracts/projectDiagramAdapter.ts` |
-| `src/core/projectDiagramHistory.ts` | `src/features/project/knowledge/projectDiagramHistory.ts` |
-| `src/core/projectDiagramPresentation.ts` | `src/features/project/presentation/projectDiagramPresentation.ts` |
-| `src/core/projectDiagramRegistry.ts` | `src/features/project/host/diagrams/projectDiagramRegistry.ts` |
-| `src/core/projectEvidenceSettings.ts` | `src/features/project/contracts/projectEvidenceSettings.ts` |
-| `src/core/projectIntent.ts` | `src/features/project/contracts/projectIntent.ts` |
-| `src/core/projectKnowledge.ts` | `src/features/project/contracts/projectKnowledge.ts` |
-| `src/core/projectReference.ts` | `src/features/project/knowledge/projectReference.ts` |
-| `src/core/projectSettings.ts` | `src/features/project/contracts/projectSettings.ts` |
-| `src/core/projectTopics.ts` | `src/features/project/knowledge/projectTopics.ts` |
 | `src/core/toml.ts` | `src/features/agents/host/toml.ts` |
 | `src/editorTabHtml.ts` | `src/platform/editor-tabs/editorTabHtml.ts` |
 | `src/editorTabManager.ts` | `src/platform/editor-tabs/editorTabManager.ts` |
 | `src/editorTabSerializer.ts` | `src/platform/editor-tabs/editorTabSerializer.ts` |
 | `src/editorTabState.ts` | `src/platform/editor-tabs/editorTabState.ts` |
 | `src/editorTabTypes.ts` | `src/platform/editor-tabs/editorTabTypes.ts` |
-| `src/projectDiagramViewer.ts` | viewer guard in `src/features/project/host/diagrams/projectDiagramViewer.ts`, bridge in `src/features/project/browser/archifyBridge.ts` |
-| `src/projectService.ts` | `src/features/project/host/projectService.ts` and the lifecycle contracts in `src/features/project/contracts/lifecycle.ts` |
-| `src/projectStore.ts` | `src/features/project/host/persistence/projectStore.ts` |
 | `src/resourceDocuments.ts` | contract in `src/features/resources/contracts/resourceDocuments.ts`, host in `.../resources/host/resourceEditorProvider.ts`, markup in `.../resources/presentation/resourceDocuments.ts` |
 | `src/resourceSession.ts` | `src/features/resources/contracts/resourceSession.ts` |
-| `src/vscodeProjectHost.ts` | `src/features/project/host/projectPanelDataSource.ts`, file host in `src/features/project/host/persistence/vscodeProjectFileHost.ts`, contracts in `src/features/project/contracts/` |
 | `src/webview/apiPanel.ts` | `src/features/resources/presentation/apiPanel.ts` |
-| `src/webview/archifyBridge.ts` | `src/features/project/browser/archifyBridge.ts` |
 | `src/webview/fileSearchClient.ts` | `src/features/workspace/browser/fileSearchClient.ts` |
 | `src/webview/globalResourcesPanel.ts` | `src/features/resources/presentation/globalResourcesPanel.ts` |
 | `src/webview/outputLink.ts` | `src/features/workspace/browser/outputLink.ts` |
-| `src/webview/projectPanel.ts` | `src/features/project/presentation/projectPanel.ts` |
 
 Consumers were updated in the same commit as each deletion. The important split is by
 symbol, not by filename:
@@ -75,9 +54,6 @@ symbol, not by filename:
   (`resourceDocuments.ts`, `apiPanel.ts`, `globalResourcesPanel.ts`). Consumers are
   `extension.ts`, `app/application.ts`, `webview/main.ts`, `historyStore.ts`,
   `platform/webviewProtocol.ts`, `app/sidebarProvider.ts` and the resource tests.
-- Project diagrams keep the contract (`contracts/projectDiagram.ts`), the knowledge
-  helpers, the host registry/adapters and the browser bridge apart; the removed viewer
-  entry mixed all four, so its consumers now import each symbol from its own module.
 - Editor tab code is `src/platform/editor-tabs/*`; the tab pages consume the state and
   type modules directly.
 - Workspace search uses `features/workspace/browser/fileSearchClient.ts` (browser) and
@@ -93,7 +69,7 @@ node scripts/checkModuleBoundaries.mjs
 npm run lint
 npm run typecheck
 npx vitest run test/moduleBoundaries.test.ts test/agentProfiles.test.ts test/agentSelectionDefaults.test.ts test/agentRunner.test.ts test/builtinCli.test.ts test/harnessPresetSelection.test.ts test/harnessPresets.integration.test.ts test/toml.test.ts
-npx vitest run test/apiReference.test.ts test/apiSource.test.ts test/editorTabState.test.ts test/projectIntegration.test.ts test/projectDiagramViewer.test.ts test/projectEvidenceSelection.test.ts
+npx vitest run test/apiReference.test.ts test/apiSource.test.ts test/editorTabState.test.ts test/resourceDocuments.test.ts
 ```
 
 The boundary check reads `src`, `test` and `scripts`, so a reference hidden in a script
@@ -190,9 +166,9 @@ Results are recorded separately; anything not run is not claimed as passed.
 | `npm run lint` | passed |
 | `npm run typecheck` | passed |
 | `npx vitest run` | passed — 163 files / 1589 tests, with 2 pre-existing skipped files (4 skipped tests) |
-| `npm run build` | passed — `dist/webview/main.js`, `main.css`, `project.js` and the other assets keep their names |
+| `npm run build` | passed — `dist/webview/main.js`, `main.css` and the other assets keep their names |
 | `npm run check` | passed — boundaries, lint, types, tests, build, declaration and API-reference checks, packaged assets |
-| `npm run check:ui` | passed — composer, stream jump, conversation scroll, question visibility, editor tabs, Project reader and diagrams |
+| `npm run check:ui` | passed — composer, stream jump, conversation scroll, question visibility and editor tabs |
 | `npm run check:ui:conversations` | passed — tabs, delayed scroll, stream jump, question visibility, structured output and the interaction suite |
 | `node scripts/monaco-ref-lab/check.mjs` | passed |
 | `npm run test:host` | passed — activation, editor tabs, generated types and the Monaco webview verification |
@@ -210,9 +186,8 @@ a temporary workspace and manual interaction; no browser or provider result is c
   editing moved paths but kept their behaviour.
 - `core/types.ts` moved to `shared/contracts/types.ts` without splitting its contents.
   The next round can split it per owner and shrink the shared contract surface.
-- The next round should start from this document and the records in
-  `docs/project-development.md`; do not treat the historical tables as current import
-  instructions.
+- The next round should start from this document; do not treat the historical tables as
+  current import instructions.
 
 ### Shared dependencies kept for this round
 
@@ -228,8 +203,7 @@ owner.
 | `features/conversations/host/uiInteractionBroker.ts` | `shared/contracts/uiForm.ts`, `shared/protocol/executionErrors.ts` | shared kernel |
 | `features/conversations/browser/transcriptView.ts` | `features/workspace/domain/fileReference.ts`, `platform/browser/fileReferenceChip.ts` | browser → shared browser primitive; `colorizeSource` is injected by `main.ts` |
 
-The two explicit cross-feature host couplings are registered in
-`crossFeatureHostCouplings` (`workflow/host/runtime` → `agents/host/*`, and
-`project/host/generation/projectAiGeneration` → `agents/host/cliAxAIService`). The next
-round injects those through `app` and removes the table entries.
+The remaining cross-feature host couplings are registered in
+`crossFeatureHostCouplings` (`workflow/host/runtime` → `agents/host/*`). The next round
+injects those through `app` and removes the table entries.
 

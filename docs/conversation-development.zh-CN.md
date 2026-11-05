@@ -16,41 +16,20 @@
 | --- | --- |
 | `src/agentProfiles.ts` | 契约在 `src/features/agents/contracts/agent.ts`，存储与辅助函数在 `src/features/agents/host/agentProfiles.ts` |
 | `src/apiEditorProvider.ts` | `src/features/resources/host/apiEditorProvider.ts` |
-| `src/core/archifyAdapter.ts` | `src/features/project/host/diagrams/archifyAdapter.ts` |
-| `src/core/projectAiGeneration.ts` | `src/features/project/host/generation/projectAiGeneration.ts` |
-| `src/core/projectArchitecture.ts` | `src/features/project/knowledge/projectArchitecture.ts` |
-| `src/core/projectContext.ts` | `src/features/project/knowledge/projectContext.ts` |
-| `src/core/projectDiagram.ts` | `src/features/project/contracts/projectDiagram.ts` |
-| `src/core/projectDiagramAdapter.ts` | `src/features/project/contracts/projectDiagramAdapter.ts` |
-| `src/core/projectDiagramHistory.ts` | `src/features/project/knowledge/projectDiagramHistory.ts` |
-| `src/core/projectDiagramPresentation.ts` | `src/features/project/presentation/projectDiagramPresentation.ts` |
-| `src/core/projectDiagramRegistry.ts` | `src/features/project/host/diagrams/projectDiagramRegistry.ts` |
-| `src/core/projectEvidenceSettings.ts` | `src/features/project/contracts/projectEvidenceSettings.ts` |
-| `src/core/projectIntent.ts` | `src/features/project/contracts/projectIntent.ts` |
-| `src/core/projectKnowledge.ts` | `src/features/project/contracts/projectKnowledge.ts` |
-| `src/core/projectReference.ts` | `src/features/project/knowledge/projectReference.ts` |
-| `src/core/projectSettings.ts` | `src/features/project/contracts/projectSettings.ts` |
-| `src/core/projectTopics.ts` | `src/features/project/knowledge/projectTopics.ts` |
 | `src/core/toml.ts` | `src/features/agents/host/toml.ts` |
 | `src/editorTabHtml.ts` | `src/platform/editor-tabs/editorTabHtml.ts` |
 | `src/editorTabManager.ts` | `src/platform/editor-tabs/editorTabManager.ts` |
 | `src/editorTabSerializer.ts` | `src/platform/editor-tabs/editorTabSerializer.ts` |
 | `src/editorTabState.ts` | `src/platform/editor-tabs/editorTabState.ts` |
 | `src/editorTabTypes.ts` | `src/platform/editor-tabs/editorTabTypes.ts` |
-| `src/projectDiagramViewer.ts` | 校验在 `src/features/project/host/diagrams/projectDiagramViewer.ts`，桥接在 `src/features/project/browser/archifyBridge.ts` |
-| `src/projectService.ts` | `src/features/project/host/projectService.ts` 及 `src/features/project/contracts/lifecycle.ts` 中的生命周期契约 |
-| `src/projectStore.ts` | `src/features/project/host/persistence/projectStore.ts` |
 | `src/resourceDocuments.ts` | 契约 `src/features/resources/contracts/resourceDocuments.ts`，宿主 `.../resources/host/resourceEditorProvider.ts`，展示 `.../resources/presentation/resourceDocuments.ts` |
 | `src/resourceSession.ts` | `src/features/resources/contracts/resourceSession.ts` |
-| `src/vscodeProjectHost.ts` | `src/features/project/host/projectPanelDataSource.ts`、`src/features/project/host/persistence/vscodeProjectFileHost.ts` 与 `src/features/project/contracts/` |
 | `src/webview/apiPanel.ts` | `src/features/resources/presentation/apiPanel.ts` |
-| `src/webview/archifyBridge.ts` | `src/features/project/browser/archifyBridge.ts` |
 | `src/webview/fileSearchClient.ts` | `src/features/workspace/browser/fileSearchClient.ts` |
 | `src/webview/globalResourcesPanel.ts` | `src/features/resources/presentation/globalResourcesPanel.ts` |
 | `src/webview/outputLink.ts` | `src/features/workspace/browser/outputLink.ts` |
-| `src/webview/projectPanel.ts` | `src/features/project/presentation/projectPanel.ts` |
 
-消费者按符号而非文件名拆分：Agent 类型与常量来自契约，只有 `AgentProfileStore`、`codexConfiguredDefaults`、`modelOptionsFromCodexCache` 来自宿主；Resources 分为契约、宿主与展示三部分；Project 图按契约、知识、宿主注册表与浏览器桥接分别引用；编辑器标签统一使用 `src/platform/editor-tabs/*`。Workspace 搜索使用浏览器客户端与宿主控制器两条路径，`scripts/monaco-ref-lab/main.ts` 保留无扩展名的类型引用。
+消费者按符号而非文件名拆分：Agent 类型与常量来自契约，只有 `AgentProfileStore`、`codexConfiguredDefaults`、`modelOptionsFromCodexCache` 来自宿主；Resources 分为契约、宿主与展示三部分；编辑器标签统一使用 `src/platform/editor-tabs/*`。Workspace 搜索使用浏览器客户端与宿主控制器两条路径，`scripts/monaco-ref-lab/main.ts` 保留无扩展名的类型引用。
 
 ## 状态所有权
 
@@ -98,7 +77,7 @@ Provider 会话 id 按 Provider 分别保存，且只会由上报它的 Provider
 
 `migrationExceptions` 已为空：上一轮保留的依赖都已有了新所有者。`domain/planTodoProgress.ts` → `features/agents/domain/agentTodoTracking.ts`（feature domain 之间允许）；`presentation/historyRender.ts`、`host/historyStore.ts` → `features/workspace/domain/fileReference.ts` 与 `shared/lib/markdownCopy.ts`（跨 feature domain 与共享内核）；`host/historyEditorProvider.ts` → `platform/vscode/contextHost.ts`（host 使用 VS Code 适配器）；`host/uiInteractionBroker.ts` → `shared/contracts/uiForm.ts`、`shared/protocol/executionErrors.ts`；`browser/transcriptView.ts` → `features/workspace/domain/fileReference.ts`、`platform/browser/fileReferenceChip.ts`，`colorizeSource` 由 `main.ts` 注入。
 
-两条跨 feature host 耦合登记在 `crossFeatureHostCouplings`：`workflow/host/runtime` → `agents/host/*`，以及 `project/host/generation/projectAiGeneration` → `agents/host/cliAxAIService`。下一轮通过 `app` 注入端口后删除登记。
+剩余的跨 feature host 耦合登记在 `crossFeatureHostCouplings`：`workflow/host/runtime` → `agents/host/*`。下一轮通过 `app` 注入端口后删除登记。
 
 ## 验证（第三轮）
 
@@ -110,9 +89,9 @@ Provider 会话 id 按 Provider 分别保存，且只会由上报它的 Provider
 | `npm run lint` | 通过 |
 | `npm run typecheck` | 通过 |
 | `npx vitest run` | 通过：163 个文件 / 1589 个测试，另有 2 个原有跳过文件（4 个跳过测试） |
-| `npm run build` | 通过：`dist/webview/main.js`、`main.css`、`project.js` 等既有产物名不变 |
+| `npm run build` | 通过：`dist/webview/main.js`、`main.css` 等既有产物名不变 |
 | `npm run check`（边界、lint、类型、测试、构建、声明与 API 参考检查、打包资源） | 通过 |
-| `npm run check:ui` | 通过：输入框、流式跳转、会话滚动、问题可见性、编辑器标签、Project 阅读器与图表 |
+| `npm run check:ui` | 通过：输入框、流式跳转、会话滚动、问题可见性、编辑器标签 |
 | `npm run check:ui:conversations` | 通过：标签、延迟滚动、流式跳转、问题可见性、结构化输出与完整交互套件 |
 | `node scripts/monaco-ref-lab/check.mjs` | 通过 |
 | `npm run test:host` | 通过：激活、编辑器标签、类型生成与 Monaco Webview 验证 |
@@ -124,5 +103,4 @@ Provider 会话 id 按 Provider 分别保存，且只会由上报它的 Provider
 - `sidebarProvider.ts` 与 `webview/main.ts` 仍是较大的入口。本轮只整理路径、契约、环境边界与剩余会话 DOM；资源/MCP/附件与历史补载的行为拆分留到下一轮。
 - Agent 执行器、CLI 传输、工作流内核、MCP、补全与资源编辑只更新了路径，行为未改。
 - `core/types.ts` 搬到 `shared/contracts/types.ts`，本轮未拆分内容；下一轮按所有者拆分并收缩共享契约。
-- 下一轮请从本文与 `docs/project-development.md` 的迁移记录开始；不要把历史表格当作当前导入指引。
-- 下一轮以本文与 `docs/project-development.zh-CN.md` 的历史记录为起点；那里的表格不是当前导入指引。
+- 下一轮请从本文的迁移记录开始；不要把历史表格当作当前导入指引。

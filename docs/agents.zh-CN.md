@@ -14,12 +14,6 @@ Claude 对话改用 CLI 的双向控制协议，它原本要问自己终端的�
 
 `agent({ apply: false })` 只限制 Agent 进程的写入权限；若结果包含 patch，Dext 宿主仍会自动应用并清空返回的 patch。需要只读结论时同时指定 `patch: false`。应用状态与真实错误显示在对话及结果摘要中；旧历史补丁会明确忽略，不会在打开会话时写盘。
 
-## Plan 中的 Project 规范
-
-Plan 与 `plan()` 共用 Project 依据，并保留已有 Agent 权限选择。原生模型提供有界只读 `project_query`：summary、node、search、neighbors、ancestors 和 subtree。查询不会初始化或扫描项目，可在 Project settings → Agent tools → Project norms query tool 中关闭。
-
-Pi 使用当前回合的宿主回调 `dext_project_query`，只读回合继续禁用任意 MCP 服务和写工具；停止或替换回合后旧回调失效。工具结果、生成计划和 Agent 报告都不能自行取得宿主授权。预算不足、证据缺失及规范过期需要明确显示，不能据此报告无影响。
-
 ## 通用配置
 
 Agent 配置保存在 VS Code 扩展全局存储中。输入区域根据后端能力提供 Agent、Model、Reasoning 和 Speed 选项。Codex 配置优先读取本地模型缓存中的模型、推理级别和速度选项；Claude Code 使用 `opus` / `sonnet` 别名及已配置的推理级别。
@@ -124,7 +118,7 @@ AIOA/CDP 接入已移除，不提供旧 AIOA 对话兼容或迁移。
 await ask({ input: "审查这次修改", cli: "pi", model: { model: "deepseek/deepseek-v4-flash", reasoning: "off" } });
 ```
 
-请使用实际目录返回的 ID；Pi 不接受 Codex 的速度/服务档位或 Harness 预设。对话、Code、Plan、Dext Rule/Skill、模板、资源生成、Project 生成和 Skill 导入沿用宿主流程。Code 的 `ui.*`、`mcp.*` 仍由宿主确定性执行，资源草稿仍需显式保存。
+请使用实际目录返回的 ID；Pi 不接受 Codex 的速度/服务档位或 Harness 预设。对话、Code、Plan、Dext Rule/Skill、模板、资源生成和 Skill 导入沿用宿主流程。Code 的 `ui.*`、`mcp.*` 仍由宿主确定性执行，资源草稿仍需显式保存。
 
 Pi 没有 Dext 工作区沙箱。Ask、预览和计划生成限制活动工具并拒绝白名单之外的调用，这些轮次禁用原生 MCP。受信工作区中，只读回合可通过 `dext_fetch` 读取网页：它拒绝本机与私网地址，也不发送任何凭据。GitHub 文件链接（`raw.githubusercontent.com`、`blob` 与 `raw` 链接）先经 `cdn.jsdelivr.net` 读取，失败再回退原 URL；需要可复现的内容时请用 commit 或 tag 而不是分支名。写入和计划执行要求受信任的本地工作区及显式 **Full access**，该权限能访问工作区之外。Pi 的 **Workspace write** 不可选，也不会静默升级。工具限制不等于对 Pi 进程或用户可执行配置的操作系统隔离。计划执行回合还会额外获得 `dext_update_todos`，把任务状态作为工具调用上报，而不必写 `dext-todo` 注释；没有计划在跑的回合会拒绝它。
 

@@ -14,12 +14,6 @@ Claude conversations run the CLI's bidirectional control protocol, so the questi
 
 `agent({ apply: false })` restricts the Agent process permission; if the result contains a patch, the Dext host automatically applies it and clears the returned patch. Also pass `patch: false` for read-only conclusions. Conversation and the result summary report the application status and real errors. Legacy history patches are explicitly ignored without writing on load.
 
-## Project norms during Plan
-
-Plan and `plan()` share Project grounding and preserve existing Agent permission choices. A native model exposes the bounded, read-only `project_query` tool: summary, node, search, neighbors, ancestors and subtree. Queries never initialize or scan the project. Disable it with Project settings → Agent tools → Project norms query tool.
-
-Pi uses a current-turn host callback named `dext_project_query`; read-only turns still disable arbitrary MCP servers and write tools. Stopping or replacing a turn revokes its callback. A tool result, generated plan or Agent report cannot grant itself host authority. Budget limits, missing evidence and stale norms remain visible and must not be reported as no impact.
-
 ## General configuration
 
 Agent profiles are stored in VS Code extension global storage. The input area exposes Agent, Model, Reasoning, and Speed selectors where supported by the provider. Codex profiles read the local Codex model cache when available, including supported reasoning levels and speed tiers. Claude Code profiles use its native `opus`/`sonnet` aliases and configured effort levels. An API call may override the Agent and Model for that call with its own `cli` and `model` arguments; otherwise the input selection is used. `Dext: Configure Agent` edits executable commands and custom model labels without handling credentials.
@@ -111,7 +105,7 @@ Model discovery reads Pi's own authenticated model catalog without making a mode
 await ask({ input: "Review the change", cli: "pi", model: { model: "deepseek/deepseek-v4-flash", reasoning: "off" } });
 ```
 
-Use an ID actually returned by your Pi catalog. Pi model options do not accept Codex speed/service tiers or Harness presets. Ordinary chat, Code, Plan, Dext Rules/Skills, templates, resource generation, Project generation and Skill import use the existing host flows. Code `ui.*` and `mcp.*` remain deterministic host calls. Resource drafts require explicit saving.
+Use an ID actually returned by your Pi catalog. Pi model options do not accept Codex speed/service tiers or Harness presets. Ordinary chat, Code, Plan, Dext Rules/Skills, templates, resource generation and Skill import use the existing host flows. Code `ui.*` and `mcp.*` remain deterministic host calls. Resource drafts require explicit saving.
 
 Pi has no Dext workspace sandbox. Ask, previews and plan generation restrict its active tools and reject non-allowlisted tool calls; native MCP is disabled in those turns. In a trusted workspace a read-only turn can read a web page through `dext_fetch`, which refuses local and private addresses and never sends credentials. GitHub file URLs (`raw.githubusercontent.com`, `blob` and `raw` links) are read through `cdn.jsdelivr.net` first and fall back to the original URL, so use a commit or tag rather than a branch name for a stable copy. Writes and plan execution require a trusted local workspace and an explicit **Full access** selection, which can reach outside the workspace. **Workspace write** is disabled for Pi and never silently upgraded. This tool restriction does not provide OS isolation of Pi or executable user configuration. A plan execution also receives `dext_update_todos`, which reports a task's status as a tool call rather than a `dext-todo` comment; a turn without a plan rejects it.
 

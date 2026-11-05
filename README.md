@@ -130,14 +130,13 @@ Dext generates the `dext` type declaration into your project — `.dext/api/dext
 | [Workflows and APIs](docs/workflows.md) | TypeScript Code mode, built-in and custom APIs, context, Skills, rules, and History |
 | [Agent configuration](docs/agents.md) | CLI setup, model overrides, and DeepSeek Harness presets and permissions |
 | [MCP configuration](docs/mcp.md) | Tool manifests, typed results, transports, and credentials |
-| [Project knowledge](docs/project-development.md) | Project files, knowledge dimensions, editor tabs, and diagrams |
 | [Development and releases](docs/development.md) | Local development, checks, packaging, publishing, and architecture |
 
-## Project knowledge and editor tabs
+## Plan and editor tabs
 
-Plan reads usable Project norms before planning and checks actual changes after implementation. It keeps one Plan entry and preserves completed `.plan.md` files. Native Project/Knowledge initialization and legacy migration are explicit, independent actions; see [Project development](docs/project-development.md) and [Plan documents](docs/workflows.md#plan-documents).
+Plan keeps one entry and preserves completed `.plan.md` files; see [Plan documents](docs/workflows.md#plan-documents).
 
-Project, APIs, Global Resources, and History all open as editor tabs that reuse one page per target and restore the same page after a reload. Project keeps only long-term content — Overview, Knowledge, and Diagrams — and never shows Hook logs, task checklists, or single-run records.
+APIs, Global Resources, and History all open as editor tabs that reuse one page per target and restore the same page after a reload.
 
 ## Feedback and license
 

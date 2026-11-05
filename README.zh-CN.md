@@ -128,14 +128,13 @@ Dext 会把 `dext` 类型声明生成到你的项目里——`.dext/api/dext.d.t
 | [工作流与 API](docs/workflows.zh-CN.md) | TypeScript Code 模式、内置与自定义 API、上下文、Skills、规则和 History |
 | [Agent 配置](docs/agents.zh-CN.md) | CLI 配置、模型覆盖、DeepSeek Harness 预设与权限 |
 | [MCP 配置](docs/mcp.zh-CN.md) | 工具清单、类型化结果、传输方式和凭据 |
-| [项目知识](docs/project-development.zh-CN.md) | 项目文件、知识维度、编辑器标签和图表 |
 | [开发与发布](docs/development.zh-CN.md) | 本地开发、检查、打包、发布和架构 |
 
-## 项目知识与编辑器标签
+## 计划与编辑器标签
 
-Plan 在规划前读取可用的 Project 规范，在实现后核对实际变化；保持单一 Plan 入口，完成后保留 `.plan.md`。原生 Project/Knowledge 初始化和旧数据迁移独立、显式触发，详见[项目开发](docs/project-development.zh-CN.md)和[计划文档](docs/workflows.zh-CN.md#计划文档)。
+Plan 保持单一入口，完成后保留 `.plan.md`；详见[计划文档](docs/workflows.zh-CN.md#计划文档)。
 
-Project、API、Global Resources 和 History 都作为编辑器标签打开：同一目标只保留一个页面，重载后会恢复同一个页面。Project 只展示长期内容——Overview、Knowledge 和 Diagrams，不显示 Hook 日志、任务清单或单次执行记录。
+API、Global Resources 和 History 都作为编辑器标签打开：同一目标只保留一个页面，重载后会恢复同一个页面。
 
 ## 反馈与许可证
 

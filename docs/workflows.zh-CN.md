@@ -107,11 +107,7 @@ Node 内置模块和工作区依赖可以直接使用，因为代码运行在真
 
 ### 计划文档
 
-Plan（包括 `plan()`）是统一的规划入口。没有可用 Project 时沿用原流程；存在有效模型时读取相关规范，区分 `none`、`change`、`unknown` 和 `conflict`。模型可用只决定是否检查，不代表应当修改规范。检查覆盖职责、对外接口、业务行为、依赖、不变量和设计决策。规范语境按需读取：只有改动触及某条边界、契约、不变量或设计决策时才读对应规范，局部改动不读无关规范；改动了这些内容，必须在同一次改动里更新对应规范。
-
-Build 会复核计划正文、规范哈希及适用集合后再恢复任务。最终验证通过执行内容基线核对实际变化，并再次评估规范影响；预存修改不归为本次工作，覆盖不足保持待处理。`none` 判定面对的是全部规范的索引，`change` 的每条任务用 `norms: <id>,<id>` 点明被改规范。复核通过后宿主直接写入，不再有人工审核步骤；写入前校验范围（只允许本轮读过的规范）、证据（每条提案的证据路径必须落在本次改动内）和规模（单次最多 20 条、正文合计 40,000 字符），任一项不满足都留在 `pending` 并写明原因。写入后，被改源码所对应的规范标为 `needs_verification`。保存冲突保留外部编辑，完成后保留 `.plan.md`，History 保存宿主判断和回流回执。
-
-可选的 `dext-project-impact` 注释只表达候选结论；工作区身份、哈希及授权由宿主管理。自定义 `.dext/rules/plan.md` 可以改变表达方式，不能绕过检查。Project 迁移独立且显式触发，旧格式也能接入 Plan；没有新增 Spec 模式、`spec()` API 或执行引擎。
+Plan（包括 `plan()`）是统一的规划入口。Plan 回合先调研工作区再写出计划文档；Build 会重新读取该文件，因此执行的是用户在编辑器里改过的内容。任务进度通过计划任务列表上报，完成判定依赖这些上报而不是文字声明。自定义 `.dext/rules/plan.md` 只改变表达方式。没有新增 Spec 模式、`spec()` API 或执行引擎。
 
 Plan 轮次同时返回一段对话回复和一份 Markdown 计划文档，Dext 将它保存为 `.plan.md`。默认指令要求按顺序包含 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Risks`，以及可选的 `## Out of scope`。`## Design` 下可以有 `### Before / After`、`### Execution flow` 和 `### Decisions`；它们是条件式的，没有结构性影响的改动不应画空图。
 
@@ -219,7 +215,7 @@ await fs.writeFile(`docs/decisions/${number}-${slug}.md`, created.text);
 
 上面的 `?` 表示可选参数，是文档记法。
 
-项目 API 以 TypeScript 模块存放在 `.dext/api/` 中。模块按其在 `.dext/api` 下的路径导入，例如 `.dext/api/workflow/feature.ts` 对应 `import { feature } from "dext/api/workflow/feature"`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。`.dext/project.json` 中的 `paths.apiDirs` 可以增加更多 API 目录，`.dext/api` 始终最先查找。
+项目 API 以 TypeScript 模块存放在 `.dext/api/` 中。模块按其在 `.dext/api` 下的路径导入，例如 `.dext/api/workflow/feature.ts` 对应 `import { feature } from "dext/api/workflow/feature"`。全局 API 存放在 Dext 全局存储中，可供所有工作区使用；同名项目 API 优先。`dext.apiDirectories` 设置可以增加更多工作区相对 API 目录，`.dext/api` 始终最先查找。
 
 项目 API 可以直接组合类型化 MCP、`agent` 和 UI 调用，不需要导入中间阶段 API。例如，功能开发工作流可以先读取上下文、制定计划，经 `ui.confirm` 确认后实现，再确认并验证。规则存放在 `.dext/rules/`，由各 Agent 阶段显式指定使用顺序；代码生成、提交这类需要确认的操作仍然是显式的 UI 闸门。
 
@@ -371,7 +367,7 @@ History 子对话的悬浮操作栏和右键菜单依次提供重命名、分叉
 
 内置 API 从 `dext` 模块导入，始终可用；`import` 就是普通 ESM，因此也可以引入 Node 内置模块、工作区文件、以 `dext/api/<id>` 导入的自定义 API 和 npm 包。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
 
-Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、**Project > Overview > Project configuration** 中的项目 Skill 目录、Dext 全局存储；同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
+Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、`dext.skillDirectories` 设置中的工作区相对目录、Dext 全局存储；同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
 
 ### 会话级 Skills 与命令
 
