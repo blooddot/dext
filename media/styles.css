@@ -2854,10 +2854,12 @@ button.primary.stopping {
   outline-offset: 2px;
 }
 
-.stream-jump-top .codicon,
-.stream-jump-prev-turn .codicon,
-.stream-jump-next-turn .codicon,
-.stream-jump-latest .codicon {
+/* The `[class*=...]` attribute repeats codicon.css's own selector so the font
+   shorthand there cannot outrank these numbers whatever the stylesheet order. */
+.stream-jump-top .codicon[class*='codicon-'],
+.stream-jump-prev-turn .codicon[class*='codicon-'],
+.stream-jump-next-turn .codicon[class*='codicon-'],
+.stream-jump-latest .codicon[class*='codicon-'] {
   font-size: 14px;
 }
 
