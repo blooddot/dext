@@ -649,6 +649,14 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.stream-jump-next-turn\[hidden\]/);
     expect(main).toMatch(/jumpToPrevTurn\.className = "stream-jump-prev-turn";/);
     expect(main).toMatch(/jumpToNextTurn\.className = "stream-jump-next-turn";/);
+    // Every glyph in the jump stack is a codicon, so one font update moves them all.
+    expect(main).toMatch(/jumpToPrevTurnIcon\.className = "codicon codicon-chevron-up";/);
+    expect(main).toMatch(/jumpToNextTurnIcon\.className = "codicon codicon-chevron-down";/);
+    // The ends stack two chevrons, the turn steps keep one, and both come from
+    // the codicon font rather than a drawn glyph.
+    expect(main).toMatch(/jumpToTop\.append\(\.\.\.jumpGlyph\("up"\)\);/);
+    expect(main).toMatch(/jumpToLatest\.append\(\.\.\.jumpGlyph\("down"\)\);/);
+    expect(main).toMatch(/icon\.className = `codicon codicon-chevron-\$\{direction\}`;/);
     // The stepping controls start from the last turn the reader expanded or
     // navigated to, not from the live turn (which owns the streamed render).
     expect(main).toMatch(/currentTurn: \(\) => navigationTurn\(\)/);

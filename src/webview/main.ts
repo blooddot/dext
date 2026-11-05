@@ -159,23 +159,27 @@ const drafts = new ComposerDraftStore();
  * navigation or an expansion the reader performs, and falls back to the active
  * turn after a conversation is rebuilt. */
 let turnAnchorId: string | undefined;
+/** Codicons has no double-chevron glyph, so the transcript ends stack two: the
+ * pair marks "all the way", one chevron is a single turn. */
+function jumpGlyph(direction: "up" | "down"): HTMLElement[] {
+  return [0, 1].map(() => {
+    const icon = document.createElement("i");
+    icon.className = `codicon codicon-chevron-${direction}`;
+    icon.setAttribute("aria-hidden", "true");
+    return icon;
+  });
+}
 const jumpToLatest = document.createElement("button");
 jumpToLatest.type = "button";
 jumpToLatest.className = "stream-jump-latest";
-const jumpToLatestIcon = document.createElement("i");
-jumpToLatestIcon.className = "codicon codicon-arrow-down";
-jumpToLatestIcon.setAttribute("aria-hidden", "true");
-jumpToLatest.append(jumpToLatestIcon);
+jumpToLatest.append(...jumpGlyph("down"));
 jumpToLatest.setAttribute("aria-label", "Jump to latest output");
 jumpToLatest.title = "Jump to latest output";
 jumpToLatest.hidden = true;
 const jumpToTop = document.createElement("button");
 jumpToTop.type = "button";
 jumpToTop.className = "stream-jump-top";
-const jumpToTopIcon = document.createElement("i");
-jumpToTopIcon.className = "codicon codicon-arrow-up";
-jumpToTopIcon.setAttribute("aria-hidden", "true");
-jumpToTop.append(jumpToTopIcon);
+jumpToTop.append(...jumpGlyph("up"));
 jumpToTop.setAttribute("aria-label", "Jump to top");
 jumpToTop.title = "Jump to top";
 jumpToTop.hidden = true;

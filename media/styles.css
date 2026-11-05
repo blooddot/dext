@@ -2863,6 +2863,18 @@ button.primary.stopping {
   font-size: 14px;
 }
 
+/* The ends stack two chevrons of the same size as the turn steps, packed to read
+   as one double glyph; a single chevron stays the step to one turn. */
+.stream-jump-top,
+.stream-jump-latest {
+  flex-direction: column;
+}
+
+.stream-jump-top .codicon[class*='codicon-'],
+.stream-jump-latest .codicon[class*='codicon-'] {
+  line-height: 0.4;
+}
+
 .stream-jump-top[hidden],
 .stream-jump-prev-turn[hidden],
 .stream-jump-next-turn[hidden],
