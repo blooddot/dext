@@ -63,8 +63,8 @@ describe("CliAxAIService.chat", () => {
   });
 
   it("prefers the outermost object when the answer contains its own kind-bearing objects", async () => {
-    // A project model has no top-level `kind`, while every diagram inside it does, so the
-    // Dext-result search would otherwise hand ax a diagram instead of the model.
+    // The answer has no top-level `kind`, while the objects inside it do, so the
+    // Dext-result search would otherwise hand ax a nested object instead of the answer.
     const text = JSON.stringify({ intent: { brief: { name: "Example" } }, diagrams: [{ id: "d", kind: "architecture", nodes: [] }] });
     const outer = new CliAxAIService({ id: "outer", label: "Outer", outputField: OUTPUT_FIELD, transport: async () => ({ text }), preferOutermostObject: true });
     expect(contentOf(await outer.chat(request([{ role: "user", content: "go" }])))).toEqual({

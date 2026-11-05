@@ -675,7 +675,7 @@ describe("CLI command resolution", () => {
 });
 
 describe("native structured output", () => {
-  const projectSchema = {
+  const outlineSchema = {
     type: "object",
     additionalProperties: false,
     properties: {
@@ -690,8 +690,8 @@ describe("native structured output", () => {
     return {
       profile: { id: "codex", label: "Codex", provider: "codex", command: process.execPath, models: [] },
       cwd: process.cwd(),
-      input: "Generate the project model.",
-      outputSchema: projectSchema,
+      input: "Generate the outline.",
+      outputSchema: outlineSchema,
       ...overrides
     };
   }
@@ -712,7 +712,7 @@ describe("native structured output", () => {
     const text = await runner.runStructured(structuredRequest());
 
     // The prompt reaches the CLI unchanged: the schema travels out of band.
-    expect(stdin).toBe("Generate the project model.");
+    expect(stdin).toBe("Generate the outline.");
     expect(args).toContain("--output-schema");
     // Codex strict structured output requires every object property, so the
     // optional ones are sent required-but-nullable.
@@ -740,7 +740,7 @@ describe("native structured output", () => {
     }));
 
     expect(args).toContain("--json-schema");
-    expect(args[args.indexOf("--json-schema") + 1]).toBe(JSON.stringify(projectSchema));
+    expect(args[args.indexOf("--json-schema") + 1]).toBe(JSON.stringify(outlineSchema));
     // Claude is not told every property is required, so the schema document is
     // the caller's; only the answer is normalized.
     expect(JSON.parse(text)).toEqual({ title: "Two" });
