@@ -33,6 +33,18 @@ async function install(contents: Record<string, string>) {
 }
 
 describe("import all Skill versions and resolve per Agent", () => {
+  it.each([
+    ["SKILL.md", "pack"],
+    ["archify/SKILL.md", "archify"]
+  ])("makes a standalone skill at %s available across Agents", async (path, id) => {
+    const result = await install({ [path]: skill(id) });
+    expect(result.manifest.skills).toMatchObject([{ id, agent: "shared" }]);
+    for (const agent of ["codex", "claude", "pi"]) {
+      expect(result.catalog.list(agent)).toMatchObject([{ id, available: true, variant: "shared" }]);
+      await expect(result.catalog.load(id, result.root, ".", agent)).resolves.toMatchObject({ instructions: skill(id) });
+    }
+  });
+
   it("imports once and switches versions at use time with shared fallback", async () => {
     const result = await install({
       "skills/review/SKILL.md": skill("review", "Shared review"),

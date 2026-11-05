@@ -63,7 +63,7 @@ export function sourceAgent(path: string, declarations?: SkillSourceDeclarations
   const matches = declarations?.roots.filter((root) => path === root.path || path.startsWith(`${root.path}/`)) ?? [];
   const agents = new Set(matches.map((root) => root.agent));
   if (agents.size === 1) return [...agents][0]!;
-  if (agents.size > 1 || !path || path.split("/").includes("skills")) return "shared";
+  if (agents.size > 1 || !path.includes("/") || path.split("/").includes("skills")) return "shared";
   return "unknown";
 }
 
