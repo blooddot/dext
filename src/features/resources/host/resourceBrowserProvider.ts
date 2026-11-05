@@ -44,7 +44,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
     }
     if (payload.type === "resourceScope" && this.tabKind === "globalResources") {
       const scope = payload.scope;
-      if ((scope === "global" || scope === "project") && (this.options.availableScopes?.() ?? ["global", "project"]).includes(scope)) {
+      if ((scope === "global" || scope === "project") && (this.options.availableScopes?.() ?? ["project", "global"]).includes(scope)) {
         if (scope !== current.scope) await this.navigate({ scope, query: "", scrollTop: 0, collapsed: [] });
       }
       return;
@@ -133,7 +133,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
     });
     result.panel.setHtml?.(render({
       ...(this.options.commandPrefix ? { commandPrefix: this.options.commandPrefix } : {}),
-      ...(this.tabKind === "globalResources" ? { title: "Resources", createKinds: this.listKinds(), scope: location.scope, availableScopes: this.options.availableScopes?.() ?? ["global", "project"], openResourceDirectory: true } : {}),
+      ...(this.tabKind === "globalResources" ? { title: "Resources", createKinds: this.listKinds(), scope: location.scope, availableScopes: this.options.availableScopes?.() ?? ["project", "global"], openResourceDirectory: true } : {}),
       ...(tabState ? { tabState } : {}),
       collapsed: this.history[this.position]!.collapsed,
       navigation: {

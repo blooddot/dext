@@ -293,8 +293,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     manager: editorTabs,
     restorer: editorTabRestorer,
     dataSource: resourceDataSource,
-    scope: "global",
-    availableScopes: () => resourceRoots().project ? ["global", "project"] : ["global"],
+    scope: resourceRoots().project ? "project" : "global",
+    availableScopes: () => resourceRoots().project ? ["project", "global"] : ["global"],
     onCommand: async (command, payload) => {
       // Resources refreshes its file listing; reloading runtime callables is unnecessary.
       if (command === "dext.reloadMethods") return;
