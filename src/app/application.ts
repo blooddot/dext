@@ -14,7 +14,7 @@ import { REPAIR_OUTPUT_FIELD } from "../features/agents/domain/axAdapter.js";
 import { BUILTIN_METHODS } from "../features/workflow/domain/builtins.js";
 import { describeApiFlowIssue, type ApiFlow, type ApiFlowIssue } from "../features/workflow/contracts/apiFlow.js";
 import { ContextResolver } from "../features/workflow/host/contextResolver.js";
-import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextTsconfig } from "../features/workflow/domain/dextApiTypes.js";
+import { DEXT_API_DIRECTORY, DEXT_DECLARATION_DIRECTORY, DEXT_DECLARATION_FILE, DEXT_TYPES_PATH, dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextStorageFiles, dextTsconfig } from "../features/workflow/domain/dextApiTypes.js";
 import { COMPOSER_GLOBAL_API_PATHS, composerGlobalApiModules, type ComposerApiSource } from "../features/workflow/domain/composerApiModules.js";
 import { inputReferenceDisplayParts } from "../features/workspace/domain/fileReference.js";
 import { clearHarnessPresetCache, listHarnessPresets } from "../features/agents/host/harnessPresets.js";
@@ -557,13 +557,15 @@ export class DextApplication {
    * The workspace's own project files are the mapping the editor uses, and they are
    * generated into the workspace because every path in them is relative: the same
    * files work on another machine and in CI. The storage copy stays as the fallback
-   * for a workspace that has no generated project yet.
+   * for a workspace that has no generated project yet, and the storage project beside
+   * it is what maps `dext` for the global APIs under its own `api/`.
    */
   private async writeDextTypes(methods: readonly CallableDefinition[]): Promise<void> {
     try {
       const directory = vscode.Uri.joinPath(this.storage.globalStorageUri, DEXT_DECLARATION_DIRECTORY);
       await vscode.workspace.fs.createDirectory(directory);
       await this.writeIfChanged(vscode.Uri.joinPath(directory, DEXT_DECLARATION_FILE), dextSharedDeclaration());
+      await this.writeProjectFiles(this.storage.globalStorageUri, dextStorageFiles());
       await this.writeWorkspaceDextProject(methods);
     } catch {
       // A read-only or virtual workspace cannot hold the generated project; the
@@ -599,10 +601,15 @@ export class DextApplication {
     const folder = vscode.workspace.workspaceFolders?.find((workspace) => workspace.uri.scheme === "file");
     if (!folder) return;
     if (!await this.workspaceImportsDext(folder)) return;
-    const directory = vscode.Uri.joinPath(folder.uri, ".dext");
-    await vscode.workspace.fs.createDirectory(directory);
-    for (const file of dextFiles(methods, this.projectApiDirs())) {
-      const uri = vscode.Uri.joinPath(directory, ...file.path.split("/"));
+    await this.writeProjectFiles(vscode.Uri.joinPath(folder.uri, ".dext"), dextFiles(methods, this.projectApiDirs()));
+  }
+
+  /** Writes generated project files below `root`. A `createOnly` file is left as it is
+   * once it exists: its dependencies and scripts belong to whoever owns the project. */
+  private async writeProjectFiles(root: vscode.Uri, files: readonly { path: string; content: string; createOnly?: boolean }[]): Promise<void> {
+    await vscode.workspace.fs.createDirectory(root);
+    for (const file of files) {
+      const uri = vscode.Uri.joinPath(root, ...file.path.split("/"));
       if (file.createOnly) {
         try {
           await vscode.workspace.fs.stat(uri);

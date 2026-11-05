@@ -755,3 +755,19 @@ export function dextFiles(
     { path: DEXT_PACKAGE_PATH, content: `${JSON.stringify(DEXT_PACKAGE_MANIFEST, null, 2)}\n`, createOnly: true }
   ];
 }
+
+/**
+ * The same project for Dext's own storage, whose `api/` directory holds the global
+ * APIs and whose `dext/dext.d.ts` is the declaration written beside it.
+ *
+ * Global APIs are machine-local, so this project is never committed — but without it
+ * a file under that `api/` has no `dext` mapping and the editor reports
+ * `Cannot find module 'dext'` on every global API. The layout is a workspace's
+ * `.dext` directory (`api/` below the project), so it is the same project text.
+ */
+export function dextStorageFiles(): { path: string; content: string; createOnly?: boolean }[] {
+  return [
+    { path: "tsconfig.json", content: dextTsconfig(`./${DEXT_DECLARATION_DIRECTORY}/${DEXT_DECLARATION_FILE}`) },
+    { path: "package.json", content: `${JSON.stringify(DEXT_PACKAGE_MANIFEST, null, 2)}\n`, createOnly: true }
+  ];
+}
