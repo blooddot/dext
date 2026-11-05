@@ -33,7 +33,14 @@ const TOKENS: readonly (readonly [string, EditorTokenName])[] = [
   ["property", "property"],
   // The TypeScript grammar reaches these through the value types.
   ["tag", "type"],
-  ["annotation", "function"]
+  ["annotation", "function"],
+  // The CSS, HTML and YAML grammars name their tokens after VS Code scopes the
+  // composer never emits; map them onto the same slots so fenced code follows the
+  // active theme instead of Monaco's built-in default.
+  ["attribute.name", "property"],
+  ["attribute.value", "string"],
+  ["key", "property"],
+  ["metatag", "keyword"]
 ];
 
 /** `color-mix(in srgb, foreground <weight>, background)` as the RRGGBB Monaco

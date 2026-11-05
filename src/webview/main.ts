@@ -32,7 +32,7 @@ import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImag
 import { FileDropClient } from "./fileDropClient.js";
 import { ImageAttachments } from "./imageAttachments.js";
 import { McpAssistantView } from "./mcpAssistantView.js";
-import { colorizeSource } from "./sourceHighlight.js";
+import { colorizeCodeBlocks, colorizeSource } from "./sourceHighlight.js";
 
 import type { HarnessPresetOption } from "../features/agents/contracts/agent.js";
 import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
@@ -373,6 +373,7 @@ const transcript = new TranscriptView({
 const trace = new AgentTraceView({
   document,
   markdown: (text) => markdown.render(text),
+  colorizeCode: (root) => colorizeCodeBlocks(root),
   codeBlock: (text) => codeBlock(text),
   terminal: (text) => terminalText(text),
   panel: () => agentStreamPanel(),
@@ -1638,6 +1639,7 @@ function copyableText(content: string): HTMLElement {
   body.className = "markdown-body";
   body.innerHTML = markdown.render(content);
   renderMarkdownDiagrams(body);
+  colorizeCodeBlocks(body);
   return renderTurnMarkdown(turnDomAdapter(document), body);
 }
 

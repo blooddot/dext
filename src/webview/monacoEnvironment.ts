@@ -1,4 +1,13 @@
 import * as monaco from "monaco-editor/editor/editor.api.js";
+// Fenced code in the conversation is painted with these same tokenizers, so the
+// grammars a reply is likely to use are registered next to the composer's own;
+// a fence without a registered grammar keeps its plain text.
+import "monaco-editor/languages/definitions/css/register.js";
+import "monaco-editor/languages/definitions/html/register.js";
+import "monaco-editor/languages/definitions/javascript/register.js";
+import "monaco-editor/languages/definitions/markdown/register.js";
+import "monaco-editor/languages/definitions/shell/register.js";
+import "monaco-editor/languages/definitions/yaml/register.js";
 import "monaco-editor/languages/definitions/python/register.js";
 // The composer's language id has to exist before a model can use it: an unregistered id
 // is silently replaced with `plaintext` (`LanguageService._createAndGetLanguageIdentifier`),

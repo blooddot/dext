@@ -23,6 +23,9 @@ export interface AgentToolGroup {
 export interface AgentTraceHost {
   document: Document;
   markdown(text: string): string;
+  /** Colors a finished Markdown body's fenced code; a missing implementation
+   * leaves it plain. */
+  colorizeCode?(root: HTMLElement): void;
   codeBlock(text: string): HTMLElement;
   terminal(text: string): DocumentFragment;
   /** The Process timeline the trace is currently painted into. */
@@ -359,8 +362,12 @@ export class AgentTraceView {
         content.className = "markdown-body";
         content.innerHTML = this.host.markdown(text);
         // A streaming row is rewritten every frame; a half-written fence would
-        // queue a diagram render per frame, so only a finished row renders one.
-        if (body.parentElement?.dataset.final === "true") renderMarkdownDiagrams(content);
+        // queue a diagram render and a tokenize per frame, so only a finished row
+        // renders either.
+        if (body.parentElement?.dataset.final === "true") {
+          renderMarkdownDiagrams(content);
+          this.host.colorizeCode?.(content);
+        }
         return content;
       },
       code: (text) => this.host.codeBlock(text),

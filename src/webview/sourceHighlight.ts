@@ -1,5 +1,6 @@
 import { monaco } from "./monacoEnvironment.js";
 import { DEXT_MONACO_THEME } from "./monacoTheme.js";
+import { codeLanguageId } from "../shared/lib/codeLanguage.js";
 
 /**
  * Paints code in the conversation with the composer's own tokenizer and theme.
@@ -48,4 +49,13 @@ export function colorizeSource(element: HTMLElement, language = "typescript"): v
     if (holder.lastChild?.nodeName === "BR") holder.lastChild.remove();
     element.replaceChildren(...holder.childNodes);
   }).catch(() => undefined);
+}
+
+/** Fenced code keeps its language in markdown-it's `language-<tag>` class, which is
+ * all the colorizer needs; an uncoloured tag leaves the block as plain text. */
+export function colorizeCodeBlocks(root: HTMLElement): void {
+  for (const code of root.querySelectorAll<HTMLElement>("pre > code[class*='language-']")) {
+    const language = codeLanguageId(code.className.match(/language-(\S+)/)?.[1] ?? "");
+    if (language) colorizeSource(code, language);
+  }
 }
