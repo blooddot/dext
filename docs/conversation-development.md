@@ -201,7 +201,7 @@ owner.
 | `features/conversations/host/historyStore.ts` | `features/workspace/domain/fileReference.ts` | cross-feature domain |
 | `features/conversations/host/historyEditorProvider.ts` | `platform/vscode/contextHost.ts` | host → VS Code adapter is allowed |
 | `features/conversations/host/uiInteractionBroker.ts` | `shared/contracts/uiForm.ts`, `shared/protocol/executionErrors.ts` | shared kernel |
-| `features/conversations/browser/transcriptView.ts` | `features/workspace/domain/fileReference.ts`, `platform/browser/fileReferenceChip.ts` | browser → shared browser primitive; `colorizeSource` is injected by `main.ts` |
+| `features/conversations/browser/transcriptView.ts` | `features/workspace/domain/fileReference.ts`, `platform/browser/fileReferenceChip.ts` | browser → shared workspace domain and chip primitive |
 
 The remaining cross-feature host couplings are registered in
 `crossFeatureHostCouplings` (`workflow/host/runtime` → `agents/host/*`). The next round

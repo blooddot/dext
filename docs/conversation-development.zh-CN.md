@@ -75,7 +75,7 @@ Provider 会话 id 按 Provider 分别保存，且只会由上报它的 Provider
 
 ### 本轮保留的真实共享依赖
 
-`migrationExceptions` 已为空：上一轮保留的依赖都已有了新所有者。`domain/planTodoProgress.ts` → `features/agents/domain/agentTodoTracking.ts`（feature domain 之间允许）；`presentation/historyRender.ts`、`host/historyStore.ts` → `features/workspace/domain/fileReference.ts` 与 `shared/lib/markdownCopy.ts`（跨 feature domain 与共享内核）；`host/historyEditorProvider.ts` → `platform/vscode/contextHost.ts`（host 使用 VS Code 适配器）；`host/uiInteractionBroker.ts` → `shared/contracts/uiForm.ts`、`shared/protocol/executionErrors.ts`；`browser/transcriptView.ts` → `features/workspace/domain/fileReference.ts`、`platform/browser/fileReferenceChip.ts`，`colorizeSource` 由 `main.ts` 注入。
+`migrationExceptions` 已为空：上一轮保留的依赖都已有了新所有者。`domain/planTodoProgress.ts` → `features/agents/domain/agentTodoTracking.ts`（feature domain 之间允许）；`presentation/historyRender.ts`、`host/historyStore.ts` → `features/workspace/domain/fileReference.ts` 与 `shared/lib/markdownCopy.ts`（跨 feature domain 与共享内核）；`host/historyEditorProvider.ts` → `platform/vscode/contextHost.ts`（host 使用 VS Code 适配器）；`host/uiInteractionBroker.ts` → `shared/contracts/uiForm.ts`、`shared/protocol/executionErrors.ts`；`browser/transcriptView.ts` → `features/workspace/domain/fileReference.ts` 与 `platform/browser/fileReferenceChip.ts`（读取可读的 `@` 标签并渲染 chip）。
 
 剩余的跨 feature host 耦合登记在 `crossFeatureHostCouplings`：`workflow/host/runtime` → `agents/host/*`。下一轮通过 `app` 注入端口后删除登记。
 
