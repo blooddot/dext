@@ -3,8 +3,11 @@ import type { EditorTabState } from "../../../platform/editor-tabs/editorTabStat
 import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, ResourcePackRef, ResourcePanelOptions, ResourceTreeNode } from "../contracts/resourceDocuments.js";
 import { RESOURCE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
 import { renderApiFlow } from "./apiFlowDiagram.js";
-import { resourceIcon } from "./resourceIcons.js";
 import { escapeHtml as escapeResourceHtml } from "../../../shared/lib/html.js";
+
+
+/** Toolbar glyphs are codicons; the editor tab document links their stylesheet once. */
+function resourceIcon(name: string): string { return `<i class="codicon codicon-${name}" aria-hidden="true"></i>`; }
 
 
 export function resourceEntryId(entry: Pick<ResourceEntry, "kind" | "scope" | "path">): string {
@@ -184,7 +187,7 @@ function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[
   const node = `Skill/${pack.id}`;
   const version = resourcePackVersion(pack);
   const action = pack.updatable
-    ? `<span class="resource-group-actions resource-pack-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("upgrade")}</button></span>`
+    ? `<span class="resource-group-actions resource-pack-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("cloud-download")}</button></span>`
     : "";
   return `<details class="resource-group resource-pack" data-resource-group="Skill" data-resource-node="${escapeResourceHtml(node)}" data-resource-type="skill" data-resource-pack="${escapeResourceHtml(pack.id)}"${collapsed.has(node) ? "" : " open"}>`
     + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node)}">${escapeResourceHtml(pack.name)}</span>`

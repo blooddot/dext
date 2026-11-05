@@ -7,6 +7,8 @@ export interface EditorTabHtmlOptions {
   scriptUri?: string;
   /** Shared Mermaid bundle loaded on demand by `main.js` or `apiFlow.js`. */
   mermaidUri?: string;
+  /** Codicon font stylesheet, needed by pages that draw toolbar glyphs from the font. */
+  codiconStylesheetUri?: string;
   /** Shared appearance stylesheet and host-theme sync bundle. The choice itself
    * is made from the sidebar's view title, so editor pages only need the shell
    * attribute (to avoid a first-paint flash) and the broadcast listener. */
@@ -20,13 +22,14 @@ export interface EditorTabHtmlOptions {
 /** Shared document shell for new and restored resource editor pages. */
 export function renderEditorTabHtml(body: string, stylesheetUri: string, cspSource: string, options: EditorTabHtmlOptions = {}): string {
   const nonce = randomBytes(16).toString("hex");
-  const policy = `default-src 'none'; style-src ${escapeAttribute(cspSource)}${options.scriptUri ? " 'unsafe-inline'" : ""}; script-src 'nonce-${nonce}';`;
+  const policy = `default-src 'none'; style-src ${escapeAttribute(cspSource)}${options.scriptUri ? " 'unsafe-inline'" : ""};${options.codiconStylesheetUri ? ` font-src ${escapeAttribute(cspSource)};` : ""} script-src 'nonce-${nonce}';`;
   const appearance = options.appearance;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`
     + `<meta name="viewport" content="width=device-width, initial-scale=1.0">`
     + `<meta http-equiv="Content-Security-Policy" content="${policy}">`
     + `<meta name="dext-script-nonce" content="${nonce}">`
     + (options.mermaidUri ? `<meta name="dext-mermaid" content="${escapeAttribute(options.mermaidUri)}">` : "")
+    + (options.codiconStylesheetUri ? `<link rel="stylesheet" href="${escapeAttribute(options.codiconStylesheetUri)}">` : "")
     + `<link rel="stylesheet" href="${escapeAttribute(stylesheetUri)}">`
     + (appearance ? `<link rel="stylesheet" href="${escapeAttribute(appearance.stylesheetUri)}">` : "")
     + `</head><body class="editor-tab"${appearance ? ` data-dext-theme="${appearance.theme}"` : ""}>`

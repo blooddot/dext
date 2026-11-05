@@ -78,7 +78,6 @@ p { overflow-wrap: anywhere; }
 .resource-tree-actions { display: inline-flex; gap: 4px; margin-left: auto; }
 .resource-icon-button { width: 26px; height: 26px; padding: 0; border: 0; background: transparent; display: inline-flex; align-items: center; justify-content: center; color: var(--vscode-foreground); flex-shrink: 0; }
 .resource-icon-button:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
-.resource-icon-button svg { display: block; width: 16px; height: 16px; }
 .resource-scope-switch { display: inline-flex; gap: 2px; margin-left: auto; padding: 2px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
 .resource-scope-switch button { border: 0; padding: 3px 9px; background: transparent; }
 .resource-scope-switch button.is-active { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: var(--vscode-list-activeSelectionBackground); }

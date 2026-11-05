@@ -82,6 +82,17 @@ describe("Dext appearance", () => {
     expect(html).toContain(`script-src 'nonce-${nonce}'`);
   });
 
+  it("allows the codicon font only when a page asks for its stylesheet", () => {
+    const html = renderEditorTabHtml("<div></div>", "https://webview.test/editorTabs.css", "https://webview.test", {
+      codiconStylesheetUri: "https://webview.test/codicon.css"
+    });
+    expect(html).toContain('<link rel="stylesheet" href="https://webview.test/codicon.css">');
+    // Without font-src the CSP would block codicon.ttf and every glyph renders empty.
+    expect(html).toContain("font-src https://webview.test;");
+    expect(renderEditorTabHtml("<div></div>", "https://webview.test/editorTabs.css", "https://webview.test"))
+      .not.toContain("font-src");
+  });
+
   it("broadcasts appearance changes to every open editor tab", () => {
     const panels: Array<EditorTabPanelHandle & { posted: unknown[] }> = [];
     const host: EditorTabHost = {

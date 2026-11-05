@@ -97,6 +97,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
       webview.cspSource,
       {
+        codiconStylesheetUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "codicons", "codicon.css")).toString(),
         // Both the conversation page and the API page lazy-load this one bundle;
         // it is listed for every editor tab so an API page can render its flow
         // without each tab paying for Mermaid up front.
