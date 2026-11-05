@@ -175,12 +175,16 @@ describe("Dext history rendering", () => {
       expect(button).toContain('data-session-id="session-1"');
       expect(button).toContain('data-turn-id="turn-2"');
     }
-    expect(summary).toMatch(/data-history-command="dext.history.renameTurn"[^>]*title="Rename turn"[^>]*><i class="codicon codicon-rename"/);
+    expect(summary).toMatch(/data-history-command="dext.history.renameTurn"[^>]*title="Rename turn"[^>]*><i class="codicon codicon-edit"/);
     expect(renderHistoryRecord(turn)).not.toContain("data-history-command");
     const spilled = renderHistoryRecord({ ...turn, spillPath: "/tmp/overflow.txt" }, "session-1");
-    expect(spilled.slice(0, spilled.indexOf("</summary>"))).toContain('data-history-command="dext.history.openSpill"');
+    const spilledActions = [...spilled.slice(0, spilled.indexOf("</summary>")).matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1]);
+    // The spill button trails the row, matching the live turn toolbar.
+    expect(spilledActions.at(-1)).toBe("dext.history.openSpill");
     const sessionHtml = renderHistorySession({ id: "session-1", createdAt: 2, updatedAt: 2, turns: [turn] });
     const sessionSummary = sessionHtml.slice(0, sessionHtml.indexOf("</summary>"));
+    // Both copy-as-Markdown actions share one glyph.
+    expect(sessionSummary).toMatch(/data-history-command="dext.history.copyConversation"[^>]*><i class="codicon codicon-markdown"/);
     expect([...sessionSummary.matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1])).toEqual([
       "dext.history.continueConversation", "dext.history.renameConversation", "dext.history.forkConversation",
       "dext.history.copyConversation", "dext.history.addConversationToDext", "dext.history.addFavorite", "dext.history.archiveConversation", "dext.history.deleteConversation"

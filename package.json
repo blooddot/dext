@@ -159,12 +159,12 @@
       {
         "command": "dext.history.showNewestFirst",
         "title": "Dext History: Show Newest First",
-        "icon": "$(arrow-down)"
+        "icon": "$(sort-precedence)"
       },
       {
         "command": "dext.history.showOldestFirst",
         "title": "Dext History: Show Oldest First",
-        "icon": "$(arrow-up)"
+        "icon": "$(sort-precedence)"
       },
       {
         "command": "dext.history.showFavoritesOnly",

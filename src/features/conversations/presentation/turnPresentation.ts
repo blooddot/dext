@@ -3,8 +3,10 @@ import type { AgentStreamEvent, AgentTokenUsage, DextResult } from "../../../sha
 import { uiResultText } from "./uiInteractionPresentation.js";
 
 /** Shared labels and icons for the live conversation and History toolbars. */
-export const TURN_EDIT_ACTION = { icon: "edit", label: "Edit input in Dext" } as const;
-export const TURN_RENAME_ACTION = { icon: "rename", label: "Rename turn" } as const;
+// `rename` is an I-beam caret; the pencil is what every other app calls rename, so
+// putting the input back in the composer takes the return arrow instead.
+export const TURN_EDIT_ACTION = { icon: "reply", label: "Edit input in Dext" } as const;
+export const TURN_RENAME_ACTION = { icon: "edit", label: "Rename turn" } as const;
 export const TURN_RETRY_ACTION = { icon: "debug-restart", label: "Retry this turn" } as const;
 export const TURN_CONTINUE_ACTION = { icon: "play-circle", label: "Continue from the failed Code step" } as const;
 export const TURN_FORK_ACTION = { icon: "repo-forked", label: "Fork from this turn" } as const;

@@ -77,13 +77,14 @@ function historyActionButton(icon: string, command: string, label: string, sessi
 
 function historyTurnActions(sessionId: string, turnId: string, spill: boolean): string {
   return `<span class="history-turn-actions">${[
-    ...(spill ? [historyActionButton("go-to-file", "dext.history.openSpill", "Open truncated output", sessionId, turnId)] : []),
     historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameTurn", TURN_RENAME_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkFromTurn", TURN_FORK_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_COPY_INPUT_ACTION.icon, "dext.history.copyTurnInput", TURN_COPY_INPUT_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyTurn", TURN_COPY_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_ADD_TO_INPUT_ACTION.icon, "dext.history.addTurnToDext", TURN_ADD_TO_INPUT_ACTION.label, sessionId, turnId),
-    historyActionButton(TURN_DELETE_ACTION.icon, "dext.history.deleteTurn", TURN_DELETE_ACTION.label, sessionId, turnId)
+    historyActionButton(TURN_DELETE_ACTION.icon, "dext.history.deleteTurn", TURN_DELETE_ACTION.label, sessionId, turnId),
+    // Last, like the live turn toolbar, so the common actions keep their positions.
+    ...(spill ? [historyActionButton("go-to-file", "dext.history.openSpill", "Open truncated output", sessionId, turnId)] : [])
   ].join("")}</span>`;
 }
 
@@ -98,7 +99,7 @@ function historySessionActions(session: DextHistorySession, favorite: boolean): 
     historyActionButton("debug-continue", "dext.history.continueConversation", "Continue in Dext", session.id),
     historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameConversation", "Rename conversation", session.id),
     historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkConversation", "Fork conversation", session.id),
-    historyActionButton("copy", "dext.history.copyConversation", "Copy conversation as Markdown", session.id),
+    historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyConversation", "Copy conversation as Markdown", session.id),
     historyActionButton(TURN_ADD_TO_INPUT_ACTION.icon, "dext.history.addConversationToDext", TURN_ADD_TO_INPUT_ACTION.label, session.id),
     historyActionButton(favoriteIcon, favoriteCommand, favoriteLabel, session.id),
     historyActionButton(archiveIcon, archiveCommand, archiveLabel, session.id),

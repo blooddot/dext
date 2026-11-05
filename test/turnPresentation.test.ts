@@ -12,8 +12,9 @@ describe("turn title presentation", () => {
   });
 
   it("distinguishes editing input from renaming the title", () => {
-    expect(TURN_EDIT_ACTION).toEqual({ icon: "edit", label: "Edit input in Dext" });
-    expect(TURN_RENAME_ACTION).toEqual({ icon: "rename", label: "Rename turn" });
+    expect(TURN_EDIT_ACTION).toEqual({ icon: "reply", label: "Edit input in Dext" });
+    // Two pencils in one toolbar read as the same action, so rename keeps the pencil.
+    expect(TURN_RENAME_ACTION).toEqual({ icon: "edit", label: "Rename turn" });
     // Copying the prompt uses the same icon as every other copy control; the
     // Markdown export is the one that gets a different glyph.
     expect(TURN_COPY_INPUT_ACTION).toEqual({ icon: "copy", label: "Copy input only" });
