@@ -204,6 +204,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         return result.updated || Boolean(result.refreshed);
       }
+      if (command.endsWith(".editResourceDocument")) {
+        const document = payload.id ? await dataSource.definition(payload.id) : undefined;
+        if (!document) throw new Error("This resource is no longer available. Refresh the list.");
+        await sidebar.editResource(document.entry.kind, document.entry.scope,
+          { path: document.entry.path, name: document.entry.name });
+        return;
+      }
       if (command.endsWith(".deleteResource") || command.endsWith(".openResourceFolder") || (command.endsWith(".openResourceSource") && payload.id)) {
         const document = payload.id ? await dataSource.definition(payload.id) : undefined;
         if (!document) throw new Error("This resource is no longer available. Refresh the list.");

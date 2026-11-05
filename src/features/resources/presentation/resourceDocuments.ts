@@ -237,9 +237,16 @@ export function resourceSearchText(entry: ResourceEntry): string {
 }
 
 
+/** Only a managed file on disk can be revised in Dext; built-in and read-only
+ * reference entries have nothing to rewrite. */
+export function editableResource(entry: ResourceEntry): boolean {
+  return !entry.reference && entry.kind !== "file" && Boolean(entry.source.path) && entry.source.kind === entry.scope;
+}
+
 export function renderResourceActions(entry: ResourceEntry, prefix: string): string {
-  if (!entry.source.path || entry.source.kind !== entry.scope || entry.reference || entry.kind === "file") return "";
+  if (!editableResource(entry)) return "";
   const actions = [
+    ["editResourceDocument", "Edit in Dext", "edit"],
     ["openResourceSource", "Open file", "file"],
     ["openResourceFolder", "Open containing folder", "folder-opened"],
     ["deleteResource", "Delete resource", "trash"]
@@ -509,10 +516,14 @@ export function renderResourceDefinition(document: ResourceDefinitionDocument, o
   const referenceDetails = entry.reference ? renderReferenceModule(entry.reference) : "";
   // A flow without source (a built-in or a reference entry) has no module to analyse.
   const flow = entry.apiFlow ? renderApiFlow(entry.apiFlow, entry.name) : "";
+  // A managed file can also be revised in Dext: the same conversation layout the
+  // Resources panel uses for a new resource, opened on this document.
+  const editable = editableResource(entry);
   // A reference entry is documentation rather than a file: it has no Dext call to
   // insert and no source to open, and its own section is the whole page.
   const actions = entry.reference ? `<span class="resource-source">TypeScript declaration</span>`
     : (entry.source.path ? `<button type="button" data-resource-command="${prefix}.openResourceSource" data-resource-path="${escapeResourceHtml(entry.source.path)}">Open source</button>` : "")
+      + (editable ? `<button type="button" data-resource-command="${prefix}.editResourceDocument" data-resource-id="${escapeResourceHtml(entry.id)}">Edit in Dext</button>` : "")
       + `<button type="button" data-resource-command="${prefix}.insertResourceReference" data-resource-id="${escapeResourceHtml(entry.id)}">Insert reference</button>`;
   const source = entry.reference || !document.content ? ""
     : `<h3 class="resource-source-heading">Source</h3><pre class="resource-content" data-resource-source="${escapeResourceHtml(document.content)}"><code>${entry.kind === "api" ? highlightResourceSource(document.content) : escapeResourceHtml(document.content)}</code></pre>`;

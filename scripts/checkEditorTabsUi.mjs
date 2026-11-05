@@ -209,11 +209,11 @@ try {
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...fileButton, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...fileButton, button: 'left', clickCount: 1 });
       for (const command of ['openResourceFolder', 'deleteResource']) await evaluate(`document.querySelector('.resource-entry-actions [data-resource-command="dext.${command}"] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
-      assert.deepEqual(await evaluate(`messages.map(message=>({type:message.type,command:message.command,id:message.id}))`), ['openResourceSource','openResourceFolder','deleteResource'].map(command=>({type:'resourceCommand',command:`dext.${command}`,id:resourceEntries[0].id})), 'toolbar actions target the resource without opening its detail');
+      assert.deepEqual(await evaluate(`messages.map(message=>({type:message.type,command:message.command,id:message.id}))`), ['editResourceDocument','openResourceFolder','deleteResource'].map(command=>({type:'resourceCommand',command:`dext.${command}`,id:resourceEntries[0].id})), 'toolbar actions target the resource without opening its detail');
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 });
       await evaluate(`document.querySelector('.resource-entry-actions button').focus()`);
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-entry-actions')).opacity`), '1', 'keyboard focus reveals the resource toolbar');
-      assert.equal(await evaluate(`document.querySelector('[data-resource-node="Skill"] .resource-entry-actions').children.length`), 3);
+      assert.equal(await evaluate(`document.querySelector('[data-resource-node="Skill"] .resource-entry-actions').children.length`), 4);
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'resource actions fit the viewport');
       await writeFile(join(artifacts, `resources-${themeName}-${width}.png`), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
       // File API signatures and details must use the same component and token palette on both pages.

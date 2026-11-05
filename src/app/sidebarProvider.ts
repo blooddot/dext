@@ -18,7 +18,7 @@ import { harnessPresetOrDefault } from "../features/agents/domain/harnessPresetD
 import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { dedupeSkillIds, withoutSkills } from "../features/conversations/domain/agentSelection.js";
 import type { McpServerConfig } from "../features/mcp/host/mcpRegistry.js";
-import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
+import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
 import { FileSearchController } from "../features/workspace/host/fileSearchController.js";
 import { ReadyMessageQueue } from "../shared/lib/readyMessageQueue.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
@@ -418,9 +418,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.postWhenReady({ type: "insertFileReferences", expressions: [...expressions] });
   }
 
-  /** Routes a resource tab action into the existing edit/creation conversation flow. */
-  async editResource(type: ResourceKind, scope: ResourceScope): Promise<void> {
-    await this.startConversation(false, { type, scope });
+  /** Routes a resource tab action into the existing edit/creation conversation flow.
+   * With a target, the new tab opens on that saved document so the first request
+   * revises it instead of creating another resource. */
+  async editResource(type: ResourceKind, scope: ResourceScope, target?: Pick<ResourceTarget, "path" | "name">): Promise<void> {
+    const document = target ? await this.application.readResource(type, scope, target.path, target.name) : undefined;
+    await this.startConversation(false, { type, scope, ...(document ? { target: document } : {}) });
   }
 
   addMcp(): void {
@@ -701,10 +704,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await (request.resourceSource
             ? this.run(request.mode, request.source, request.planPath, false, undefined, request.resourceSource)
             : this.run(request.mode, request.source, request.planPath));
-          break;
-        case "openResourceCreator":
-          this.conversation.controller.hydrate();
-          await this.startConversation(false, { type: "api", scope: this.application.state().resourceRoots?.project ? "project" : "global" });
           break;
         case "resourceOptions":
           await this.resourceAction(request.sessionId, async (session, resource) => {
@@ -1402,9 +1401,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     <section id="input-section" class="input-section">
       <div id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true">
         <span class="section-heading-label"><i class="section-chevron codicon codicon-chevron-down"></i><span>Input</span></span>
-        <div class="section-heading-actions">
-          <button id="create-resource" class="icon-button" type="button" title="Create resource" aria-label="Create resource"><i class="codicon codicon-add"></i></button>
-        </div>
       </div>
       <div id="input-body" class="collapsible-body input-body">
         <div id="plan-toolbar" class="plan-toolbar" hidden>

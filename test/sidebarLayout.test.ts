@@ -105,15 +105,17 @@ describe("sidebar panel layout", () => {
     expect(html.match(/class="icon-button panel-fullscreen"/g)).toBeNull();
   });
 
-  it("creates resources in the shared conversation composer with resource controls", async () => {
+  it("creates resources from the Resources panel with composer resource controls", async () => {
     const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(html).toContain('id="create-resource"');
+    // The composer carries no create entry: resources are created from the
+    // Resources panel, which opens the shared conversation layout itself.
+    expect(html).not.toContain('id="create-resource"');
+    expect(main).not.toContain('openResourceCreator');
     expect(html).not.toContain('id="resource-creator-dialog"');
     expect(html).toContain('id="resource-toolbar"');
     expect(html).toContain('id="resource-preview"');
     expect(html).toContain('id="resource-save"');
-    expect(main).toContain('type: "openResourceCreator"');
     expect(main).toContain('renderResourceControls()');
     expect(main).not.toContain('resourceCreatorDialog');
   });

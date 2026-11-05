@@ -94,6 +94,7 @@ describe("global resources panel", () => {
     for (const payload of [
       { command: "dext.openResourceDirectory" },
       { command: "dext.openResourceSource", path: "C:/project/.dext/api/git/commit.ts" },
+      { command: "dext.editResourceDocument", id: "api:project:git/commit.ts" },
       { command: "dext.insertResourceReference", id: "api:project:git/commit.ts" },
       { command: "dext.newResource", kind: "api" }
     ]) {

@@ -74,7 +74,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 
 ## 内置 API
 
-- 点击侧栏的 **Create resource**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。新建 Skill 时还提供 **Describe | Import**：Import 以确定性方式安装 GitHub Skill 包，仅在候选有歧义时调用 Agent，并且仍需显式 Create。草稿可包含独立的 rules、模板和 skill 支持文件；API 通过文件名引用规则。预览时可选择文件，保存会检查所有文件的冲突并一起写入。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示连同关联文件另存一份。资源目标、关联文件、草稿和对话会随历史记录恢复。
+- 点击侧栏 Resources 面板中的 **New API / New MCP / New Rule / New Skill**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。新建 Skill 时还提供 **Describe | Import**：Import 以确定性方式安装 GitHub Skill 包，仅在候选有歧义时调用 Agent，并且仍需显式 Create。草稿可包含独立的 rules、模板和 skill 支持文件；API 通过文件名引用规则。预览时可选择文件，保存会检查所有文件的冲突并一起写入。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示连同关联文件另存一份。资源目标、关联文件、草稿和对话会随历史记录恢复。
 - `ask({ input, workspace?, cli?, model? }) -> AskResult`：只读解释和分析。
 - `plan({ input, workspace?, cli?, model? }) -> PlanResult`：创建、维护和执行实施计划。
 - `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
@@ -391,7 +391,7 @@ Command 校验后也按每一轮的“Agent 专用版 → 共享版”解析。�
 
 Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、128 个文件、总计 1 MB、单文件 200 KB）；任一选中项失败则整包失败。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
 
-移除旧版本时，打开 **Resources** 并切换到安装时的 **Project / Global**，悬浮或键盘聚焦资源行，可选择打开文件、打开所在目录、删除。独立 Skill 会连同自己的附属文件目录一起移除；导入包中的任意 Skill 的删除按钮会卸载整个包，包括所有 Skill、Agent 版本、commands、清单和报告，确认框会列出范围。删除使用系统回收站，存在未保存文件时会阻止操作。删除后 Resources 和 Input 会刷新。
+修改已有资源时，打开 **Resources** 并切换到它所在的 **Project / Global**，悬浮或键盘聚焦资源行，可选择 **Edit in Dext**、打开文件、打开所在目录、删除。**Edit in Dext** 会以该文档为初始目标打开资源对话——就是 **New API / New MCP / New Rule / New Skill** 打开的那个专用 Tab——描述改动、预览草稿后再保存。移除旧版本时使用同一行的删除按钮。独立 Skill 会连同自己的附属文件目录一起移除；导入包中的任意 Skill 的删除按钮会卸载整个包，包括所有 Skill、Agent 版本、commands、清单和报告，确认框会列出范围。删除使用系统回收站，存在未保存文件时会阻止操作。删除后 Resources 和 Input 会刷新。
 
 **Skill** 分类会按导入包分组。包所在行会显示发布版本（没有 Release 时显示短 commit），悬浮或键盘聚焦时出现 **Update Skill pack**。更新会从保存的 GitHub 来源重新导入：裸仓库链接跟随最新发布的 Release，`tree`/`blob` 链接跟随链接里指定的分支或 tag；随后在真正改动前请求确认。确认框会列出旧/新版本、新增和移除的 Skill，以及所有将移入回收站的目录。存在未保存文件、新 Skill id 被其他包或独立 Skill 占用、或确认期间清单发生变化时，更新会被拒绝。写入失败时会从内存恢复原有文件。对话中的 Skill 选择会保留；新版本不再安装的 Skill 会变为不可用。如果包已经在解析出的 commit 上，Dext 会提示已是最新且不写入任何文件。
 

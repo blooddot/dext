@@ -52,8 +52,7 @@ try {
       host({type:'outputSession',session:{id,createdAt:1,updatedAt:1,turns:[]},hostInitiated:true});
     };activate('chat');`);
   assert.equal(await evaluate(`document.getElementById('resource-toolbar').hidden`), true);
-  await evaluate(`document.getElementById('create-resource').click()`);
-  assert.equal(await evaluate(`sent.at(-1).type`), "openResourceCreator");
+  assert.equal(await evaluate(`document.getElementById('create-resource')===null`), true);
   await evaluate(`activate('resource')`);
   assert.equal(await evaluate(`document.getElementById('resource-toolbar').hidden`), false);
   assert.equal(await evaluate(`document.querySelector('dialog[open]')===null`), true);

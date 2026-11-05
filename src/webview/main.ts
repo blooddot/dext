@@ -94,7 +94,6 @@ const elements = {
   mcpAssistantScopeLabel: element<HTMLElement>("mcp-assistant-scope-label"),
   mcpAssistantGenerate: element<HTMLButtonElement>("mcp-assistant-generate"),
   mcpAssistantSave: element<HTMLButtonElement>("mcp-assistant-save"),
-  createResource: element<HTMLButtonElement>("create-resource"),
   resourceToolbar: element<HTMLElement>("resource-toolbar"),
   resourceTarget: element<HTMLButtonElement>("resource-target"),
   resourceChoose: element<HTMLButtonElement>("resource-choose"),
@@ -2384,7 +2383,6 @@ elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
 elements.mcpAssistantClose.addEventListener("click", () => mcp.requestClose());
 elements.mcpAssistantGenerate.addEventListener("click", () => mcp.generate());
 elements.mcpAssistantSave.addEventListener("click", () => mcp.save());
-elements.createResource.addEventListener("click", () => vscode.postMessage({ type: "openResourceCreator" }));
 elements.resourceTarget.addEventListener("click", () => sendResourceAction(activeResource()?.draft || activeResource()?.target ? "previewResource" : "chooseResource"));
 elements.resourceChoose.addEventListener("click", () => {
   const choose = (): void => sendResourceAction("chooseResource");

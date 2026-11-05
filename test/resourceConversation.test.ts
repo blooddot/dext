@@ -100,6 +100,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
   const posted: WebviewResponse[] = [];
   const draftResource = vi.fn(options.draftResource ?? defaultDraftResource);
   const saveResource = vi.fn(options.saveResource ?? defaultSaveResource);
+  const readResource = vi.fn(async (_type: string, _scope: string, path: string, name: string) => ({ name, path, content: "Existing document" }));
   const application = {
     state: () => ({
       agentSelection: { profileId: "codex", mode: "agent" },
@@ -109,6 +110,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
     composerTypes: async () => ({ declaration: "", apiPaths: [], modules: [] }),
     draftResource,
     saveResource,
+    readResource,
     reload: async () => undefined,
     setAgentSelection: () => undefined,
     endAgentSession: () => undefined,
@@ -157,7 +159,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
     await receive({ type: "executeInput", mode: "ask", source });
   }
 
-  return { sidebar, history, posted, draftResource, saveResource, seed, receive, run };
+  return { sidebar, history, posted, draftResource, saveResource, readResource, seed, receive, run };
 }
 
 describe("resource conversations", () => {
@@ -199,6 +201,20 @@ describe("resource conversations", () => {
     // tab may become the current conversation after concurrent starts.
     expect(harness.messages.flatMap((message) => message.type === "conversations" ? [message.activeId] : []))
       .toEqual([secondId]);
+  });
+
+  it("opens a saved resource as the edit target of a new tab", async () => {
+    const harness = createSidebarHarness();
+
+    await harness.sidebar.editResource("api", "project", { path: "git/commit.ts", name: "git.commit" });
+
+    expect(harness.readResource).toHaveBeenCalledWith("api", "project", "git/commit.ts", "git.commit");
+    // The tab starts on the saved document, so the first request revises it
+    // rather than asking the Agent to create another resource.
+    expect(harness.history.list().find((item) => item.resource?.type === "api")?.resource).toEqual({
+      type: "api", scope: "project",
+      target: { name: "git.commit", path: "git/commit.ts", content: "Existing document" }
+    });
   });
 
   it("records a resource turn and retains the draft across history reload", async () => {

@@ -28,6 +28,7 @@ describe("resource documents", () => {
     expect(list).toContain('data-resource-open="api:project:Task/Query.ts"');
     const detail = renderResourceDefinition(buildResourceDefinition(entries[0]!, "export async function Query(): Promise<AskResult> { ... }"));
     expect(detail).toContain("openResourceSource");
+    expect(detail).toContain("editResourceDocument");
     expect(detail).toContain("insertResourceReference");
     expect(detail).toContain("export async function Query()");
   });
@@ -46,10 +47,11 @@ describe("resource documents", () => {
     const list = buildResourceList({ kind: "skill", scope: "project", entries: [source, builtin] });
     for (const layout of [{}, { categoryTree: true }, { apiTree: true }]) {
       const html = renderResourceList(list, { ...layout, commandPrefix: "custom" });
-      for (const command of ["openResourceSource", "openResourceFolder", "deleteResource"]) {
+      for (const command of ["editResourceDocument", "openResourceSource", "openResourceFolder", "deleteResource"]) {
         expect(html.match(new RegExp(`data-resource-command="custom\\.${command}"`, "g"))).toHaveLength(1);
       }
       expect(html).toContain('aria-label="Delete resource"');
+      expect(html).toContain('aria-label="Edit in Dext"');
       expect(html).not.toContain('data-resource-command="dext.deleteResource"');
     }
   });
