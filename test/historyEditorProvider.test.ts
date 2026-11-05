@@ -138,4 +138,11 @@ describe("History turn action routing", () => {
     clickListeners.get("toggle")!({ target: record });
     expect(summaryTarget.append).toHaveBeenCalledWith(moved);
   });
+
+  it("lists only conversations that recorded a turn", async () => {
+    await history.updateResourceContext("empty-shell", { type: "rule", scope: "global" });
+    panel.refresh();
+    expect(state.html).toContain("session-1");
+    expect(state.html).not.toContain("empty-shell");
+  });
 });

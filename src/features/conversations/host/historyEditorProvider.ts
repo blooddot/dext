@@ -150,7 +150,10 @@ export class DextHistoryPanel implements vscode.Disposable {
     const favorites = new Set(ordering.favorites);
     // For the active view this is equivalent to orderHistorySessions(this.history.list(), ordering);
     // reading all sessions is also necessary when the archived view is selected.
-    const sessions = orderHistorySessions(this.history.list(true), ordering);
+    // An opened tab with no turn yet has nothing to render, so History lists only
+    // conversations that recorded one.
+    const sessions = orderHistorySessions(this.history.list(true), ordering)
+      .filter((session) => session.turns.length > 0);
     const empty = ordering.archivedOnly
       ? "No archived Dext conversations."
       : ordering.favoritesOnly
