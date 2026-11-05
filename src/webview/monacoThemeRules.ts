@@ -36,6 +36,19 @@ const TOKENS: readonly (readonly [string, EditorTokenName])[] = [
   ["annotation", "function"]
 ];
 
+/** `color-mix(in srgb, foreground <weight>, background)` as the RRGGBB Monaco
+ * needs for its default token. The composer's prose is dimmer than a full
+ * editor's foreground so it matches the conversation body beside it. */
+export function mixDefaultForeground(foreground: string, background: string, weight: number): string | undefined {
+  const fg = monacoColor(foreground);
+  const bg = monacoColor(background);
+  if (!fg || !bg) return undefined;
+  const channel = (hex: string, index: number): number => parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  return [0, 1, 2]
+    .map((index) => Math.round(channel(fg, index) * weight + channel(bg, index) * (1 - weight)).toString(16).padStart(2, "0"))
+    .join("");
+}
+
 /** `#rgb`, `#rrggbb` and `#rrggbbaa` are what themes write; Monaco wants `RRGGBB`. */
 export function monacoColor(value: string): string | undefined {
   const hex = value.trim().replace(/^#/, "");

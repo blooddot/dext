@@ -4,8 +4,9 @@ export function observeComposerOverflow(controls: HTMLElement): void {
   const row = controls.closest<HTMLElement>(".action-row")!;
   const actions = row.querySelector<HTMLElement>(".action-actions")!;
   const extras = controls.querySelector<HTMLElement>(".composer-extras")!;
-  const mode = controls.querySelector<HTMLElement>(".composer-menu")!;
-  const skills = controls.querySelector<HTMLElement>(".composer-skills");
+  // Permission now sits beside Mode and Skills, so every left-hand menu counts.
+  const leftMenus = [...controls.querySelectorAll<HTMLElement>(".composer-menu")]
+    .filter((menu) => !extras.contains(menu));
   const more = controls.querySelector<HTMLButtonElement>(".composer-more")!;
   let pending = false;
 
@@ -14,25 +15,38 @@ export function observeComposerOverflow(controls: HTMLElement): void {
     if (!row.clientWidth) return;
     const gap = parseFloat(getComputedStyle(controls).columnGap) || 0;
     const rowGap = parseFloat(getComputedStyle(row).columnGap) || 0;
-    const requiredWidth = (): number => {
+    const menusWidth = (): number => leftMenus.reduce((total, menu) => {
+      const width = menu.getBoundingClientRect().width;
+      return width ? total + width + gap : total;
+    }, 0);
+    const actionWidth = (): number => rowGap + actions.getBoundingClientRect().width;
+    // A squeezed menu reports the width it was squeezed to, so every natural
+    // measurement runs with the extras unfolded and the menus unshrinkable.
+    const natural = <T>(read: () => T): T => {
       controls.classList.add("measure-extras");
-      const required = mode.getBoundingClientRect().width
-        + (skills && !skills.hidden ? skills.getBoundingClientRect().width : 0)
-        + extras.getBoundingClientRect().width
-        + gap + rowGap + actions.getBoundingClientRect().width;
+      const measured = read();
       controls.classList.remove("measure-extras");
-      return required;
+      return measured;
     };
-    let required = requiredWidth();
+    const fullWidth = (): number =>
+      natural(() => menusWidth() + extras.getBoundingClientRect().width + actionWidth());
+    let required = fullWidth();
     const skillsCompact = required > row.clientWidth;
     controls.classList.toggle("skills-compact", skillsCompact);
-    if (skillsCompact) required = requiredWidth();
+    if (skillsCompact) required = fullWidth();
     const compact = required > row.clientWidth;
     controls.classList.toggle("is-compact", compact);
     if (!compact) {
-      controls.classList.remove("show-extra");
+      controls.classList.remove("is-tight", "show-extra");
       more.setAttribute("aria-expanded", "false");
+      return;
     }
+    // Compact folds Agent and Model into the ... popover. The triggers left on
+    // the row drop their text when even that row is too wide.
+    // shortcut: icons are the floor, so a ~190px row cannot shrink further.
+    controls.classList.remove("is-tight");
+    const collapsed = natural(() => menusWidth() + more.offsetWidth + actionWidth());
+    controls.classList.toggle("is-tight", collapsed > row.clientWidth);
   }
 
   function schedule(): void {

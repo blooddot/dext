@@ -677,8 +677,7 @@ button {
 
 .icon-button:focus-visible,
 .method-row:focus-visible,
-button.primary:focus-visible,
-.code-editor:focus-within {
+button.primary:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
@@ -1136,9 +1135,9 @@ main {
   --composer-accent: var(--vscode-button-background);
   --composer-accent-fill: var(--composer-accent);
   --composer-accent-foreground: var(--vscode-button-foreground);
-  margin: 10px -10px 0;
-  padding: 4px 10px 10px;
-  border-top: 1px solid var(--vscode-sideBar-border, var(--vscode-widget-border));
+  margin: 0 -10px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--dext-quiet-divider);
   min-width: 0;
   min-height: 34px;
   display: flex;
@@ -1167,8 +1166,11 @@ main {
 
 .input-panel {
   min-height: 48px;
-  height: var(--input-editor-height);
-  flex: 0 1 var(--input-editor-height);
+  display: flex;
+  /* Pasted-image chips sit above the editor, so the panel grows upward while
+     the editor keeps its height and the typed text stays put. */
+  flex-direction: column;
+  flex: 0 1 auto;
   position: relative;
   overflow: hidden;
 }
@@ -1183,12 +1185,27 @@ main {
 
 .code-editor {
   width: 100%;
-  height: 100%;
+  height: var(--input-editor-height);
   min-height: 0;
+  flex: 0 1 auto;
   overflow: hidden;
-  border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 4px;
+  /* A soft lifted edge instead of contrastBorder: the composer should sit on
+     the panel, not inside a hard frame. */
+  border: 1px solid color-mix(in srgb, var(--vscode-widget-border, #454545) 82%, var(--vscode-foreground));
+  border-radius: 6px;
   background: var(--vscode-editor-background);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.code-editor:focus-within {
+  border-color: var(--vscode-focusBorder);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder) 40%, transparent);
+}
+
+/* Monaco paints its own placeholder from a VS Code token; keep it clearly
+   weaker than the text the reader typed. */
+.monaco-editor .editorPlaceholder {
+  color: color-mix(in srgb, var(--vscode-foreground) 55%, transparent) !important;
 }
 
 /* Monaco owns editing widgets; only Dext reference chips need custom colors. */
@@ -1396,9 +1413,8 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 0 0 6px;
   overflow: auto;
-  border-top: 1px solid var(--vscode-widget-border, #454545);
 }
 
 .input-error {
@@ -1817,15 +1833,18 @@ body.image-page {
 .composer-controls,
 .action-actions {
   display: flex;
-  gap: 4px;
+  gap: 8px;
   align-items: center;
   min-width: 0;
 }
 
 .composer-controls {
   position: relative;
-  /* The measured overflow layout moves extra choices into the ... popover. */
-  flex: 0 1 auto;
+  /* The measured overflow layout moves extra choices into the ... popover.
+     Filling the row lets the Agent and Model controls sit on the right, next
+     to Send, while mode/skills/permission stay left. */
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: nowrap;
   overflow: visible;
 }
@@ -1834,12 +1853,15 @@ body.image-page {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .composer-more {
   display: none;
   flex: 0 0 auto;
+  /* Only shown in the compact row, where the right-aligned extras are hidden. */
+  margin-left: auto;
   color: var(--vscode-descriptionForeground);
 }
 
@@ -1995,8 +2017,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.
   box-shadow: none;
 }
 
+#agent-control,
 #model-control {
-  max-width: 220px;
   padding-right: 5px;
   padding-left: 5px;
   border-color: transparent;
@@ -2004,6 +2026,12 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.
   background: transparent;
 }
 
+#model-control {
+  max-width: 220px;
+}
+
+#agent-control:hover,
+#agent-control[aria-expanded="true"],
 #model-control:hover,
 #model-control[aria-expanded="true"] {
   border-color: color-mix(in srgb, var(--vscode-foreground) 30%, transparent);
@@ -2590,7 +2618,7 @@ details:not([open]) > :not(summary) {
 
   .attachment-bar {
     max-height: 48px;
-    padding: 3px 6px;
+    padding: 0 0 3px;
   }
 
   .image-attachment {
@@ -2639,6 +2667,17 @@ details:not([open]) > :not(summary) {
   display: flex;
 }
 
+/* Tightest tier: the row keeps its triggers but drops their text. Every
+   trigger still carries a title, so the names survive for screen readers. */
+.composer-controls.is-tight > .composer-menu > .composer-control {
+  padding: 0 6px;
+}
+
+.composer-controls.is-tight > .composer-menu > .composer-control .composer-control-value,
+.composer-controls.is-tight > .composer-menu > .composer-control > .codicon:last-child {
+  display: none;
+}
+
 .composer-controls.is-compact:not(.measure-extras) .composer-extras .composer-control {
   max-width: 100%;
   width: 100%;
@@ -2662,6 +2701,12 @@ details:not([open]) > :not(summary) {
   max-width: none;
   padding: 0;
   border: 0;
+}
+
+/* A squeezed trigger reports the width it was squeezed to, so measure every
+   menu at its natural width instead. */
+.composer-controls.measure-extras .composer-menu {
+  flex-shrink: 0;
 }
 
 button.primary.stopping {

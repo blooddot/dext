@@ -25,7 +25,6 @@ export interface PlanToolbarView {
   /** A build this conversation already sent is still being prepared. Reading
    * the plan is an awaited step, so the wait can outlast the click. */
   preparingBuild(): boolean;
-  setPlaceholder(text: string): void;
   onResourceActive(): void;
 }
 
@@ -42,9 +41,6 @@ export function renderPlanToolbar(view: PlanToolbarView): void {
   const visible = view.inputMode() === "plan";
   const activePlanPath = view.activePlanPath();
   const planStatus = view.planStatus();
-  view.setPlaceholder(visible
-    ? activePlanPath ? "Describe changes to the selected plan…" : "Describe a new plan…"
-    : "");
   elements.toolbar.hidden = !visible;
   if (!visible) return;
   elements.targetLabel.textContent = activePlanPath?.split("/").pop() ?? "New plan";

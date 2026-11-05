@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { monacoColor, monacoThemeRules } from "../src/webview/monacoThemeRules.js";
+import { mixDefaultForeground, monacoColor, monacoThemeRules } from "../src/webview/monacoThemeRules.js";
 
 /**
  * Monaco's TypeScript tokenizer emits `keyword`, `identifier`, `string`, `number`,
@@ -37,6 +37,14 @@ describe("the active theme as Monaco token rules", () => {
   it("keeps a style-only rule and drops the slots the theme does not set", () => {
     const rules = monacoThemeRules({ comment: { fontStyle: "italic" }, keyword: { foreground: "not-a-color" } });
     expect(rules).toEqual([{ token: "comment", fontStyle: "italic" }]);
+  });
+
+  it("softens the composer's default text toward the editor background", () => {
+    // 92% foreground over the background: the composer must not read brighter
+    // than the conversation prose it sits under.
+    expect(mixDefaultForeground("#ffffff", "#000000", 0.92)).toBe("ebebeb");
+    expect(mixDefaultForeground("#abc", "#123456", 0.5)).toBe("5e7891");
+    expect(mixDefaultForeground("var(--vscode-foreground)", "#000000", 0.92)).toBeUndefined();
   });
 
   it("accepts the shorthand hex a theme may write and ignores anything else", () => {

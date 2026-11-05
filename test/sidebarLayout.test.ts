@@ -220,7 +220,9 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/body \{[\s\S]*?min-width: 300px;/);
     // Extra controls collapse into a popover; Send stays on the same line.
     expect(css).toMatch(/\.action-row \{[\s\S]*?flex-wrap: nowrap;/);
-    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 0 1 auto;[\s\S]*?flex-wrap: nowrap;/);
+    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 1 1 auto;[\s\S]*?flex-wrap: nowrap;/);
+    // Agent and Model move to the right edge, beside Send.
+    expect(css).toMatch(/\.composer-extras \{[\s\S]*?margin-left: auto;/);
     expect(css).toMatch(/\.composer-menu \{[\s\S]*?min-width: 0;[\s\S]*?flex: 0 1 auto;/);
   });
 
@@ -611,8 +613,8 @@ describe("sidebar panel layout", () => {
     // The composer height is a shared token; the short-viewport rule below still overrides it.
     expect(css).toMatch(/--dext-composer-height: clamp\(96px, 12vh, 128px\);/);
     expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: var\(--dext-composer-height\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: calc\(100% - 44px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
-    expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 0 1 var\(--input-editor-height\);/);
-    expect(css).toMatch(/\.code-editor \{[\s\S]*?height: 100%;[\s\S]*?min-height: 0;[\s\S]*?\}/);
+    expect(css).toMatch(/\.input-panel \{[\s\S]*?flex-direction: column;[\s\S]*?flex: 0 1 auto;[\s\S]*?\}/);
+    expect(css).toMatch(/\.code-editor \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?min-height: 0;[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
     expect(css).toMatch(/\.result-section \{[\s\S]*?flex: 1 1 0;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?flex-basis: 0;[\s\S]*?min-height: 0;[\s\S]*?overflow: auto;/);

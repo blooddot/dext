@@ -1416,6 +1416,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="resource-source-import" type="button" role="tab" data-resource-source="import" aria-selected="false">Import</button>
         </div>
         <section id="input-shell" class="input-panel unified-input">
+          <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
           <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
           <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files, or hold Shift and drag files into the input" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
         </section>
@@ -1424,8 +1425,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <span id="input-error-message" class="input-error-message"></span>
           <button id="dismiss-input-error" class="icon-button input-error-close" type="button" title="Dismiss error" aria-label="Dismiss error"><i class="codicon codicon-close" aria-hidden="true"></i></button>
         </div>
-
-        <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
 
         <div class="action-row">
           <div id="composer-controls" class="composer-controls">
@@ -1437,11 +1436,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
               <button id="skills-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i class="codicon codicon-library" aria-hidden="true"></i><span class="composer-control-label">Skills</span><span id="skills-control-value" class="composer-control-value">No skills</span><i class="codicon codicon-chevron-down" aria-hidden="true"></i></button>
               <div id="skills-menu" class="composer-popover composer-skills-popover" role="menu" aria-label="Skills" hidden></div>
             </div>
-            <div id="composer-extras" class="composer-extras">
             <div id="permission-menu-shell" class="composer-menu">
               <button id="permission-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="permission-control-icon" class="codicon codicon-shield" aria-hidden="true"></i><span class="composer-control-label">Permission</span><span id="permission-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="permission-menu" class="composer-popover" role="menu" hidden></div>
             </div>
+            <div id="composer-extras" class="composer-extras">
             <div class="composer-menu">
               <button id="agent-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Agent</span><span id="agent-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
               <div id="agent-menu" class="composer-popover" role="menu" hidden></div>

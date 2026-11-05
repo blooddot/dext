@@ -24,13 +24,18 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
     const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};};
     ({input:rect('#input-section'),editor:rect('#code-editor'),attachments:rect('#attachment-bar'),actions:rect('.action-row'),body:rect('#input-body'),viewport:innerHeight,
       overflow:document.documentElement.scrollHeight>innerHeight,
+      triggersFit:(()=>{const send=document.getElementById('run').getBoundingClientRect().left;
+        const rects=[...document.querySelectorAll('#composer-controls > .composer-menu > .composer-control, #composer-controls > .composer-more')]
+          .filter(el=>el.getClientRects().length).map(el=>el.getBoundingClientRect()).sort((a,b)=>a.left-b.left);
+        return rects.every((rect,index)=>rect.right<=send&&(!index||rect.left>=rects[index-1].right));})(),
       sendVisible:(()=>{const el=document.getElementById('run'),r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.left+r.width/2,r.bottom-2));})()})
   }`);
   const fits = (box, label) => {
+    assert.ok(box.triggersFit, `${label}: composer triggers stay apart, left of Send`);
     assert.ok(Math.abs(box.input.bottom - box.viewport) <= 1, `${label}: Input bottom aligns with viewport`);
     assert.ok(box.actions.bottom <= box.body.bottom + 1, `${label}: footer is not clipped: ${JSON.stringify(box)}`);
     assert.ok(box.attachments.bottom <= box.actions.top + 1, `${label}: attachments stay above footer`);
-    assert.ok(box.editor.bottom <= box.attachments.top + 1, `${label}: editor stays above attachments`);
+    assert.ok(box.attachments.bottom <= box.editor.top + 1, `${label}: attachments stay above the editor`);
     assert.ok(box.sendVisible, `${label}: Send remains clickable at its bottom edge`);
     assert.equal(box.overflow, false, `${label}: no page overflow`);
   };

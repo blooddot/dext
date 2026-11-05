@@ -1,6 +1,6 @@
 import { monaco } from "./monacoEnvironment.js";
 import type { EditorTokenTheme } from "../shared/contracts/theme.js";
-import { monacoColor, monacoThemeRules } from "./monacoThemeRules.js";
+import { mixDefaultForeground, monacoColor, monacoThemeRules } from "./monacoThemeRules.js";
 
 /** The Monaco theme the composer and the conversation both paint code with. */
 export const DEXT_MONACO_THEME = "dext";
@@ -19,10 +19,14 @@ export function applyMonacoTheme(theme?: EditorTokenTheme): void {
     const color = monacoColor(value);
     if (color) colors[name] = `#${color}`;
   }
+  // Plain composer text follows the conversation's softened foreground; high
+  // contrast keeps the theme's own full-strength text.
+  const defaultText = contrast ? undefined : mixDefaultForeground(
+    css.getPropertyValue("--vscode-foreground"), css.getPropertyValue("--vscode-editor-background"), 0.92);
   monaco.editor.defineTheme(DEXT_MONACO_THEME, {
     base: contrast ? light ? "hc-light" : "hc-black" : light ? "vs" : "vs-dark",
     inherit: true,
-    rules: monacoThemeRules(theme),
+    rules: [...(defaultText ? [{ token: "", foreground: defaultText }] : []), ...monacoThemeRules(theme)],
     colors
   });
   monaco.editor.setTheme(DEXT_MONACO_THEME);

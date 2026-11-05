@@ -111,6 +111,9 @@ export class DextCodeEditor {
       fontSize: 13, lineHeight: 24, minimap: { enabled: false }, scrollBeyondLastLine: false, wordWrap: "off",
       wordWrapBreakAfterCharacters: " \t", wordWrapBreakBeforeCharacters: "", wordBreak: "keepAll", wrappingIndent: "none",
       lineNumbersMinChars: 3, glyphMargin: false, folding: false, fixedOverflowWidgets: true,
+      // The right ruler marks the caret with a 2px tick, which reads as a stray
+      // line in a box this short. Diagnostics still paint their own marks there.
+      hideCursorInOverviewRuler: true,
       padding: { top: 8, bottom: 8 }, quickSuggestions: { other: true, strings: true, comments: false },
       wordBasedSuggestions: "off", unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false, nonBasicASCII: false },
       parameterHints: { enabled: true }, hover: { delay: 300 }, renderValidationDecorations: "on"

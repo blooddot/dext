@@ -590,7 +590,23 @@ function updateRunState(): void {
   elements.inputShell.classList.toggle("conversation-mode", !codeMode);
   renderPlanToolbar();
   renderResourceToolbar();
+  editor.setPlaceholder(composerPlaceholder(resource));
   syncTurnActions();
+}
+
+/** One line per mode (and per resource draft) saying what the composer accepts. */
+function composerPlaceholder(resource: ResourceSession | undefined): string {
+  // The run button is Stop while a turn runs, so the composer has to say the
+  // next message waits rather than looking ready to send.
+  if (executing) return stopping ? "Stopping…" : "Working… press Stop to cancel, then send again";
+  if (resource) {
+    return pristineNewSkill(resource) && resourceSource === "import"
+      ? "Paste a GitHub URL"
+      : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`;
+  }
+  if (inputMode === "plan") return activePlanPath ? "Describe changes to the selected plan…" : "Describe a new plan…";
+  if (inputMode === "code") return "Write code to run…";
+  return inputMode === "ask" ? "Ask a question, / for skills, @ for files" : "Describe a task, / for skills, @ for files";
 }
 
 function renderPlanToolbar(): void {
@@ -617,7 +633,6 @@ function renderPlanToolbar(): void {
         // The host reports its own state for this plan; the local wait only covers
         // the time before the first of those messages arrives.
         || (planStatus === "active" && pendingBuilds.get(browser.activeId ?? "") === activePlanPath)),
-    setPlaceholder: (text) => editor.setPlaceholder(text),
     onResourceActive: renderResourceToolbar
   });
 }
@@ -807,10 +822,6 @@ function renderResourceToolbar(): void {
   elements.resourceStatus.dataset.state = resourceErrors.has(browser.activeId ?? "") ? "error" : !locked && !resource.draft && resource.saved ? "saved" : "idle";
   elements.resourceStatus.textContent = resourceErrors.get(browser.activeId ?? "") ?? (resourcePending.has(browser.activeId ?? "") ? "Working…" : executing ? "Generating…" : resource.draft ? "Unsaved draft" : resource.saved ? "Saved" : resource.target ? "Editing" : "New resource");
   if (fileCount > 1 && !resourceErrors.has(browser.activeId ?? "")) elements.resourceStatus.textContent += ` · ${fileCount} files`;
-  const importing = pristineNewSkill(resource) && resourceSource === "import";
-  editor.setPlaceholder(importing
-    ? "Paste a GitHub URL"
-    : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`);
 }
 
 /** Applies the editor theme and Dext token styles to the sidebar document. */
