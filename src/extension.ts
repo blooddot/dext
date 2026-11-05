@@ -593,6 +593,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         historyPanel.refreshTurnTitle(session.id, turn.id);
       })
     ),
+    vscode.commands.registerCommand("dext.history.copyTurnInput", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        // Exactly what was submitted, without the answer or the Markdown wrapper.
+        await vscode.env.clipboard.writeText(turn.input);
+      })
+    ),
     vscode.commands.registerCommand("dext.history.copyTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
         const session = historySession(context);

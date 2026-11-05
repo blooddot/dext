@@ -169,7 +169,7 @@ describe("Dext history rendering", () => {
     const actions = [...summary.matchAll(/<button[^>]*data-history-command="([^"]+)"[^>]*>/g)];
     expect(actions.map((match) => match[1])).toEqual([
       "dext.history.renameTurn",
-      "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.addTurnToDext", "dext.history.deleteTurn"
+      "dext.history.forkFromTurn", "dext.history.copyTurnInput", "dext.history.copyTurn", "dext.history.addTurnToDext", "dext.history.deleteTurn"
     ]);
     for (const [button] of actions) {
       expect(button).toContain('data-session-id="session-1"');

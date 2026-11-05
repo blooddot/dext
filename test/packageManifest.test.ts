@@ -179,7 +179,7 @@ describe("Dext package manifest", () => {
     const menu = value.contributes?.menus?.["webview/context"] ?? [];
     const palette = value.contributes?.menus?.commandPalette ?? [];
     expect(menu.filter((item) => item.when?.includes("webviewSection == 'turn'")).map((item) => item.command))
-      .toEqual(["dext.history.renameTurn", "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.addTurnToDext", "dext.history.deleteTurn"]);
+      .toEqual(["dext.history.renameTurn", "dext.history.forkFromTurn", "dext.history.copyTurnInput", "dext.history.copyTurn", "dext.history.addTurnToDext", "dext.history.deleteTurn"]);
     for (const command of [
       "dext.history.continueConversation",
       "dext.history.forkConversation",

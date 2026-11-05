@@ -12,6 +12,7 @@ import type { AgentTodoView } from "./agentTodoView.js";
 import {
   TURN_ADD_TO_INPUT_ACTION,
   TURN_COPY_ACTION,
+  TURN_COPY_INPUT_ACTION,
   TURN_DELETE_ACTION,
   TURN_EDIT_ACTION,
   TURN_FORK_ACTION,
@@ -65,7 +66,7 @@ export interface TranscriptHost {
   isExecuting(): boolean;
   activeTurnId(): string | undefined;
   activeExecutionSessionId(): string | undefined;
-  copy(source: string): HTMLButtonElement;
+  copyInput(source: string): void;
   /** A copy control whose payload is resolved at click time, for content that is
    * still streaming when the title bar is created. */
   copyLive(read: () => string): HTMLButtonElement;
@@ -222,6 +223,9 @@ export class TranscriptView {
       this.actionButton(TURN_FORK_ACTION.icon, TURN_FORK_ACTION.label, () => {
         if (sessionId) this.host.forkFromTurn(sessionId, turnId);
       }, true),
+      this.actionButton(TURN_COPY_INPUT_ACTION.icon, TURN_COPY_INPUT_ACTION.label, () => {
+        this.host.copyInput(source);
+      }),
       this.actionButton(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, () => {
         if (sessionId) this.host.copyTurn(sessionId, turnId);
       }, true),

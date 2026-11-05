@@ -6,7 +6,7 @@ import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentT
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession } from "../contracts/history.js";
 import {
-  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn,
+  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_COPY_INPUT_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn,
   presentTurnMode, resultCopyText, type TurnRenderModel
 } from "./turnPresentation.js";
 import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
@@ -80,6 +80,7 @@ function historyTurnActions(sessionId: string, turnId: string, spill: boolean): 
     ...(spill ? [historyActionButton("go-to-file", "dext.history.openSpill", "Open truncated output", sessionId, turnId)] : []),
     historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameTurn", TURN_RENAME_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkFromTurn", TURN_FORK_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_COPY_INPUT_ACTION.icon, "dext.history.copyTurnInput", TURN_COPY_INPUT_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyTurn", TURN_COPY_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_ADD_TO_INPUT_ACTION.icon, "dext.history.addTurnToDext", TURN_ADD_TO_INPUT_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_DELETE_ACTION.icon, "dext.history.deleteTurn", TURN_DELETE_ACTION.label, sessionId, turnId)

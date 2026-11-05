@@ -101,6 +101,10 @@
         "title": "Copy This Turn as Markdown"
       },
       {
+        "command": "dext.history.copyTurnInput",
+        "title": "Copy This Turn's Input"
+      },
+      {
         "command": "dext.history.addTurnToDext",
         "title": "Add This Turn to Dext Input"
       },
@@ -419,6 +423,10 @@
           "when": "false"
         },
         {
+          "command": "dext.history.copyTurnInput",
+          "when": "false"
+        },
+        {
           "command": "dext.history.addTurnToDext",
           "when": "false"
         },
@@ -682,14 +690,19 @@
           "group": "1_turn@3"
         },
         {
-          "command": "dext.history.copyTurn",
+          "command": "dext.history.copyTurnInput",
           "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
           "group": "1_turn@4"
         },
         {
-          "command": "dext.history.addTurnToDext",
+          "command": "dext.history.copyTurn",
           "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
           "group": "1_turn@5"
+        },
+        {
+          "command": "dext.history.addTurnToDext",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
+          "group": "1_turn@6"
         },
         {
           "command": "dext.history.deleteTurn",
@@ -707,14 +720,19 @@
           "group": "1_turn@2"
         },
         {
-          "command": "dext.history.copyTurn",
+          "command": "dext.history.copyTurnInput",
           "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
           "group": "1_turn@3"
         },
         {
-          "command": "dext.history.addTurnToDext",
+          "command": "dext.history.copyTurn",
           "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
           "group": "1_turn@4"
+        },
+        {
+          "command": "dext.history.addTurnToDext",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "1_turn@5"
         },
         {
           "command": "dext.history.deleteTurn",

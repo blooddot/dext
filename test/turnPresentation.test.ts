@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatTurnTokenUsage, presentTurn, resultCopyText, TURN_EDIT_ACTION, TURN_RENAME_ACTION } from "../src/features/conversations/presentation/turnPresentation.js";
+import { formatTurnTokenUsage, presentTurn, resultCopyText, TURN_COPY_ACTION, TURN_COPY_INPUT_ACTION, TURN_EDIT_ACTION, TURN_RENAME_ACTION } from "../src/features/conversations/presentation/turnPresentation.js";
 import type { DextResult } from "../src/shared/contracts/types.js";
 import { TurnTitle } from "../src/features/conversations/browser/turnTitle.js";
 
@@ -14,6 +14,10 @@ describe("turn title presentation", () => {
   it("distinguishes editing input from renaming the title", () => {
     expect(TURN_EDIT_ACTION).toEqual({ icon: "edit", label: "Edit input in Dext" });
     expect(TURN_RENAME_ACTION).toEqual({ icon: "rename", label: "Rename turn" });
+    // Copying the prompt uses the same icon as every other copy control; the
+    // Markdown export is the one that gets a different glyph.
+    expect(TURN_COPY_INPUT_ACTION).toEqual({ icon: "copy", label: "Copy input only" });
+    expect(TURN_COPY_ACTION).toEqual({ icon: "markdown", label: "Copy turn as Markdown" });
   });
 
   it("keeps the last reported usage through completion without summing snapshots", () => {
