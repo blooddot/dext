@@ -52,6 +52,7 @@ All notable changes to Dext are documented in this file.
 - A Plan execution continues across Agent turns with round checkpoints and a separate final verification, and live and restored history show incomplete, blocked and user-stopped outcomes.
 - A screenshot annotation tab zooms like a picture viewer: a bar with zoom, **Fit**, **1:1**, pixel size and **Hide annotations**, plus Ctrl/Cmd + wheel around the pointer.
 - A Code run keeps every API result out of Output by default; pass `echo: true` on an `ask`, `plan`, `agent`, `template` or `skill` call to show it.
+- An MCP tool result that returns images now shows them, and an image that cannot be loaded reports why while its text and structured output stay intact.
 
 ## 0.1.1 - 2026-09-09
 
