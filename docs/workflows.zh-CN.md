@@ -91,7 +91,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 import { ask, agent, ui } from "dext";
 ```
 
-每次调用只接收一个命名参数对象，返回可 JSON 序列化的 Promise 值。`cli`、`model`、`reasoning`、`speed` 仍可逐次覆盖：
+每次调用只接收一个命名参数对象，返回可 JSON 序列化的 Promise 值。`cli` 与 `model` 可逐次覆盖；`reasoning` 与 `speed` 是 Codex `model` 对象里的字段，各 CLI 的写法见 [Agent 配置](agents.zh-CN.md#通用配置)：
 
 ```ts
 const answer = await ask({ input: "解释这段代码", cli: "claude", model: "sonnet" });

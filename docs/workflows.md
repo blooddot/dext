@@ -100,7 +100,7 @@ Every one of them is an export of the `dext` module:
 import { ask, agent, ui } from "dext";
 ```
 
-Each call takes exactly one object of named arguments and returns a promise of a JSON-serializable value. `cli`, `model`, `reasoning` and `speed` remain per-call overrides:
+Each call takes exactly one object of named arguments and returns a promise of a JSON-serializable value. `cli` and `model` remain per-call overrides; `reasoning` and `speed` are fields of the Codex `model` object, and [Agent configuration](agents.md#general-configuration) describes each form:
 
 ```ts
 const answer = await ask({ input: "Explain this code", cli: "claude", model: "sonnet" });
