@@ -300,6 +300,9 @@ export class DextRuntime implements WorkflowRuntime {
   private outputLanguage: ResolvedOutputLanguage | undefined;
   private skillLoader: ((skill: string, workspace: DirRef, agent?: string) => Promise<{ instructions: string; sourcePath: string }>) | undefined;
   private ruleLoader: ((path: string) => Promise<string | undefined>) | undefined;
+  /** Dext's global resource root: a template a global API keeps beside its
+   * global rules and skills lives here, outside every workspace. */
+  private templateRoot: string | undefined;
   private mcpCaller: ((
     tool: string,
     input: Record<string, unknown>,
@@ -447,6 +450,10 @@ export class DextRuntime implements WorkflowRuntime {
 
   setRuleLoader(loader: (path: string) => Promise<string | undefined>): void {
     this.ruleLoader = loader;
+  }
+
+  setTemplateRoot(root: string): void {
+    this.templateRoot = root;
   }
 
   setMcpCaller(caller: (
@@ -724,14 +731,27 @@ export class DextRuntime implements WorkflowRuntime {
     if (typeof source !== "string" || !source.trim()) throw new Error("template requires a template path.");
     const absolute = isAbsolute(source) ? source : resolve(this.workspaceRoot, source);
     if (!insideWorkspace(this.workspaceRoot, absolute)) throw new Error("The template must stay inside the workspace.");
-    let content: string;
-    try {
-      content = await readFile(absolute, "utf8");
-    } catch (error) {
-      throw new Error(`Unable to read the template '${source}': ${error instanceof Error ? error.message : String(error)}`);
-    }
-    const spec = parseTemplate(content, source);
+    const spec = parseTemplate(await this.readTemplate(source, absolute), source);
     return { spec, preset: templatePreset(spec, args.values) };
+  }
+
+  /** The workspace file wins; `.dext/templates/<name>` falls back to the global
+   * `templates/` directory, the way rules already fall back to global rules. */
+  private async readTemplate(source: string, absolute: string): Promise<string> {
+    const projectRoot = resolve(this.workspaceRoot, ".dext", "templates");
+    const globalRoot = this.templateRoot;
+    const fallback = globalRoot && insideWorkspace(projectRoot, absolute)
+      ? resolve(globalRoot, "templates", relative(projectRoot, absolute))
+      : undefined;
+    let failure: unknown;
+    for (const candidate of fallback === undefined ? [absolute] : [absolute, fallback]) {
+      try {
+        return await readFile(candidate, "utf8");
+      } catch (error) {
+        failure = error;
+      }
+    }
+    throw new Error(`Unable to read the template '${source}': ${failure instanceof Error ? failure.message : String(failure)}`);
   }
 
   private canAttemptRepair(context: { allowWorkspaceWrite: boolean; signal?: AbortSignal }, rawText: string): boolean {

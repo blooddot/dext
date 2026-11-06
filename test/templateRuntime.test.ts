@@ -224,6 +224,36 @@ describe("template API", () => {
     });
   });
 
+  it("reads a template from the global templates directory when the workspace has none", async () => {
+    await withTemplate(async (root, runtime) => {
+      const globalRoot = await mkdtemp(join(tmpdir(), "dext-global-"));
+      try {
+        await mkdir(join(globalRoot, "templates"), { recursive: true });
+        await writeFile(join(globalRoot, "templates", "release.md"), TEMPLATE, "utf8");
+        runtime.setTemplateRoot(globalRoot);
+        runtime.setAgentRunner({ run: async () => FIELD_VALUES });
+
+        const source = ".dext/templates/release.md";
+        const global = await runtime.execute(templateCall([
+          { name: "input", value: "x" },
+          { name: "source", value: source }
+        ]));
+        expect((global.result as { text: string }).text).toContain("# ADR-0081");
+
+        // 工作区同名文件优先：放一个改过标题的模板，渲染结果随之变化。
+        await mkdir(join(root, ".dext", "templates"), { recursive: true });
+        await writeFile(join(root, ".dext", "templates", "release.md"), TEMPLATE.replace("# ADR-", "# Local-"), "utf8");
+        const local = await runtime.execute(templateCall([
+          { name: "input", value: "x" },
+          { name: "source", value: source }
+        ]));
+        expect((local.result as { text: string }).text).toContain("# Local-0081");
+      } finally {
+        await rm(globalRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("repairs an invalid answer against the template's field contract", async () => {
     await withTemplate(async (_root, runtime) => {
       runtime.setAgentRunner({ run: async () => ({ kind: "template", number: "0081" }) });

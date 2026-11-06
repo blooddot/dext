@@ -73,7 +73,7 @@ export function resourcePrompt(resource: ResourceSession, input: string): string
     'Include static templates and skill supporting documents in files when needed. Do not generate code that creates or rewrites these files at runtime. Keep ordinary task input and dynamic values in the API.',
     resource.scope === "project"
       ? 'Reference template files by workspace-relative source paths, e.g. source: ".dext/templates/example.md".'
-      : 'Rules and skills can be resolved from global resources. template() source must be inside the workspace: do not reference a global template as if it were a project .dext/templates file.',
+      : 'Rules, skills and templates can be resolved from global resources: a global API keeps its template in the global templates/ directory and names it with the same source path, e.g. source: ".dext/templates/example.md". The workspace file wins when both exist.',
     resource.type === "file" ? "name is a safe workspace-relative file path. content is the complete file content, preserving the file's format and extension."
       : resource.type === "api" ? [
         "name is a dotted API id. content is a TypeScript module exporting one function named after the id's last segment (for api/dev/fix.ts: export async function fix). Result types such as AskResult are exported by the dext module rather than declared globally, so import the ones the signature uses as types.",

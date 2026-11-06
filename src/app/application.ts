@@ -469,6 +469,7 @@ export class DextApplication {
         throw error;
       }
     });
+    this.runtime.setTemplateRoot(this.storage.globalStorageUri.fsPath);
     this.runtime.setMcpCaller((tool, input, onProcessEvent) => this.mcp.call(tool, input, {
       ...(onProcessEvent ? { onProcessEvent } : {})
     }));

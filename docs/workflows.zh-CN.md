@@ -211,7 +211,7 @@ const created = await template({
 await fs.writeFile(`docs/decisions/${number}-${slug}.md`, created.text);
 ```
 
-该调用是只读的：它不会改动工作区，因此输出不符合模板（包括渲染结果不是合法的 json/toml/yaml）时总能走一次自动修复；它也从不决定落盘位置，所以同一个模板可以渲染到任意路径——需要跟着字段走的文件名，由调用方用它自己传入的值拼出来。Codex 和 Claude 会直接拿到模板字段作为原生结构化输出 schema；DeepSeek Harness 的 ACP 协议没有 schema 字段，其输出改由 Dext 按同一契约校验。模板内容会进入 Agent 指令，因此必须位于受信任工作区内。
+该调用是只读的：它不会改动工作区，因此输出不符合模板（包括渲染结果不是合法的 json/toml/yaml）时总能走一次自动修复；它也从不决定落盘位置，所以同一个模板可以渲染到任意路径——需要跟着字段走的文件名，由调用方用它自己传入的值拼出来。Codex 和 Claude 会直接拿到模板字段作为原生结构化输出 schema；DeepSeek Harness 的 ACP 协议没有 schema 字段，其输出改由 Dext 按同一契约校验。模板内容会进入 Agent 指令，因此只能取自受信任的本地工作区与 Dext 自己的全局存储：查找顺序为工作区的 `.dext/templates`、Dext 全局存储的 `templates`，同名时靠前的位置优先。（全局 API 的模板就放在后者。）
 
 上面的 `?` 表示可选参数，是文档记法。
 
