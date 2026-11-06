@@ -45,6 +45,7 @@ All notable changes to Dext are documented in this file.
 - Ctrl+C is left to VS Code wherever VS Code copies, Dext claims only `ctrl+shift+c`, and `dext.copyFilePathWithFiles` keeps copied files pasteable in Explorer.
 - Importing a bare GitHub repository URL installs its latest published release, and **Update Skill pack** compares and reports added or removed skills.
 - The project ships `release.audit`, `release.changelog`, `release.notes` and `docs.sync` APIs with their `release-*` and `docs-*` rules, plus imported skill packs under `.dext/skills`.
+- `git.commit` splits the working tree into one Conventional Commit per feature under the `git/commit` rule, and it never stages every change at once.
 - Dext defaults to the Secondary Side Bar while preserving user-customized view locations, and requires VS Code 1.106 or newer.
 - A Plan execution continues across Agent turns with round checkpoints and a separate final verification, and live and restored history show incomplete, blocked and user-stopped outcomes.
 - A screenshot annotation tab zooms like a picture viewer: a bar with zoom, **Fit**, **1:1**, pixel size and **Hide annotations**, plus Ctrl/Cmd + wheel around the pointer.
