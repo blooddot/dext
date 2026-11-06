@@ -4,8 +4,8 @@ All notable changes to Dext are documented in this file.
 
 ## 0.1.2 - 2026-11-03
 
-- Pi runs the packages installed with `pi install`: the composer's **Plugins** row picks them per conversation, and a read-only turn blocks `write`, `edit`, `bash` and `powershell`.
 - Dext is now released under the MIT License, and the separate commercial licensing document is removed; copies already distributed keep their original terms.
+- Pi runs packages installed with `pi install`; the composer's **Plugins** row picks them per conversation, and a read-only turn blocks `write`, `edit`, `bash` and `powershell`.
 - A Plan turn's Todo panel is driven by Pi's `dext_update_todos` tool, and each task is reported as soon as its verify step passes.
 - `dext_fetch` gives read-only turns a web reader that refuses credential-bearing, loopback, private and link-local targets, follows at most 5 redirects and returns at most 512 KiB.
 - Pi's shipped `agent_before_settle` hook asks once for `dext_submit_result`, and a read-only Harness turn that answers in Markdown returns the `agent` result instead of aborting.
