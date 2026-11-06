@@ -31,6 +31,20 @@
 
 消费者按符号而非文件名拆分：Agent 类型与常量来自契约，只有 `AgentProfileStore`、`codexConfiguredDefaults`、`modelOptionsFromCodexCache` 来自宿主；Resources 分为契约、宿主与展示三部分；编辑器标签统一使用 `src/platform/editor-tabs/*`。Workspace 搜索使用浏览器客户端与宿主控制器两条路径，`scripts/monaco-ref-lab/main.ts` 保留无扩展名的类型引用。
 
+## 清理批次的验证
+
+改动 import 或已删除入口后都要执行：
+
+```powershell
+node scripts/checkModuleBoundaries.mjs
+npm run lint
+npm run typecheck
+npx vitest run test/moduleBoundaries.test.ts test/agentProfiles.test.ts test/agentSelectionDefaults.test.ts test/agentRunner.test.ts test/builtinCli.test.ts test/harnessPresetSelection.test.ts test/harnessPresets.integration.test.ts test/toml.test.ts
+npx vitest run test/apiReference.test.ts test/apiSource.test.ts test/editorTabState.test.ts test/resourceDocuments.test.ts
+```
+
+边界检查会读取 `src`、`test` 和 `scripts`，因此藏在脚本构建入口或测试 mock 里的引用会像普通 import 一样报错。
+
 ## 状态所有权
 
 | 状态 | 所有者 | 存储 / 生命周期 |
