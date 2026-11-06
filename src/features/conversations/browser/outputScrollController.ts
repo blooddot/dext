@@ -191,8 +191,10 @@ export class OutputScrollController {
   reportStaleRange(): void {
     const { body, result } = this.viewport;
     // The measurement walks the whole transcript, so take it at the one moment
-    // the reader can see the lie: nothing left to scroll.
-    if (!result.childElementCount || !this.isNearBottom()) return;
+    // the reader can see the lie: nothing left to scroll. A conversation being
+    // restored hides #result while it keeps its height, so measuring then only
+    // reports that the whole transcript is unpainted.
+    if (!result.childElementCount || body.dataset.loading === "true" || !this.isNearBottom()) return;
     const conversation = this.options.conversation.renderedId() ?? "unknown";
     if (this.reportedRangeFor === conversation) return;
     if (this.measuredRange?.conversation === conversation && this.measuredRange.scrollHeight === body.scrollHeight) return;
