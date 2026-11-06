@@ -42,7 +42,7 @@
 | 活动执行、取消控制器、Code 续跑调用 | `features/conversations/host/turnExecutionCoordinator.ts` | 内存，每会话一条 |
 | 缓冲的 Agent 事件与刷新定时器 | `features/conversations/host/agentEventStream.ts` | 内存，`dispose()` 清理 |
 | 待回答的问题与表单 | `features/conversations/host/interactionController.ts` | 内存，按会话/回合/请求 |
-| 计划文件、任务进度与验证 | `features/conversations/host/planController.ts` + `domain/plan*` | 内存加 `dext.history` 进度 |
+| 计划文件、任务进度与验证 | `features/conversations/host/planController.ts` + `domain/plan*` | 内存加 `conversation-history/<sha256>.json` 内的 `planProgress` |
 | 浏览器标签身份、切换编号、渲染代次、已渲染签名 | `features/conversations/browser/conversationController.ts` | 内存；切换时重置 |
 | 已缓存会话 DOM 及淘汰顺序 | `features/conversations/browser/conversationController.ts`（`ConversationViewStore`） | 内存，最近 6 个会话 |
 | 每会话草稿与图片附件 | `features/conversations/browser/composerController.ts` | 内存，每标签一份 |

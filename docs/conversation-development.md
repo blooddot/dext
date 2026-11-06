@@ -90,7 +90,7 @@ mapping stays honest.
 | Active executions, abort controllers, Code continuations | `features/conversations/host/turnExecutionCoordinator.ts` | in memory, one entry per conversation |
 | Buffered agent events and their flush timer | `features/conversations/host/agentEventStream.ts` | in memory, cleared by `dispose()` |
 | Pending agent questions and UI forms | `features/conversations/host/interactionController.ts` (two brokers) | in memory, per session/turn/request |
-| Plan file text, task progress and verification | `features/conversations/host/planController.ts` + `domain/plan*` | in memory plus `dext.history` progress |
+| Plan file text, task progress and verification | `features/conversations/host/planController.ts` + `domain/plan*` | in memory plus `planProgress` inside `conversation-history/<sha256>.json` |
 | Browser tab identity, switch ids, render generation, rendered signature | `features/conversations/browser/conversationController.ts` | in memory; reset on switch |
 | Cached conversation DOM and its eviction order | `features/conversations/browser/conversationController.ts` (`ConversationViewStore`) | in memory, 6 most recent conversations |
 | Composer text and image-attachment drafts per conversation | `features/conversations/browser/composerController.ts` | in memory, one draft per tab |
