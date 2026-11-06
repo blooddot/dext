@@ -60,7 +60,7 @@ To publish a version on GitHub:
 1. Update the version in `package.json` and `package-lock.json`, and add the release notes to [CHANGELOG.md](../CHANGELOG.md).
 2. Run `npm run package`, install the generated VSIX, and check the main user flows.
 3. Commit the source changes and create a matching Git tag, such as `v0.1.1`.
-4. Push the commit and tag, create a GitHub Release for that tag, and upload the VSIX from `release/` as an attachment.
+4. Push the commit and tag, create a GitHub Release for that tag, and upload the VSIX from `release/` as an attachment. `release.notes` writes the bilingual body to `docs/releases/<version>.md`; paste that file into the Release.
 
 Keep published installers with their corresponding Releases so that older versions remain easy to find. `npm run package` only creates a local package; it does not upload or publish it.
 

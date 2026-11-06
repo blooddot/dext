@@ -1,18 +1,24 @@
 /// <reference types="node" />
-import { readFile } from 'node:fs/promises';
-import { ask, terminal, type AskResult, type TerminalResult } from 'dext';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { template, terminal, type TemplateResult, type TerminalResult } from 'dext';
 
-// 流程只有五段：定位起点 → 读取引用类型 → 取改动 → 整理一次 → 组装发布说明。
-// 每个 terminal/ask 各占一个具名 wrapper；解析、渲染与告警都在普通 helper 里。
+// 流程只有五段：定位起点 → 读取引用类型 → 取改动 → 渲染模板 → 写文件并汇报。
+// 结构由 .dext/templates/release/notes.md 决定，模型只填字段，代码不拼 markdown。
 const PACKAGE_PATH = 'package.json';
 const CHANGELOG_PATH = 'CHANGELOG.md';
+const NOTES_DIR = 'docs/releases';
+const NOTES_TEMPLATE = '.dext/templates/release/notes.md';
+/** 模板里中文部分的节标题；也放在这里，免得模板文件和代码各写一份。 */
+const NOTES_DIVIDER = '简体中文';
 const RULES = ['release/notes.md'];
 const GIT_TIMEOUT_MS = 60_000;
 const STAT_CHAR_LIMIT = 20_000;
 const PATCH_CHAR_LIMIT = 120_000;
+/** terminal 只给 256 KiB，超预算的 patch 会被从中间截断；此时改用同样体积很小的 commit 列表。 */
+const LARGE_CHANGE_LINES = 2_000;
 const SECTION_CHAR_LIMIT = 24_000;
-const MAX_ITEMS = 12;
-const MAX_ITEM_CHAR = 300;
+const CHURN = /(\d+) (?:insertion|deletion)s?\([+-]\)/gu;
+const PLACEHOLDER_LEFT = /\{\{[^}]+\}\}/u;
 const SAFE_SINCE = /^[A-Za-z0-9._/@{}~^+-]+$/u;
 const ANSI = /\u001b\[[0-9;]*[a-z]/giu;
 const VERSION_HEADING = /^##\s+(.+?)\s*$/u;
@@ -48,41 +54,18 @@ interface LocalFacts {
   date: string;
 }
 
-interface BreakingChange {
-  change: string;
-  migration: string;
-}
-
-interface Draft {
-  summary: string;
-  highlights: string[];
-  breaking: BreakingChange[];
-  features: string[];
-  fixes: string[];
-  notes: string[];
-  problems: string[];
-}
-
-interface NotesSection {
-  heading: string;
-  items: string[];
-}
-
 interface NotesPackage {
   since: string;
   sinceKind: SinceKind;
   source: SourceFacts;
   stat: string;
-  patch: string;
+  changes: ChangeEvidence;
   local: LocalFacts;
 }
 
-interface ReportParts {
-  since: string;
-  sinceKind: SinceKind;
-  source: SourceFacts;
-  local: LocalFacts;
-  draft: Draft;
+interface ChangeEvidence {
+  heading: string;
+  body: string;
 }
 
 interface ReleaseNotesReport {
@@ -93,7 +76,7 @@ interface ReleaseNotesReport {
   sinceKind: SinceKind;
   sinceCommit: string;
   notes: string;
-  sections: NotesSection[];
+  path: string;
   warnings: string[];
 }
 
@@ -133,6 +116,17 @@ function composePatchCommand(commit: string): string {
   return `git --no-pager diff --no-color --unified=3 "${commit}...HEAD"`;
 }
 
+function composeLogCommand(commit: string): string {
+  return `git --no-pager log --oneline --no-merges "${commit}..HEAD"`;
+}
+
+/** 统计行里的增删行数之和，用来决定送 diff 还是送 commit 列表。 */
+function changeLines(stat: string): number {
+  let total = 0;
+  for (const match of stat.matchAll(CHURN)) total += Number(match[1]);
+  return total;
+}
+
 async function resolveSource(command: string): Promise<TerminalResult> {
   return terminal({ command, timeout_ms: GIT_TIMEOUT_MS });
 }
@@ -145,12 +139,12 @@ async function readStat(command: string): Promise<TerminalResult> {
   return terminal({ command, timeout_ms: GIT_TIMEOUT_MS });
 }
 
-async function readPatch(command: string): Promise<TerminalResult> {
+async function readChanges(command: string): Promise<TerminalResult> {
   return terminal({ command, timeout_ms: GIT_TIMEOUT_MS });
 }
 
-async function draftReleaseNotes(input: string): Promise<AskResult> {
-  return ask({ input, rules: RULES });
+async function renderNotes(title: string, input: string): Promise<TemplateResult> {
+  return template({ source: NOTES_TEMPLATE, values: { title, title_zh: NOTES_DIVIDER }, input, rules: RULES });
 }
 
 // ---------------------------------------------------------------- 通用解析
@@ -162,10 +156,6 @@ function asString(value: unknown): string {
 function asObject(value: unknown): Record<string, unknown> {
   const object = typeof value === 'object' && value !== null && Array.isArray(value) === false;
   return object ? (value as Record<string, unknown>) : {};
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
 }
 
 function safeParse(text: string): Record<string, unknown> | null {
@@ -290,7 +280,7 @@ function sectionEnd(lines: string[], start: number): number {
 
 // ---------------------------------------------------------------- 整理输入
 
-function composeDraftInput(parts: NotesPackage): string {
+function composeNotesInput(parts: NotesPackage): string {
   const version = parts.local.versions.version;
   const changelog = parts.local.changelog;
   const first = changelog.firstVersion === '' ? '（无）' : `${changelog.firstVersion}（CHANGELOG.md:${changelog.firstLine}）`;
@@ -298,11 +288,11 @@ function composeDraftInput(parts: NotesPackage): string {
     ? `CHANGELOG.md 中没有 ## ${version} 段落；第一个版本段落是 ${first}。`
     : `CHANGELOG.md:${changelog.sectionLine}-${changelog.sectionEnd}`;
   const statBody = parts.stat.trim() === '' ? '（空）' : limitText(parts.stat, STAT_CHAR_LIMIT);
-  const patchBody = parts.patch.trim() === '' ? '（空）' : limitText(parts.patch, PATCH_CHAR_LIMIT);
+  const changesBody = parts.changes.body.trim() === '' ? '（空）' : limitText(parts.changes.body, PATCH_CHAR_LIMIT);
   const changelogBody = changelog.text === '' ? '（不存在）' : limitText(changelog.text, SECTION_CHAR_LIMIT);
   return [
-    `为 ${parts.local.versions.name} ${version} 写 ${parts.local.date} 的发布说明。`,
-    '严格按 .dext/rules/release/notes.md 的分类、写法与输出契约返回一个 JSON 对象：不要 markdown 围栏，不要散文，不要额外的顶层键。',
+    `写 ${parts.local.date} 的中英双语发布说明：表格字段值按 .dext/templates/release/notes.md 的字段说明填写，结构由模板渲染，你不要自己写标题、节名或列表符号。`,
+    '分类与写法按 .dext/rules/release/notes.md：CHANGELOG 本版段落是主要来源，diff 用于核对。',
     [
       '## 已确定的事实',
       `- 版本：${version}`,
@@ -313,110 +303,12 @@ function composeDraftInput(parts: NotesPackage): string {
       `- CHANGELOG 本版段落位置：${sectionNote}`
     ].join('\n'),
     ['## git diff --stat <since>...HEAD', '```text', statBody, '```'].join('\n'),
-    ['## git diff <since>...HEAD', '```diff', patchBody, '```'].join('\n'),
-    ['## CHANGELOG 本版段落原文', '```md', changelogBody, '```'].join('\n'),
-    [
-      '## 输出要求',
-      '- 顶层键固定为 summary、highlights、breaking、features、fixes、notes、problems，缺内容用空数组，不要省略键。',
-      '- summary 用 2-4 句说明本版最重要的事；highlights 最多 3 条，写升级者最该知道的结论。',
-      '- breaking 每项含 change 与 migration；migration 必须是可执行的替换动作，写不出就不要放进 breaking。',
-      '- 条目不要带 “- ” 前缀，调用方负责渲染列表；不写版本号、日期与标题。',
-      '- problems 只在无法完成整理时填写，非空会让调用方标记这份发布说明需要人工补正。'
-    ].join('\n')
+    ['## ' + parts.changes.heading, '```text', changesBody, '```'].join('\n'),
+    ['## CHANGELOG 本版段落原文', '```md', changelogBody, '```'].join('\n')
   ].join('\n\n');
 }
 
-// ---------------------------------------------------------------- 解析整理结果
-
-function parseJsonObject(text: string): Record<string, unknown> {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  const found = start >= 0 && end > start;
-  if (found === false) {
-    throw new Error(`整理步骤没有返回 JSON 对象，返回内容开头：${text.slice(0, 400)}`);
-  }
-  const body = text.slice(start, end + 1);
-  try {
-    return asObject(JSON.parse(body));
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`整理步骤返回的 JSON 无法解析：${reason}；原文开头：${body.slice(0, 400)}`);
-  }
-}
-
-function normalizeItem(value: string): string {
-  const stripped = value.replace(/^[-*]\s+/u, '').trim();
-  const short = stripped.length <= MAX_ITEM_CHAR;
-  return short ? stripped : `${stripped.slice(0, MAX_ITEM_CHAR)}…`;
-}
-
-function readItems(value: unknown): string[] {
-  const items: string[] = [];
-  for (const entry of asArray(value)) {
-    const item = normalizeItem(asString(entry));
-    const empty = item === '';
-    if (empty) continue;
-    const duplicate = items.includes(item);
-    if (duplicate) continue;
-    if (items.length >= MAX_ITEMS) break;
-    items.push(item);
-  }
-  return items;
-}
-
-function readBreaking(value: unknown): BreakingChange[] {
-  const items: BreakingChange[] = [];
-  for (const entry of asArray(value)) {
-    const raw = asObject(entry);
-    const change = normalizeItem(asString(raw.change));
-    if (change === '') continue;
-    if (items.length >= MAX_ITEMS) break;
-    items.push({ change, migration: asString(raw.migration) });
-  }
-  return items;
-}
-
-function normalizeDraft(text: string): Draft {
-  const raw = parseJsonObject(text);
-  return {
-    summary: asString(raw.summary),
-    highlights: readItems(raw.highlights),
-    breaking: readBreaking(raw.breaking),
-    features: readItems(raw.features),
-    fixes: readItems(raw.fixes),
-    notes: readItems(raw.notes),
-    problems: asArray(raw.problems).map(asString).filter((item) => item !== '')
-  };
-}
-
-// ---------------------------------------------------------------- 渲染与告警
-
-function renderBreaking(item: BreakingChange): string {
-  const missing = item.migration === '';
-  return missing ? `**${item.change}**` : `**${item.change}** — ${item.migration}`;
-}
-
-function buildSections(draft: Draft): NotesSection[] {
-  const sections: NotesSection[] = [
-    { heading: 'Highlights', items: draft.highlights },
-    { heading: 'Breaking changes', items: draft.breaking.map(renderBreaking) },
-    { heading: 'New features', items: draft.features },
-    { heading: 'Fixes', items: draft.fixes },
-    { heading: 'Notes', items: draft.notes }
-  ];
-  return sections.filter((section) => section.items.length > 0);
-}
-
-function renderNotes(title: string, summary: string, sections: NotesSection[]): string {
-  const lines: string[] = [`# ${title}`, ''];
-  if (summary !== '') lines.push(summary, '');
-  for (const section of sections) {
-    lines.push(`## ${section.heading}`);
-    for (const item of section.items) lines.push(`- ${item}`);
-    lines.push('');
-  }
-  return `${lines.join('\n').trimEnd()}\n`;
-}
+// ---------------------------------------------------------------- 告警
 
 function sectionWarnings(changelog: ChangelogSection, version: string): string[] {
   if (changelog.present === false) {
@@ -434,50 +326,10 @@ function sectionWarnings(changelog: ChangelogSection, version: string): string[]
   return [];
 }
 
-function draftWarnings(draft: Draft): string[] {
-  const warnings: string[] = [...draft.problems];
-  const summaryMissing = draft.summary === '';
-  if (summaryMissing) warnings.push('发布说明缺少 summary。');
-  const total = draft.highlights.length + draft.breaking.length + draft.features.length + draft.fixes.length + draft.notes.length;
-  if (total === 0) warnings.push('本次没有整理出任何用户可见变化，发布说明只有标题。');
-  for (const item of draft.breaking) {
-    const migrationMissing = item.migration === '';
-    if (migrationMissing) warnings.push(`破坏性变更缺少迁移动作：${item.change}`);
-  }
-  return warnings;
-}
-
-function collectWarnings(changelog: ChangelogSection, version: string, draft: Draft, patch: string): string[] {
-  const truncated = patch.includes('[output truncated]');
+function collectWarnings(changelog: ChangelogSection, version: string, changes: string): string[] {
+  const truncated = changes.includes('[output truncated]');
   const truncationWarning = truncated ? ['diff 输出被 terminal 截断，被截断的部分没有进入整理，发布说明可能漏掉变化。'] : [];
-  return [...sectionWarnings(changelog, version), ...draftWarnings(draft), ...truncationWarning];
-}
-
-// ---------------------------------------------------------------- 组装与汇报
-
-function assembleReport(parts: ReportParts): Omit<ReleaseNotesReport, 'ready' | 'warnings'> {
-  const sections = buildSections(parts.draft);
-  const title = `${parts.local.versions.name} ${parts.local.versions.version}`;
-  return {
-    version: parts.local.versions.version,
-    date: parts.local.date,
-    since: parts.since,
-    sinceKind: parts.sinceKind,
-    sinceCommit: parts.source.commit,
-    notes: renderNotes(title, parts.draft.summary, sections),
-    sections
-  };
-}
-
-/** 返回值在对话里只是一个对象，所以发布说明同时写到 stdout，人才能直接读。 */
-function reportOutcome(report: ReleaseNotesReport, ready: boolean): void {
-  console.log(report.notes.trimEnd());
-  if (ready) {
-    console.log(`\nrelease/notes：${report.version}（${report.date}）的发布说明已生成，共 ${report.sections.length} 节。`);
-    return;
-  }
-  console.error(`\nrelease/notes：${report.version} 的发布说明有 ${report.warnings.length} 处需要人工补正：`);
-  for (const warning of report.warnings) console.error(`- ${warning}`);
+  return [...sectionWarnings(changelog, version), ...truncationWarning];
 }
 
 // ---------------------------------------------------------------- 入口
@@ -495,22 +347,49 @@ export async function notes(since: string): Promise<ReleaseNotesReport> {
   const kindResult = await readKind(composeKindCommand(since));
   const sinceKind = kindFromSymbolic(kindResult.stdout);
   const statResult = await readStat(composeStatCommand(source.commit));
-  const patchResult = await readPatch(composePatchCommand(source.commit));
+  const stat = stripAnsi(statResult.stdout);
+  const large = changeLines(stat) > LARGE_CHANGE_LINES;
+  const changeResult = await readChanges(large ? composeLogCommand(source.commit) : composePatchCommand(source.commit));
   const local = await readLocalFacts();
+  const changes = {
+    heading: large ? `git log --oneline --no-merges ${since}..HEAD（${since}...HEAD 改动超出 diff 预算，未附 diff）` : `git diff ${since}...HEAD`,
+    body: stripAnsi(changeResult.stdout)
+  };
 
-  const drafted = await draftReleaseNotes(composeDraftInput({
+  const title = `${local.versions.name} ${local.versions.version}`;
+  const rendered = await renderNotes(title, composeNotesInput({ since, sinceKind, source, stat, changes, local }));
+  const notesText = rendered.text.trim();
+  // 模板的自检：占位符没填完说明模型漏了字段，宁可不写文件也不写出半成品。
+  if (notesText === '' || PLACEHOLDER_LEFT.test(notesText)) {
+    throw new Error(`模板 ${NOTES_TEMPLATE} 渲染结果为空或仍有未填字段：${notesText.slice(0, 400)}`);
+  }
+
+  const warnings = collectWarnings(local.changelog, local.versions.version, changes.body);
+  const ready = warnings.length === 0;
+  const path = `${NOTES_DIR}/${local.versions.version}.md`;
+  await mkdir(NOTES_DIR, { recursive: true });
+  await writeFile(path, `${notesText}\n`, 'utf8');
+  const report: ReleaseNotesReport = {
+    ready,
+    version: local.versions.version,
+    date: local.date,
     since,
     sinceKind,
-    source,
-    stat: stripAnsi(statResult.stdout),
-    patch: stripAnsi(patchResult.stdout),
-    local
-  }));
-  const draft = normalizeDraft(drafted.text);
-  const report = assembleReport({ since, sinceKind, source, local, draft });
-  const warnings = collectWarnings(local.changelog, local.versions.version, draft, patchResult.stdout);
-  const ready = warnings.length === 0;
-  const finished: ReleaseNotesReport = { ready, ...report, warnings };
-  reportOutcome(finished, ready);
-  return finished;
+    sinceCommit: source.commit,
+    notes: notesText,
+    path,
+    warnings
+  };
+  reportOutcome(report, ready);
+  return report;
+}
+
+function reportOutcome(report: ReleaseNotesReport, ready: boolean): void {
+  console.log(report.notes);
+  if (ready) {
+    console.log(`\nrelease/notes：${report.version}（${report.date}）的中英双语发布说明已写入 ${report.path}。`);
+    return;
+  }
+  console.error(`\nrelease/notes：${report.version} 的发布说明有 ${report.warnings.length} 处需要人工补正：`);
+  for (const warning of report.warnings) console.error(`- ${warning}`);
 }

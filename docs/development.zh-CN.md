@@ -60,7 +60,7 @@ API 详情页还有第二个小型 Webview 入口 `src/features/resources/browse
 1. 更新 `package.json`、`package-lock.json` 中的版本，并在 [CHANGELOG.md](../CHANGELOG.md) 中填写版本说明。
 2. 运行 `npm run package`，安装生成的 VSIX，检查主要使用流程。
 3. 提交源码修改，创建与版本对应的 Git 标签，例如 `v0.1.1`。
-4. 推送提交和标签，为该标签创建 GitHub Release，并上传 `release/` 中对应的 VSIX 作为附件。
+4. 推送提交和标签，为该标签创建 GitHub Release，并上传 `release/` 中对应的 VSIX 作为附件。`release.notes` 会把中英双语正文写到 `docs/releases/<version>.md`，把它粘到 Release 里即可。
 
 每个已发布安装包保存在对应的 Release 中，方便查找历史版本。`npm run package` 只生成本地安装包，不会自动上传或发布。
 
