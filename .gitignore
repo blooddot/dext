@@ -1,9 +1,9 @@
 node_modules/
 dist/
-release/
+/release/
 *.vsix
 coverage/
 .vscode-test/
 .npm-cache
-.tmp-tb
-.volta
+.tmp-* 
+.taste-skill

@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "types": [],
+    "paths": {
+      "dext": [
+        "./api/dext.d.ts"
+      ],
+      "dext/api/*": [
+        "./api/*.ts",
+        "./api/*.mts",
+        "./api/*/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "api/**/*.ts"
+  ]
+}

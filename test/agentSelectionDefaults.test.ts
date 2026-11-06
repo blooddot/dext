@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { codexConfiguredDefaults, type AgentProfile } from "../src/agentProfiles.js";
-import { presentAgentSelection } from "../src/agentSelectionDefaults.js";
+import type { AgentProfile } from "../src/features/agents/contracts/agent.js";
+import { codexConfiguredDefaults } from "../src/features/agents/host/agentProfiles.js";
+import { presentAgentSelection } from "../src/features/agents/presentation/agentSelectionDefaults.js";
 
 const profile: AgentProfile = {
   id: "codex", provider: "codex", command: "codex", label: "Codex CLI", models: ["first", "configured"],
@@ -11,6 +12,10 @@ const profile: AgentProfile = {
 };
 
 describe("displaying inherited CLI settings", () => {
+  it("does not carry the Pi CLI default effort onto a different selected model", () => {
+    expect(presentAgentSelection({ ...profile, provider: "pi" }, { model: "first" }).reasoningEffort).toBe("medium");
+    expect(presentAgentSelection({ ...profile, provider: "pi" }, {}).reasoningEffort).toBe("high");
+  });
   it("resolves the reset values sent on CLI switch without choosing the first model or changing selection", () => {
     const selection = { profileId: "codex", model: "", reasoningEffort: "", speed: "", serviceTier: "" };
     const original = { ...selection };

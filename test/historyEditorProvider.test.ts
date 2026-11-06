@@ -25,13 +25,13 @@ vi.mock("vscode", () => ({
     })
   }
 }));
-vi.mock("../src/vscodeTheme.js", () => ({ loadEditorTokenTheme: () => undefined }));
-vi.mock("../src/vscodeContextHost.js", () => ({ openDextFileReference: vi.fn() }));
+vi.mock("../src/platform/vscode/theme.js", () => ({ loadEditorTokenTheme: () => undefined }));
+vi.mock("../src/platform/vscode/contextHost.js", () => ({ openDextFileReference: vi.fn() }));
 
-import { DextHistoryPanel } from "../src/historyEditorProvider.js";
-import { DextHistoryStore } from "../src/historyStore.js";
-import { DextConversationPreferences } from "../src/conversationPreferences.js";
-import type { DextStorage } from "../src/dextStorage.js";
+import { DextHistoryPanel } from "../src/features/conversations/host/historyEditorProvider.js";
+import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
+import type { DextStorage } from "../src/platform/vscode/dextStorage.js";
 
 class MemoryState {
   private values = new Map<string, unknown>();
@@ -51,7 +51,7 @@ beforeEach(async () => {
 });
 
 describe("History turn action routing", () => {
-  it.each(["renameTurn", "forkFromTurn", "copyTurn", "deleteTurn"])("routes %s with the clicked turn and session", (action) => {
+  it.each(["renameTurn", "forkFromTurn", "copyTurn", "openSpill", "deleteTurn"])("routes %s with the clicked turn and session", (action) => {
     state.receive?.({ type: "historyCommand", command: `dext.history.${action}`, sessionId: "session-1", turnId: "turn-1" });
     expect(state.execute).toHaveBeenCalledExactlyOnceWith(`dext.history.${action}`, { sessionId: "session-1", turnId: "turn-1" });
   });
@@ -72,7 +72,7 @@ describe("History turn action routing", () => {
     state.receive?.({ type: "loadHistorySession", sessionId: "session-1" });
     expect(state.post).toHaveBeenCalledWith({
       type: "historySessionBody", sessionId: "session-1",
-      html: expect.stringContaining('class="history-summary-input named">New title</span>')
+      html: expect.stringContaining('class="output-turn-title"><span class="output-turn-title-name">New title</span>')
     });
     expect(state.post).toHaveBeenCalledWith(expect.objectContaining({ html: expect.stringContaining('data-history-command="dext.history.copyTurn"') }));
   });
@@ -91,21 +91,33 @@ describe("History turn action routing", () => {
     const clickListeners = new Map<string, (event: unknown) => void>();
     const windowListeners = new Map<string, (event: unknown) => void>();
     const postMessage = vi.fn();
-    const label = { textContent: "question", classList: { toggle: vi.fn() } };
+    const label = { textContent: "question", hidden: true };
+    const title = { querySelector: () => label };
     const siblingLabel = { textContent: "sibling" };
     const rows = [
-      { dataset: { sessionId: "session-1", turnId: "turn-1" }, querySelector: () => label },
-      { dataset: { sessionId: "session-1", turnId: "turn-2" }, querySelector: () => siblingLabel }
+      { dataset: { sessionId: "session-1", turnId: "turn-1" }, querySelector: () => title },
+      { dataset: { sessionId: "session-1", turnId: "turn-2" }, querySelector: () => ({ querySelector: () => siblingLabel }) }
     ];
     class Element {
       dataset = { historyCommand: "dext.history.copyTurn", sessionId: "session-1", turnId: "turn-1" };
       closest(selector: string) { return selector === "button[data-history-command]" ? this : null; }
     }
     const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(state.html)![1]!;
+    class Details {}
+    const moved = { label: "actions" };
+    const bodyTarget = { append: vi.fn() };
+    const summaryTarget = { append: vi.fn() };
+    const record = Object.assign(new Details(), {
+      classList: { contains: (name: string) => name === "history-record" },
+      open: true,
+      querySelector: (selector: string) => selector.includes("history-turn-actions") ? moved
+        : selector.includes("history-record-body") ? bodyTarget : summaryTarget
+    });
     runInNewContext(script, {
-      acquireVsCodeApi: () => ({ postMessage }), Element,
+      acquireVsCodeApi: () => ({ postMessage }), Element, HTMLDetailsElement: Details,
       document: {
         addEventListener: (type: string, callback: (event: unknown) => void) => clickListeners.set(type, callback),
+        querySelector: () => null,
         querySelectorAll: () => rows
       },
       window: { addEventListener: (type: string, callback: (event: unknown) => void) => windowListeners.set(type, callback) }
@@ -117,7 +129,20 @@ describe("History turn action routing", () => {
     expect(postMessage).toHaveBeenCalledWith({ type: "historyCommand", command: "dext.history.copyTurn", sessionId: "session-1", turnId: "turn-1" });
     windowListeners.get("message")!({ data: { type: "historyTurnTitle", sessionId: "session-1", turnId: "turn-1", title: "<New title>", named: true } });
     expect(label.textContent).toBe("<New title>");
-    expect(label.classList.toggle).toHaveBeenCalledWith("named", true);
+    expect(label.hidden).toBe(false);
     expect(siblingLabel.textContent).toBe("sibling");
+    // An opened turn moves its toolbar out of the prompt and onto the body.
+    clickListeners.get("toggle")!({ target: record });
+    expect(bodyTarget.append).toHaveBeenCalledWith(moved);
+    record.open = false;
+    clickListeners.get("toggle")!({ target: record });
+    expect(summaryTarget.append).toHaveBeenCalledWith(moved);
+  });
+
+  it("lists only conversations that recorded a turn", async () => {
+    await history.updateResourceContext("empty-shell", { type: "rule", scope: "global" });
+    panel.refresh();
+    expect(state.html).toContain("session-1");
+    expect(state.html).not.toContain("empty-shell");
   });
 });

@@ -47,20 +47,6 @@ export function inlineInsertion(
   };
 }
 
-export function invocationInsertion(
-  source: string,
-  from: number,
-  to: number,
-  value: string
-): InsertionEdit {
-  const prefix = from > 0 && !/\s/.test(source[from - 1] ?? "") ? "\n" : "";
-  const suffix = to < source.length && !/\s/.test(source[to] ?? "") ? "\n" : "";
-  return {
-    text: `${prefix}${value}${suffix}`,
-    cursorOffset: prefix.length + value.length
-  };
-}
-
 function quotedString(source: string, start: number, allowUnterminated = false): QuotedString | undefined {
   const formatted = source[start] === "f" || source[start] === "F";
   const quoteStart = formatted ? start + 1 : start;

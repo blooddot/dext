@@ -1,17 +1,80 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
+import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
+
+vi.mock("vscode", () => ({}));
+
+import { conversation, createConversationHarness } from "./conversationHarness.js";
 
 async function source(path: string): Promise<string> {
   return readFile(resolve(path), "utf8");
 }
 
+function turn(id: string): DextHistoryRecord {
+  return { id, createdAt: 1, input: "hello", process: [], output: "ok" };
+}
+
+function emptyResponse(): InputExecutionResponse {
+  return { kind: "workflow", executions: [] };
+}
+
+function gatedExecution(): {
+  executeConversation: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
+  release: () => void;
+  started: () => boolean;
+  metadata: Readonly<ExecutionMetadata>[];
+} {
+  const gates: Array<() => void> = [];
+  const metadata: Readonly<ExecutionMetadata>[] = [];
+  return {
+    executeConversation: async (_mode, _source, meta) => {
+      metadata.push(meta);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      return emptyResponse();
+    },
+    release: () => gates.shift()?.(),
+    started: () => gates.length > 0,
+    metadata
+  };
+}
+
+
 describe("sidebar panel layout", () => {
-  it("refreshes Harness model discovery once when the sidebar opens or Harness is selected", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+  it("advertises Pi permission limitations without upgrading the stored selection", async () => {
+    const main = await source("src/webview/main.ts");
+    expect(main).toContain("writablePermissions");
+    expect(main).toContain("button.disabled = true");
+    expect(main.includes("Pi does not support Workspace write.")).toBe(true);
+    expect(main.includes('button.dataset.permissionDisabled === "true"')).toBe(true);
+    const extension = await source("src/extension.ts");
+    expect(extension).toContain('vscode.Uri.joinPath(context.extensionUri, "media", "pi-extension.mjs")');
+  });
+  it("keeps prose typography and the composer's larger chips", async () => {
+    const css = await source("media/styles.css");
+    expect(css).not.toContain("--dext-input-line-height");
+    expect(await source('src/webview/codeEditor.ts')).toContain('lineHeight: 24');
+    expect(css).toMatch(/\.attachment-chip \{[^}]*height: 24px;/);
+    expect(css).toMatch(/\.markdown-body \{\s*font: 14px\/1\.5 var\(--vscode-font-family\);/);
+    expect(css).not.toContain(".output-turn-input");
+  });
+
+  it("shares title-to-body spacing without stacking first-item gaps", async () => {
+    const css = await source("media/styles.css");
+    // The prompt and timeline align with the row title; the answer is separated
+    // by its own divider instead of a section header.
+    expect(css).toMatch(/\.output-turn-body \{[\s\S]*?padding: 2px 4px 12px 22px;/);
+    expect(css).toMatch(/\.turn-output \{\s*position: relative;\s*margin-top: 14px;\s*padding: 14px 0 16px;/);
+    expect(css).toMatch(/\.turn-section-body > :first-child,\s*\.turn-section-body > \.execution-result:first-child > :first-child,\s*\.turn-section-body > \.agent-stream-panel > :first-child \{\s*margin-top: 0;/);
+    expect(css).toMatch(/\.turn-section-body > \.agent-stream-panel \{\s*padding-top: 0;/);
+  });
+
+  it("starts background Harness model discovery when the sidebar opens or Harness is selected", async () => {
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(sidebar).toContain("private harnessModelsDiscovered = false;");
     expect(sidebar).toMatch(/resolveWebviewView[\s\S]*?discoverHarnessModelsOnce\(\)\.then/);
-    expect(sidebar).toMatch(/case "agentSelection":[\s\S]*?selection\.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness"[\s\S]*?await this\.discoverHarnessModelsOnce\(\)/);
+    expect(sidebar).toMatch(/case "agentSelection":[\s\S]*?selection\.profileId === "deepseek-harness" && previousProfileId !== "deepseek-harness"[\s\S]*?void this\.discoverHarnessModelsOnce\(\)\s*\.then/);
     expect(sidebar).toMatch(/private discoverHarnessModelsOnce\(\): Promise<void>[\s\S]*?this\.harnessModelsDiscovered = true/);
   });
 
@@ -23,33 +86,82 @@ describe("sidebar panel layout", () => {
     expect(css).toContain(".composer-model-group-heading {");
   });
 
-  it("keeps API out of the main flow and exposes it from the view title bar", async () => {
-    const html = await source("src/sidebarProvider.ts");
+  it("moves API and Global Resources out of the sidebar into editor tabs", async () => {
+    const html = await source("src/app/sidebarProvider.ts");
     const manifest = await source("package.json");
+    const extension = await source("src/extension.ts");
     expect(html).toContain('<section id="input-section" class="input-section">');
-    expect(html).toContain('id="input-heading" class="section-heading collapsible-heading" role="button" tabindex="0" aria-expanded="true"');
+    expect(html).not.toContain('id="input-heading"');
     expect(html).not.toContain('id="view-methods"');
     expect(manifest).toContain('"command": "dext.viewApis"');
-    expect(html).toMatch(/viewApis\(\): void \{\r?\n[ ]{4}this\.postWhenReady\(\{ type: "openMethods" \}\);/);
-    expect(html).toContain('<dialog id="methods-dialog" class="methods-dialog"');
-    expect(html).toContain('id="close-methods"');
+    // The directory dialogs are gone; the commands open editor tabs instead.
+    expect(html).not.toContain('<dialog id="methods-dialog"');
+    expect(html).not.toContain('<dialog id="mcp-dialog"');
+    expect(html).not.toMatch(/viewApis\(\): void \{\r?\n[ ]{4}this\.postWhenReady\(\{ type: "openMethods" \}\);/);
+    expect(extension).toContain('vscode.commands.registerCommand("dext.viewApis"');
+    expect(extension).toContain("editors.api?.showList()");
+    expect(extension).toContain("editors.globalResources?.showList()");
     expect(html).not.toContain('id="methods-section"');
     expect(html.indexOf('id="result-section"')).toBeLessThan(html.indexOf('id="input-section"'));
-    expect(html).toMatch(/id="input-body" class="collapsible-body input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
-    expect(html.match(/class="icon-button panel-fullscreen"/g)).toHaveLength(2);
+    expect(html).toMatch(/id="input-body" class="input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
+    expect(html.match(/class="icon-button panel-fullscreen"/g)).toBeNull();
   });
 
-  it("uses the shared mouse and keyboard disclosure behavior", async () => {
+  it("creates resources from the Resources panel with composer resource controls", async () => {
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(main).toContain('inputHeading: element<HTMLElement>("input-heading")');
-    expect(main).toContain('inputBody: element<HTMLElement>("input-body")');
-    expect(main).toContain('const input = outputTurnSection("Input", true);');
-    expect(main).toMatch(/elements\.inputHeading\.addEventListener\("click",[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
-    expect(main).toMatch(/elements\.inputHeading\.addEventListener\("keydown",[\s\S]*event\.key === "Enter" \|\| event\.key === " "[\s\S]*toggleSection\(elements\.inputHeading, elements\.inputBody\)/);
+    // The composer carries no create entry: resources are created from the
+    // Resources panel, which opens the shared conversation layout itself.
+    expect(html).not.toContain('id="create-resource"');
+    expect(main).not.toContain('openResourceCreator');
+    expect(html).not.toContain('id="resource-creator-dialog"');
+    expect(html).toContain('id="resource-toolbar"');
+    expect(html).toContain('id="resource-preview"');
+    expect(html).toContain('id="resource-save"');
+    expect(main).toContain('renderResourceControls()');
+    expect(main).not.toContain('resourceCreatorDialog');
+  });
+
+  it("keeps one row, one Worked line and an unfolded answer", async () => {
+    const css = await source("media/styles.css");
+    const html = await source("src/app/sidebarProvider.ts");
+    // No decorative section titles survive: the composer has no heading and the
+    // conversation heading keeps only its collapse control.
+    expect(html).not.toContain("<span>Input</span>");
+    expect(html).not.toContain("<span>Conversation</span>");
+    expect(css).toMatch(/\.output-turn \{[\s\S]*?margin: 0;/);
+    expect(css).toMatch(/\.output-turn > summary \{[\s\S]*?min-height: 30px;[\s\S]*?padding: 0 4px;/);
+    expect(css).toMatch(/\.output-turn > summary > \.disclosure-chevron,[\s\S]*?opacity: 0;/);
+    expect(css).toMatch(/\.output-turn > summary:hover \{\s*background: color-mix\(in srgb, var\(--vscode-foreground\) 5\.5%, transparent\);/);
+    expect(css).toMatch(/\.turn-output \{[\s\S]*?margin-top: 14px;[\s\S]*?border-top: 1px solid color-mix\(in srgb, var\(--vscode-foreground\) 16%, transparent\);/);
+    // An open row keeps its chevron, and a running turn swaps in a spinner.
+    expect(css).toMatch(/\.output-turn\[open\] > summary > \.disclosure-chevron,[\s\S]*?opacity: 1;/);
+    expect(css).toMatch(/\.turn-running:not\(\[hidden\]\) \+ \.disclosure-chevron \{\s*display: none;/);
+    // Opening a turn changes ink and weight only, so the row cannot jump.
+    expect(css).toMatch(/\.output-turn-title \{[\s\S]*?font-size: 13px;[\s\S]*?line-height: 1\.6;/);
+    expect(css).toMatch(/\.output-turn\[open\] > summary \.output-turn-title,[\s\S]*?\.history-record\[open\] > summary \.output-turn-title \{[\s\S]*?color: var\(--vscode-foreground\);[\s\S]*?font-weight: 500;/);
+    expect(css).not.toMatch(/\.output-turn\[open\] > summary \.output-turn-title[\s\S]{0,200}?font-size: 15px/);
+    // History timestamps use the conversation's quiet mono style.
+    expect(css).toMatch(/\.history-meta\.history-record-time,[\s\S]*?\.history-meta\.history-session-time \{[\s\S]*?color-mix\(in srgb, var\(--vscode-foreground\) 42%, transparent\);[\s\S]*?font-family: var\(--vscode-editor-font-family\);/);
+    // The answer is never a fold target again.
+    expect(css).not.toContain('.turn-section[data-turn-section="output"]');
+  });
+
+  it("keeps the conversation open and the composer free of collapse controls", async () => {
+    const main = await source("src/webview/main.ts");
+    const html = await source("src/app/sidebarProvider.ts");
+    const transcript = await source("src/features/conversations/browser/transcriptView.ts");
+    // Both section headings are gone: the conversation starts at its first turn.
+    expect(html).not.toContain('id="result-heading"');
+    expect(html).not.toContain('id="result-toggle"');
+    expect(main).not.toContain("toggleSection");
+    expect(main).not.toContain("syncResultToggle");
+    // The turns themselves are still native disclosures.
+    expect(transcript).toContain('const disclosure = document.createElement("details");');
   });
 
   it("uses exactly Mode, Agent, and Model controls for the input footer", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const editor = await source("src/webview/codeEditor.ts");
     const css = await source("media/styles.css");
@@ -60,13 +172,13 @@ describe("sidebar panel layout", () => {
     expect(html).toContain('id="model-submenu" class="composer-popover composer-model-popover composer-model-submenu"');
     expect(html).not.toContain('id="agent-profile"');
     expect(main).toContain('type InputMode = "agent" | "ask" | "plan" | "code"');
-    expect(main).toContain('editor.setLanguageEnabled(inputMode === "code")');
+    expect(main).toContain('editor.setMode(inputMode === "code" ? "code" : "chat")');
     expect(main).toContain('elements.inputShell.classList.toggle("conversation-mode", !codeMode)');
-    expect(main).toContain('elements.inputSection.dataset.mode = inputMode');
+    expect(main).toContain('elements.inputSection.dataset.mode = resource ? "resource" : inputMode');
     expect(main).toContain('elements.modeControlIcon.className = `codicon ${modeIcon[inputMode]}`');
-    expect(editor).toContain('this.lineWrapping.reconfigure(enabled ? [] : EditorView.lineWrapping)');
-    expect(css).toContain('.input-shell.conversation-mode .cm-gutters');
-    expect(css).toMatch(/\.code-file-reference \{[\s\S]*?margin: 0;/);
+    expect(editor).toContain('wordWrap: enabled ? "off" : "on"');
+    expect(editor).toContain('lineNumbers: enabled ? "on" : "off"');
+    expect(css).toContain('.monaco-editor .view-line .dext-ref-chip');
     expect(css).toContain('.input-section[data-mode="ask"] #mode-control');
     expect(css).toContain('.input-section[data-mode="plan"] #mode-control');
     expect(css).toContain('.input-section[data-mode="code"] #mode-control');
@@ -76,6 +188,30 @@ describe("sidebar panel layout", () => {
     expect(css).not.toContain('.input-section[data-mode="code"] .composer-menu:has(#agent-control)');
   });
 
+  it("keeps Plan's Build disabled while the build it sent is still being prepared", async () => {
+    const main = await source("src/webview/main.ts");
+    const planControls = await source("src/features/conversations/browser/planControls.ts");
+    const css = await source("media/styles.css");
+    // The wait is a short local read, so Build keeps its own label and is simply
+    // disabled by the pending guard instead of growing a third button state.
+    expect(planControls).toMatch(/preparingBuild\(\): boolean;/);
+    expect(planControls).toMatch(/const preparingBuild = !planBuildRunning && view\.preparingBuild\(\);/);
+    expect(planControls).toMatch(/preparingBuild \|\| view\.executing\(\) \|\| planStatus === "running"/);
+    expect(planControls).not.toContain("Preparing…");
+    expect(planControls).not.toContain("codicon-modifier-spin");
+    expect(css).not.toContain("plan-build.preparing");
+    // The wait belongs to the conversation that asked for it, so re-rendering
+    // the toolbar (a tab switch included) cannot turn Build clickable again.
+    expect(main).toMatch(/const pendingBuilds = new Map<string, string>\(\);/);
+    expect(main).toMatch(/pendingBuilds\.set\(browser\.activeId, activePlanPath\)/);
+    expect(main).toMatch(/planStatus === "active" && pendingBuilds\.get\(browser\.activeId \?\? ""\) === activePlanPath/);
+    expect(main).toMatch(/if \(path === message\.path\) pendingBuilds\.delete\(sessionId\);/);
+    expect(main).toMatch(/message\.type === "error"[\s\S]*?pendingBuilds\.delete\(message\.sessionId\)/);
+    expect(main).toMatch(/pendingBuilds\.delete\(message\.sessionId\)[\s\S]*?conversationViewCache\.delete\(message\.sessionId\)/);
+    // The click no longer disables the button by hand; the pending wait owns it.
+    expect(main).not.toContain("elements.planBuild.disabled = true");
+  });
+
   it("keeps the composer usable when the Dext view is made very narrow", async () => {
     const css = await source("media/styles.css");
     // VS Code does not expose a minimum-width option for Webview Views, so the
@@ -83,62 +219,87 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/body \{[\s\S]*?min-width: 300px;/);
     // Extra controls collapse into a popover; Send stays on the same line.
     expect(css).toMatch(/\.action-row \{[\s\S]*?flex-wrap: nowrap;/);
-    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 0 1 auto;[\s\S]*?flex-wrap: nowrap;/);
+    expect(css).toMatch(/\.composer-controls \{[\s\S]*?flex: 1 1 auto;[\s\S]*?flex-wrap: nowrap;/);
+    // Agent and Model move to the right edge, beside Send.
+    expect(css).toMatch(/\.composer-extras \{[\s\S]*?margin-left: auto;/);
     expect(css).toMatch(/\.composer-menu \{[\s\S]*?min-width: 0;[\s\S]*?flex: 0 1 auto;/);
+  });
+
+  it("centers wide and full-screen hosts on one shared canvas width", async () => {
+    const css = await source("media/styles.css");
+    // Widening used to do two different things: below 1200px the canvas filled
+    // the host, and above it #dext-main snapped to a fixed 888px column. Both
+    // states now share one centered 1200px canvas, while #dext-main itself
+    // stays fluid so nothing narrows as the host grows.
+    expect(css).toMatch(/\.app-shell \{[\s\S]*?max-width: 1200px;[\s\S]*?margin-inline: auto;/);
+    expect(css).toMatch(/#dext-main \{\r?\n {2}flex: 1 1 auto;/);
+    expect(css).not.toMatch(/#dext-main \{[^}]*?width:/);
+    expect(css).not.toContain("width: min(888px");
+    expect(css).not.toContain("width: min(1120px");
+    expect(css).toMatch(/#result-body \.markdown-body:not\(\.agent-todo-text\),[\s\S]*?\.history-record-body \.markdown-body:not\(\.agent-todo-text\) \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
   });
 
   it("offers Plan beside Agent, Ask, and Code and lands its result as a document", async () => {
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
-    const application = await source("src/application.ts");
-    const history = await source("src/historyRender.ts");
-    const builtins = await source("src/core/builtins.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
+    const application = await source("src/app/application.ts");
+    const history = await source("src/features/conversations/presentation/historyRender.ts");
+    const builtins = await source("src/features/workflow/domain/builtins.ts");
+    const planControls = await source("src/features/conversations/browser/planControls.ts");
     expect(sidebar).toContain('<div class="plan-target-group">');
     expect(main).toMatch(/renderComposerMenu\(elements\.modeMenu, \[[\s\S]*?\["plan", "Plan", "codicon-checklist"\]/);
     expect(main).toContain('plan: "Plan"');
     // A plan turn ends in a file, so the result offers the file and the handoff.
-    expect(main).toMatch(/if \(result\.kind === "chat" && result\.planPath\) fragment\.append\(planActions\(result\.planPath\)\)/);
-    expect(main).toMatch(/function planActions[\s\S]*?type: "openFileReference", reference: planPath/);
-    expect(main).toMatch(/function planActions[\s\S]*?type: "buildPlan", planPath/);
+    expect(main).toContain('plan: (planPath) => planActions(document, planPath');
+    expect(planControls).toMatch(/export function planActions\([\s\S]*?open\(planPath\)/);
+    expect(main).toMatch(/type: "buildPlan", planPath/);
     expect(builtins).toMatch(/id: "plan",\s*title: "Plan",/);
     expect(application).toMatch(/mode === "plan" && !metadata\.executePlan/);
     expect(application).toMatch(/private async savePlan[\s\S]*?splitPlanResponse\(result\.text\)/);
     expect(application).toMatch(/private async savePlan[\s\S]*?text: plan\.conversation, planPath/);
     expect(application).toMatch(/private async savePlan[\s\S]*?const workspaceStorage = this\.storage\.location\(\) === "workspace"/);
     expect(application).toMatch(/private async savePlan[\s\S]*?this\.storage\.directory\("plans"\)/);
-    expect(application).toMatch(/private async savePlan[\s\S]*?planPath \}/);
     expect(application).toContain("globalDiagnostics: this.globalDiagnostics");
     expect(application).not.toContain('mcpDiagnostics: this.configDiagnostics.filter((item) => item.toLowerCase().includes("mcp"))');
-    // Building re-reads the file so edits made in the editor are what runs.
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?vscode\.workspace\.fs\.readFile\(target\)/);
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?application\.planUri\(planPath\)/);
-    expect(sidebar).toMatch(/private async buildPlan[\s\S]*?await this\.run\("plan", \[/);
-    expect(sidebar).toContain('].join("\\n"), undefined, true);');
+    // Building re-reads the plan file through the host port, so the turn runs
+    // on the current text in the editor rather than the text that created it.
+    // The old sidebar also pre-checked application.planUri; PlanController.build
+    // now delegates that existence check to its readPlan port (a missing plan
+    // throws "no longer available"), so the observable contract is the read
+    // text plus the plan path handed to the turn.
+    type ExecuteConversation = (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
+    const execute = vi.fn<ExecuteConversation>(async () => emptyResponse());
+    const h = createConversationHarness({ planText: "Ship the plan exactly as edited.", executeConversation: execute });
+    await h.controller.start();
+    await h.plans.build("plans/ship.plan.md");
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[0]).toBe("plan");
+    expect(String(execute.mock.calls[0]?.[1])).toContain("Ship the plan exactly as edited.");
+    expect(execute.mock.calls[0]?.[2]).toMatchObject({ executePlan: true, planPath: "plans/ship.plan.md" });
+    expect(h.controller.active().turns.at(-1)).toMatchObject({ executePlan: true, planPath: "plans/ship.plan.md" });
+    h.dispose();
     // History replays the document link but not the handoff button.
-    expect(history).toMatch(/result\.kind === "chat" && result\.planPath/);
+    expect(history).toContain('plan: (path) => ({ html: planLink(path) })');
     expect(history).not.toContain('type: "buildPlan"');
   });
 
   it("hands the webview the settings it renders with instead of guessing", async () => {
     const main = await source("src/webview/main.ts");
-    const application = await source("src/application.ts");
+    const application = await source("src/app/application.ts");
     const extension = await source("src/extension.ts");
-    expect(application).toMatch(/private webviewSettings[\s\S]*?diffView: diffView === "split" \? "split" : "inline"/);
     expect(application).toMatch(/private webviewSettings[\s\S]*?submitOnEnter: configuration\.get<boolean>\("submitOnEnter", true\) !== false/);
-    expect(main).toMatch(/if \(state\.settings\) \{[\s\S]*?defaultDiffMode = state\.settings\.diffView;[\s\S]*?editor\.setSubmitOnEnter\(state\.settings\.submitOnEnter\)/);
-    // A new file change has to open in the configured layout, not always inline.
-    expect(main).toContain("view.dataset.diffView = defaultDiffMode;");
-    expect(main).toContain('button.className = `diff-mode-button${mode === defaultDiffMode ? " active" : ""}`');
-    // A new API directory changes the registered API set, so it needs a reload.
-    expect(extension).toMatch(/event\.affectsConfiguration\("dext\.apiDirs"\)[\s\S]*?await application\.reload\(\)/);
-    expect(extension).toMatch(/event\.affectsConfiguration\("dext\.diff\.defaultView"\)[\s\S]*?await sidebar\.refresh\(\)/);
-    expect(application).toMatch(/private apiDirectories[\s\S]*?isAbsolute\(value\)/);
+    expect(main).toMatch(/if \(state\.settings\) \{[\s\S]*?editor\.setSubmitOnEnter\(state\.settings\.submitOnEnter\)/);
+    // Changing a discovery directory changes the registered API set, so it needs a reload.
+    expect(extension).toMatch(/event\.affectsConfiguration\("dext\.apiDirectories"\)[\s\S]*?await application\.reload\(\);/);
+    // Configured API directories are searched, but `.dext/api` comes first.
+    expect(application).toMatch(/apiRoots\(\): string\[\] \{/);
+    expect(application).toMatch(/add\(vscode\.Uri\.joinPath\(vscode\.Uri\.file\(this\.workspaceRoot\), "\.dext", "api"\)\.fsPath\)/);
   });
 
   it("lays concurrent comprehension branches out beside one another", async () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    const application = await source("src/application.ts");
+    const application = await source("src/app/application.ts");
     // Branches ran at the same time, so consecutive branch steps collect into one
     // container instead of reading as a sequence.
     expect(main).toMatch(/if \(step\.branch === undefined\) \{[\s\S]*?fanOut = undefined;/);
@@ -149,13 +310,42 @@ describe("sidebar panel layout", () => {
     expect(css).toContain('content: "Branch " attr(data-branch)');
     // A narrow sidebar has to fall back to one column rather than squeeze.
     expect(css).toMatch(/\.fan-out \{[\s\S]*?grid-template-columns: repeat\(auto-fit, minmax\(/);
-    expect(application).toContain('this.workflowRuntime.setMaxConcurrency(positive("workflow.maxConcurrency"');
+    expect(application).toContain('this.dispatchConcurrency = positive("workflow.maxConcurrency", DEFAULT_DISPATCH_CONCURRENCY)');
+  });
+
+  it("offers sandbox-escaping presets in Agent and Plan and marks them Build-only in Plan", async () => {
+    const main = await source("src/webview/main.ts");
+    const planControls = await source("src/features/conversations/browser/planControls.ts");
+    // Plan applies the preset when the plan builds, so it may choose one that needs
+    // Full access; Ask stays read-only and Code carries its own per-call permission.
+    expect(main).toContain('const writable = inputMode === "agent" || inputMode === "plan";');
+    expect(main).toContain('const fullAccess = state.agentSelection.permission === "full-access" && writable;');
+    expect(main).toContain('const buildOnly = !restriction && Boolean(preset.writableTurnsOnly) && writable && inputMode === "plan";');
+    expect(main).toContain('" (Build only)"');
+    // Sending an Agent or Code turn applies the preset as-is; Plan's Send and Ask
+    // are read-only, and building a plan is the writable turn that must check it.
+    expect(main).toContain("function fullAccessPresetRestriction(writableTurn: boolean)");
+    expect(main).toContain('const presetRestriction = fullAccessPresetRestriction(inputMode === "agent" || codeMode);');
+    expect(main).toContain("This preset requires Full access in Agent or Plan mode.");
+    expect(main).toContain("buildRestriction: () => fullAccessPresetRestriction(true)");
+    expect(planControls).toContain("elements.build.disabled = Boolean(buildRestriction)");
+  });
+
+  it("offers exactly the installed Harness preset catalog and defaults to its own default", async () => {
+    const main = await source("src/webview/main.ts");
+    const defaults = await source("src/features/agents/domain/harnessPresetDefault.ts");
+    // Dext no longer invents an "ACP default" entry: the catalog is the only
+    // source of preset choices, and an unset selection runs the Harness default.
+    expect(main).not.toContain("ACP default");
+    expect(main).toContain("const presets: readonly HarnessPresetOption[] = profile?.presets ?? [];");
+    expect(main).toContain("const selectedPreset = harnessPresetOrDefault(current.agentPreset);");
+    expect(main).toContain("No Harness presets found. Refresh presets or check the installed Harness.");
+    expect(defaults).toContain('export const DEFAULT_HARNESS_PRESET = "standard";');
   });
 
   it("shows writable permission tiers for Agent and Plan modes", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
     const manifest = await source("package.json");
     const css = await source("media/styles.css");
     expect(html).toContain('id="permission-control"');
@@ -168,19 +358,75 @@ describe("sidebar panel layout", () => {
     expect(main).toContain('permission: change.permission ?? agentPermission');
     expect(manifest).toContain('"dext.agentPermission"');
     expect(manifest).toContain('"dext.agentCliArgs"');
-    // The host holds the patch, so the buttons only appear when it says so.
-    expect(main).toMatch(/renderResult\(message\.response, message\.reviewPatch \? message\.turnId : undefined\)/);
-    expect(main).toMatch(/function patchReviewActions[\s\S]*?type: "resolvePatch", turnId, uris: \[\.\.\.uris\], accept/);
-    expect(main).toMatch(/function applyPatchResolution[\s\S]*?if \(status === "conflict"\)[\s\S]*?button\.disabled = false/);
-    expect(sidebar).toMatch(/function unappliedPatch[\s\S]*?argument\.name === "apply" && argument\.value !== false/);
-    expect(sidebar).toMatch(/private async resolvePatch[\s\S]*?this\.pendingPatches\.get\(turnId\)/);
-    expect(sidebar).toMatch(/private async resolvePatch[\s\S]*?applyPatchHandler\(\{/);
-    // A conflict leaves the entry pending so it can be reviewed again.
-    expect(sidebar).toMatch(/if \(result\.status === "applied" \|\| result\.status === "unchanged"\) \{\s*this\.forgetResolvedChanges/);
-    expect(css).toContain(".patch-review-action.accept");
-    expect(css).toContain(".agent-file-change.patch-conflict");
+    expect(main).not.toContain("resolvePatch");
+    expect(css).not.toContain(".patch-review-action");
     expect(css).toContain("#permission-control.is-full-access {");
     expect(css).toContain(".composer-menu-option.composer-menu-option-warning {");
+  });
+
+  it("keeps custom accents theme-aware and readable in normal and high-contrast themes", async () => {
+    const css = await source("media/styles.css");
+    // Full access is the only custom accent that must work as small text on
+    // both grounds, so it carries explicit dark and light values.
+    expect(css).toMatch(/:root \{[\s\S]*?--dext-full-access-accent: #d99a8f;/);
+    expect(css).toMatch(/body\.vscode-light,\s*body\.vscode-high-contrast-light \{[\s\S]*?--dext-full-access-accent: #7f4338;/);
+    expect(css).toMatch(/body\.vscode-high-contrast,\s*body\.vscode-high-contrast-light \{[\s\S]*?--dext-full-access-accent: var\(--vscode-foreground\);/);
+    // Prose softens against whatever surface it is rendered on, not only the
+    // sidebar (History uses the editor ground).
+    expect(css).toContain("color: color-mix(in srgb, var(--vscode-foreground) 90%, transparent);");
+    // HC pills get an opaque theme outline instead of translucent brand fills.
+    expect(css).toMatch(/body:is\(\.vscode-high-contrast, \.vscode-high-contrast-light\) \.composer-control \{[\s\S]*?border-color: var\(--vscode-contrastBorder, var\(--vscode-foreground\)\);/);
+    // Decorative sweeps and dark-only hover fallbacks derive from the theme.
+    expect(css).toContain("color-mix(in srgb, currentColor 16%, transparent)");
+    expect(css).not.toContain("rgba(255, 255, 255");
+  });
+
+  it("offers one host-level appearance choice from the sidebar view title", async () => {
+    const contracts = await source("src/shared/contracts/appearance.ts");
+    const controller = await source("src/platform/vscode/appearance.ts");
+    const webview = await source("src/webview/appearance.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
+    const extension = await source("src/extension.ts");
+    const manifest = await source("package.json");
+    const css = await source("media/appearance.css");
+    const layout = await source("media/styles.css");
+    // The choice belongs to the extension host, not one webview's document:
+    // globalState persists it and the controller broadcasts to every surface.
+    expect(contracts).toContain('export const DEXT_APPEARANCES = ["auto", "paper", "dim"] as const;');
+    expect(controller).toContain("this.state.update(DEXT_APPEARANCE_KEY, theme);");
+    expect(controller).toContain("for (const listener of [...this.listeners]) listener(theme);");
+    // The only control is the native view-title action, so it cannot compress
+    // the conversation tabs and does not need a duplicate on editor pages.
+    expect(manifest).toContain('"command": "dext.chooseAppearance"');
+    expect(manifest).toContain('"icon": "$(color-mode)"');
+    expect(manifest).toMatch(/"view\/title": \[[\s\S]*?"command": "dext\.chooseAppearance",\s*"when": "view == dext\.sidebar",\s*"group": "navigation@5"/);
+    expect(extension).toContain('vscode.commands.registerCommand("dext.chooseAppearance"');
+    expect(extension).toContain('title: "Dext Theme"');
+    expect(extension).toContain('appearance: "paper"');
+    expect(extension).toContain('appearance: "dim"');
+    // The tab bar stays, but no webview draws a theme menu or toggle.
+    expect(sidebar).toContain('<div class="dext-topbar">');
+    expect(sidebar).not.toContain("data-dext-appearance");
+    expect(sidebar).toContain("appearanceScript");
+    expect(webview).not.toContain("dext-appearance-menu");
+    expect(webview).not.toContain("setDextAppearance");
+    expect(webview).toContain('document.body.dataset.dextTheme = effective;');
+    expect(webview).toContain('message?.type !== "dextAppearance"');
+    // Paper and Dim replace the variables the existing CSS already reads, and
+    // the guards keep a real VS Code high-contrast theme in charge.
+    expect(css).toContain('body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
+    expect(css).toContain('body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
+    expect(css).not.toContain(".dext-appearance-menu");
+    expect(css).toContain("--vscode-sideBar-background: #f7f2e8;");
+    expect(css).toContain("--vscode-sideBar-background: #211e1a;");
+    // The old reading-only prototype is gone, including its narrow measure.
+    expect(layout).not.toContain("--dext-reading-measure");
+    expect(layout).not.toContain(".reading-mode-button");
+    // Process and Output now use the shared canvas width rather than a second,
+    // narrower reading column centered inside it.
+    expect(layout).toMatch(/#result-body \.markdown-body:not\(\.agent-todo-text\),[\s\S]*?\.history-record-body \.markdown-body:not\(\.agent-todo-text\) \{[\s\S]*?max-width: 100%;[\s\S]*?margin-inline: 0;[\s\S]*?font-size: 15px;[\s\S]*?line-height: 1.8;/);
+    expect(layout).not.toContain("min(100%, 56rem)");
+    expect(layout).not.toContain("min(100%, 60rem)");
   });
 
   it("colors Send with the accent of the mode it will run in", async () => {
@@ -195,13 +441,13 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
     expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);
     // The mode control reads the same accent rather than repeating the colors.
-    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--composer-accent\) 68%[\s\S]*?color: var\(--composer-accent\);[\s\S]*?background: color-mix\(in srgb, var\(--composer-accent\) 14%/);
-    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control:focus-visible \{[\s\S]*?outline: 1px solid var\(--composer-accent\);/);
+    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control,\s*\.input-section\[data-mode="resource"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--composer-accent\) 68%, var\(--vscode-widget-border\)\);[\s\S]*?color: var\(--composer-accent\);[\s\S]*?background: color-mix\(in srgb, var\(--composer-accent\) 14%, var\(--vscode-editor-background\)\);/);
+    expect(css).toMatch(/\.input-section\[data-mode="code"\] #mode-control:focus-visible,\s*\.input-section\[data-mode="resource"\] #mode-control:focus-visible \{[\s\S]*?outline: 1px solid var\(--composer-accent\);/);
     expect(css).not.toMatch(/\.input-section\[data-mode="(?:ask|plan|code)"\] #mode-control \{[\s\S]*?border-color: color-mix\(in srgb, var\(--vscode-focusBorder\)/);
   });
 
   it("switches conversations through editor-style tabs and keeps input errors out of Output", async () => {
-    const html = await source("src/sidebarProvider.ts");
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const manifest = await source("package.json");
     const css = await source("media/styles.css");
@@ -213,12 +459,28 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/^\.app-shell \{[\s\S]*?flex-direction: column;/m);
     expect(css).toMatch(/^main \{\r?\n {2}flex: 1 1 auto;/m);
     expect(css).toMatch(/\.conversation-tab \{[\s\S]*?max-width: 190px;[\s\S]*?\}/);
-    expect(main).toMatch(/function renderConversations[\s\S]*?conversation-tab-label[\s\S]*?conversation-tab-close/);
+    const tabs = await source("src/features/conversations/browser/conversationTabs.ts");
+    expect(main).toMatch(/function renderConversations[\s\S]*?renderConversationTabs\(\{/);
+    expect(tabs).toMatch(/conversation-tab-label[\s\S]*?conversation-tab-close/);
     expect(main).toMatch(/function selectConversation[\s\S]*?type: "selectConversation"/);
     expect(main).toMatch(/conversationTabs\.addEventListener\("dblclick"[\s\S]*?type: "newConversation"/);
     expect(main).toMatch(/function closeConversation[\s\S]*?type: "closeConversation"/);
     expect(manifest).toContain('"command": "dext.newConversation"');
-    expect(html).toMatch(/async openConversation\(session: DextHistorySession\)[\s\S]*?activateConversation\(existing(?:,[\s\S]*?)?\)/);
+    // History opens an already-open conversation by activating that same
+    // in-memory session (host initiated), never by creating a second tab.
+    const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "one" } });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const existing = h.controller.session("two")!;
+    const beforeOpen = h.messages.length;
+    await h.controller.open({ ...existing, turns: [] });
+    expect(h.controller.active()).toBe(existing);
+    expect(h.controller.session("two")).toBe(existing);
+    await vi.waitFor(() => expect(h.messages.slice(beforeOpen)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "activeConversation", activeId: "two", hostInitiated: true }),
+      expect.objectContaining({ type: "outputSession", hostInitiated: true })
+    ])));
+    expect(h.controller.layout().openConversationIds.filter((id) => id === "two")).toHaveLength(1);
+    h.dispose();
     expect(html).toContain('id="input-error" class="input-error"');
     expect(main).toMatch(/function renderInputError[\s\S]*elements\.inputError\.hidden = false/);
     expect(main).toMatch(/message\.type === "error"[\s\S]*renderInputError\(message\.message\)/);
@@ -226,40 +488,60 @@ describe("sidebar panel layout", () => {
   });
 
   it("closes a conversation tab without dropping the conversation from history", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
-    const close = sidebar.slice(
-      sidebar.indexOf("private async closeConversation"),
-      sidebar.indexOf("constructor(")
-    );
-    expect(sidebar).toContain("private openConversations: string[]");
-    expect(close).toContain("this.openConversations = this.openConversations.filter((id) => id !== sessionId)");
-    expect(close).toContain("const neighbour = remaining[index] ?? remaining[index - 1]");
-    // The session store backs history, so closing a tab must never touch it.
-    expect(close).not.toContain("this.sessions.delete");
-    expect(sidebar).toMatch(/type: "conversations",[\s\S]*?this\.orderedConversations\(\)\.flatMap/);
+    const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "two" } });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const beforeClose = h.messages.length;
+    await h.controller.close("two");
+    // The session store backs history, so closing a tab must never delete it.
+    expect(h.history.list(true).map((session) => session.id).sort()).toEqual(["one", "two"]);
+    expect(h.controller.session("two")).toBeDefined();
+    expect(h.controller.layout().openConversationIds).toEqual(["one"]);
+    // The neighbour replaces the closed tab instead of leaving a blank view.
+    expect(h.controller.active().id).toBe("one");
+    const posted = h.messages.slice(beforeClose);
+    expect(posted).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "conversations",
+        activeId: "one",
+        sessions: [expect.objectContaining({ id: "one" })]
+      }),
+      expect.objectContaining({ type: "outputSession", hostInitiated: true })
+    ]));
+    expect(posted.some((message) => message.type === "conversations" && message.sessions.some((session) => session.id === "two"))).toBe(false);
+    h.dispose();
   });
 
   it("pins a conversation tab to the front of the strip and back onto the next reload", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    expect(sidebar).toMatch(/private orderedConversations\(\): string\[\][\s\S]*?this\.openConversations\.filter\(\(id\) => this\.preferences\.isPinned\(id\)\)/);
-    // Reopen every tab the user left open; pins remain the fallback for older
-    // saved layouts that did not record the open-tab list.
-    expect(sidebar).toMatch(/hydrateSessions\(\): void \{[\s\S]*?const restored = layout\.openConversationIds\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?const pinned = this\.preferences\.pinned\(\)\.filter\(\(id\) => this\.sessions\.has\(id\)\);[\s\S]*?new Set\(\[\.\.\.restored, \.\.\.pinned, this\.activeSession\.id\]\)/);
+    // A pin restores a tab even when the saved layout predates open tabs.
+    const h = createConversationHarness({ layout: { openConversationIds: ["a", "c"], activeConversationId: "c" } });
+    await h.preferences.setPinned("b", true);
+    h.seed([conversation("a", [turn("a1")]), conversation("b", [turn("b1")]), conversation("c", [turn("c1")])]);
+    expect(h.controller.ordered()).toEqual(["b", "a", "c"]);
+    expect(h.controller.layout().openConversationIds).toContain("b");
+    await h.controller.pin("c", true);
+    expect(h.controller.ordered()).toEqual(["c", "b", "a"]);
+    expect(h.preferences.pinned()).toEqual(["b", "c"]);
     // Closing is an explicit dismissal, so it releases the pin as well.
-    expect(sidebar).toMatch(/private async closeConversation[\s\S]*?if \(this\.preferences\.isPinned\(sessionId\)\) await this\.preferences\.setPinned\(sessionId, false\)/);
-    expect(main).toMatch(/tab\.dataset\.vscodeContext = JSON\.stringify\(\{[\s\S]*?webviewSection: "conversationTab"[\s\S]*?dextTabPinned: conversation\.pinned/);
-    expect(main).toMatch(/conversation\.pinned \? "conversation-tab-pin" : "conversation-tab-close"/);
+    await h.controller.close("c");
+    expect(h.preferences.isPinned("c")).toBe(false);
+    expect(h.controller.layout().openConversationIds).not.toContain("c");
+    expect(h.controller.ordered()).toEqual(["b", "a"]);
+    h.dispose();
+    const tabs = await source("src/features/conversations/browser/conversationTabs.ts");
+    expect(tabs).toMatch(/tab\.dataset\.vscodeContext = JSON\.stringify\(\{[\s\S]*?webviewSection: "conversationTab"[\s\S]*?dextTabPinned: conversation\.pinned/);
+    expect(tabs).toMatch(/conversation\.pinned \? "conversation-tab-pin" : "conversation-tab-close"/);
     expect(main).toMatch(/function pinConversation[\s\S]*?type: "pinConversation"/);
     expect(css).toMatch(/\.conversation-tab\.pinned \{[\s\S]*?max-width: 128px;/);
   });
 
   it("renders text output through a safe Markdown surface with code token styles", async () => {
     const main = await source("src/webview/main.ts");
+    const markdown = await source("src/shared/lib/markdown.ts");
     const css = await source("media/styles.css");
-    expect(main).toContain('const markdown = new MarkdownIt({');
-    expect(main).toContain('html: false');
+    expect(main).toContain('const markdown = dextMarkdown();');
+    expect(markdown).toContain('new MarkdownIt({ html: false, breaks: true, linkify: true })');
     expect(main).toMatch(/function copyableText[\s\S]*?className = "markdown-body"[\s\S]*?markdown\.render\(content\)/);
     expect(css).toContain(".markdown-body pre");
     expect(css).toContain(".tok-keyword");
@@ -268,71 +550,54 @@ describe("sidebar panel layout", () => {
   it("shows provider token usage in Process only when the provider reports it", async () => {
     const main = await source("src/webview/main.ts");
     expect(main).toContain("let agentTokenUsage: AgentTokenUsage | undefined;");
-    expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.usage\) agentTokenUsage = event\.usage;/);
-    expect(main).toMatch(/function updateAgentProgress[\s\S]*?totalTokens[\s\S]*?tokens/);
+    expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.usage\) agentTokenUsage = updateTurnTokenUsage\(agentTokenUsage, event\.usage\);/);
+    expect(main).toMatch(/function updateAgentProgress[\s\S]*?formatTurnTokenUsage\(agentTokenUsage\)/);
   });
 
   it("keeps Process as the only disclosure around the live agent timeline", async () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
-    expect(main).toMatch(/function agentStreamPanel[\s\S]*?activeTurn\?\.process[\s\S]*?processDisclosure\.querySelector/);
+    expect(main).toMatch(/function agentStreamPanel[\s\S]*?transcript\.active\?\.process[\s\S]*?transcript\.active\?\.processMeta/);
     expect(main).not.toContain('trace.className = "agent-run-disclosure"');
     expect(css).not.toContain(".agent-run-disclosure");
   });
 
   it("opens workspace Markdown links from output in the editor", async () => {
     const main = await source("src/webview/main.ts");
-    const outputLinks = await source("src/webview/outputLink.ts");
+    const outputLinks = await source("src/features/workspace/browser/outputLink.ts");
     expect(main).toMatch(/function openOutputLink[\s\S]*?closest<HTMLAnchorElement>\("a\[href\]"\)[\s\S]*?type: "openFileReference"/);
     expect(main).toContain('elements.result.addEventListener("click", openOutputLink);');
     expect(main).toContain('type: "openExternalLink", url: externalUrl');
     expect(outputLinks).toContain('value.toLowerCase().startsWith("file:")');
     expect(outputLinks).toContain('export function outputExternalLink');
-    expect(main).toContain("linkify: true");
+    // The renderer keeps `file:` destinations, so the click handler above sees them.
+    expect(await source("src/shared/lib/markdown.ts")).toContain("/^file:/i.test(url.trim())");
   });
 
   it("offers the @ file picker in every mode and inserts the same chip as a drop", async () => {
     const editor = await source("src/webview/codeEditor.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
-    const picker = editor.slice(
-      editor.indexOf("private async fileCompletions"),
-      editor.indexOf("private async completions")
-    );
-    // Chat modes switch the language service off, so this source must not be
-    // gated on it the way completions() is.
-    expect(picker).not.toContain("this.languageEnabled");
-    expect(editor).toMatch(/override: \[\s*\(context\) => this\.fileCompletions\(context\),\s*\(context\) => this\.completions\(context\)/);
-    expect(editor).toMatch(/private async completions[\s\S]*?if \(!this\.languageEnabled\) return null;/);
-    expect(picker).toContain("context.matchBefore(/@[^\\s@#\"'`(){}[\\],]*/)");
-    // An email address must not open the picker.
-    expect(picker).toContain("if (/[\\p{L}\\p{N}_.+-]/u.test(source[token.from - 1] ?? \"\")) return null;");
-    expect(picker).toContain("filter: false");
-    expect(picker).toContain("const insert = `@${path} `;");
-    expect(sidebar).toMatch(/case "searchFiles":[\s\S]*?const fileIndex = await this\.workspaceFileIndex\(\)[\s\S]*?rankFileMatches\(\s*fileIndex/);
-    expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?vscode\.workspace\.findFiles\("\*\*\/\*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES\)/);
+    const sidebar = await source("src/app/sidebarProvider.ts");
+    // Completion comes from Monaco's TypeScript worker plus the generated `dext`
+    // declaration, so there is no hand-written provider left to point at.
+    const typescript = await source("src/webview/monacoTypescript.ts");
+    expect(typescript).toContain('addExtraLib');
+    expect(typescript).toContain('dextTypes');
+    expect(editor).toContain('installDextTypescript');
+    expect(sidebar).toContain('await this.fileSearch.search(request)');
+    const search = await source("src/features/workspace/host/fileSearchController.ts");
+    expect(search).toMatch(/const paths = await this\.workspaceFileIndex\(\)[\s\S]*?rankFileMatches\(paths/);
+    expect(search).toMatch(/private async workspaceFileIndex[\s\S]*?vscode\.workspace\.findFiles\("\*\*\/\*", FILE_INDEX_EXCLUDE, MAX_INDEXED_FILES\)/);
     // A failed listing must not raise the composer's error banner.
-    expect(sidebar).toMatch(/private async workspaceFileIndex[\s\S]*?\} catch \{[\s\S]*?paths = \[\];/);
+    expect(search).toMatch(/private async workspaceFileIndex[\s\S]*?\} catch \{[\s\S]*?paths = \[\];/);
   });
 
   it("sends on Enter in chat modes and keeps Enter as a newline in Code mode", async () => {
     const editor = await source("src/webview/codeEditor.ts");
-    const submit = editor.slice(
-      editor.indexOf("private submitKeymapExtension"),
-      editor.indexOf("setSubmitOnEnter")
-    );
-    // Code mode is a real editor, so the compartment resolves to nothing there
-    // and Mod-Enter stays the only way to run.
-    expect(submit).toContain("if (this.languageEnabled || !this.submitOnEnter) return [];");
-    expect(submit).toMatch(/key: "Enter"[\s\S]*?if \(acceptCompletion\(view\)\) return true;[\s\S]*?this\.options\.onRun\(\);/);
-    expect(submit).toContain('{ key: "Shift-Enter", run: insertNewlineAndIndent }');
-    expect(editor).toContain("this.submitKeymap.of(this.submitKeymapExtension())");
-    // Switching modes is what flips the binding, so the compartment has to be
-    // reconfigured alongside the language and wrapping ones.
-    expect(editor).toMatch(/setLanguageEnabled\(enabled: boolean\)[\s\S]*?this\.submitKeymap\.reconfigure\(this\.submitKeymapExtension\(\)\)/);
-    expect(editor).toContain('{ key: "Mod-Enter", run: () => { this.options.onRun(); return true; } }');
-    expect(editor).toContain('{ key: "Mod-Shift-v", run: () => { void this.pasteRaw(); return true; } }');
-    // The compartment has to outrank the default Enter binding below it.
-    expect(editor.indexOf("this.submitKeymap.of(")).toBeLessThan(editor.indexOf("...defaultKeymap"));
+    expect(editor).toContain('dextChatEnter && !suggestWidgetVisible');
+    expect(editor).toContain('this.chatEnter.set(!enabled && this.submitOnEnter)');
+    expect(editor).toContain('monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter');
+    expect(editor).toContain('monaco.KeyMod.Shift | monaco.KeyCode.Enter');
+
   });
 
   it("refreshes Send state when conversation text changes with language services disabled", async () => {
@@ -344,35 +609,103 @@ describe("sidebar panel layout", () => {
 
   it("keeps the composer visible while allowing the history, editor, and attachments to shrink", async () => {
     const css = await source("media/styles.css");
-    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: clamp\(112px, 24vh, 240px\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: min\(58%, 360px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
-    expect(css).toMatch(/\.input-panel \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?flex: 1 1 var\(--input-editor-height\);/);
-    expect(css).toMatch(/\.code-editor \{[\s\S]*?height: 100%;[\s\S]*?min-height: 0;[\s\S]*?\}/);
+    // The composer height is a shared token; the short-viewport rule below still overrides it.
+    expect(css).toMatch(/--dext-composer-height: clamp\(96px, 12vh, 128px\);/);
+    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: var\(--dext-composer-height\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: calc\(100% - 44px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
+    expect(css).toMatch(/\.input-panel \{[\s\S]*?flex-direction: column;[\s\S]*?flex: 0 1 auto;[\s\S]*?\}/);
+    expect(css).toMatch(/\.code-editor \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?min-height: 0;[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
-    expect(css).toMatch(/\.input-section\.section-collapsed,[\s\S]*?\.result-section\.section-collapsed \{[\s\S]*?flex: 0 0 auto;/);
     expect(css).toMatch(/\.result-section \{[\s\S]*?flex: 1 1 0;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?flex-basis: 0;[\s\S]*?min-height: 0;[\s\S]*?overflow: auto;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?scrollbar-gutter: stable;/);
     expect(css).toMatch(/@media \(max-height: 480px\)[\s\S]*?\.input-section \{[\s\S]*?--input-editor-height: clamp\(56px, 20vh, 96px\);/);
-    expect(css).toMatch(/main\.workspace-fullscreen > \.panel-expanded \{[\s\S]*?max-height: none;/);
+  });
+
+  it("keeps the jump-to-latest control clear of the host scrollbar", async () => {
+    const css = await source("media/styles.css");
+    const main = await source("src/webview/main.ts");
+    // The host owns the webview scrollbar width (VS Code paints a 10px slider,
+    // Chromium a wider one). A fixed offset can land the floating control on the
+    // track, which hides the thumb exactly where the reader drags it to reach the
+    // end of the output, so the control uses the gutter main.ts measures.
+    expect(css).toMatch(/\.stream-jump-latest \{[\s\S]*?right: calc\(var\(--dext-result-scroll-gutter, \d+px\) \+ \d+px\);/);
+    expect(css).not.toMatch(/\.stream-jump-latest \{[\s\S]*?right: 28px;/);
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
+    expect(scrollSource).toMatch(/syncGutter\(\): void \{[\s\S]*?body\.offsetWidth - body\.clientWidth/);
+    expect(main).toMatch(/elements\.resultSection\.append\(jumpToTop\);\s*elements\.resultSection\.append\(jumpToPrevTurn\);\s*elements\.resultSection\.append\(jumpToNextTurn\);\s*elements\.resultSection\.append\(jumpToLatest\);\s*syncResultScrollGutter\(\);/);
+    expect(main).toMatch(/addEventListener\("resize", syncResultScrollGutter/);
+  });
+
+  it("pairs persistent previous and next turn controls with the transcript ends", async () => {
+    const css = await source("media/styles.css");
+    const main = await source("src/webview/main.ts");
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
+    // The two turn controls sit between the existing arrows. They remain
+    // available at their target, so the stack keeps a slot for each.
+    expect(css).toMatch(/\.stream-jump-next-turn \{\s*bottom: 48px;\s*\}/);
+    expect(css).toMatch(/\.stream-jump-prev-turn \{\s*bottom: 82px;\s*\}/);
+    expect(css).toMatch(/\.stream-jump-top \{\s*bottom: 116px;\s*\}/);
+    expect(css).toMatch(/\.stream-jump-prev-turn\[hidden\]/);
+    expect(css).toMatch(/\.stream-jump-next-turn\[hidden\]/);
+    expect(main).toMatch(/jumpToPrevTurn\.className = "stream-jump-prev-turn";/);
+    expect(main).toMatch(/jumpToNextTurn\.className = "stream-jump-next-turn";/);
+    // Every glyph in the jump stack is a codicon, so one font update moves them all.
+    expect(main).toMatch(/jumpToPrevTurnIcon\.className = "codicon codicon-chevron-up";/);
+    expect(main).toMatch(/jumpToNextTurnIcon\.className = "codicon codicon-chevron-down";/);
+    // The ends stack two chevrons, the turn steps keep one, and both come from
+    // the codicon font rather than a drawn glyph.
+    expect(main).toMatch(/jumpToTop\.append\(\.\.\.jumpGlyph\("up"\)\);/);
+    expect(main).toMatch(/jumpToLatest\.append\(\.\.\.jumpGlyph\("down"\)\);/);
+    expect(main).toMatch(/icon\.className = `codicon codicon-chevron-\$\{direction\}`;/);
+    // The stepping controls start from the last turn the reader expanded or
+    // navigated to, not from the live turn (which owns the streamed render).
+    expect(main).toMatch(/currentTurn: \(\) => navigationTurn\(\)/);
+    expect(main).toMatch(/adjacentTurn: \(offset\) => neighboringTurn\(offset\)/);
+    expect(main).toMatch(/activateTurn: \(turn\) => activateNavigationTurn\(turn\)/);
+    expect(main).toMatch(/jumpToPrevTurn\.addEventListener\("click", \(\) => \{\s*scroll\.jumpToPreviousTurn\(\);/);
+    expect(main).toMatch(/jumpToNextTurn\.addEventListener\("click", \(\) => \{\s*scroll\.jumpToNextTurn\(\);/);
+    // Expanding an exchange folds the one the reader is leaving.
+    expect(main).toMatch(/function activateNavigationTurn\(target: HTMLElement\): void \{[\s\S]*?if \(row !== target\) row\.open = false;[\s\S]*?turn\.disclosure\.open = true;/);
+    // Expanding or folding an exchange moves the navigation anchor, and the
+    // boundary controls have to be re-evaluated with it.
+    expect(main).toMatch(/elements\.result\.addEventListener\("toggle", rememberNavigationTurn, true\);[\s\S]*?elements\.result\.addEventListener\("toggle", syncJumpToLatest, true\);/);
+    expect(scrollSource).toMatch(/jumpToPreviousTurn\(\): void \{[\s\S]*?if \(!this\.atTurnStart\(current\)\) \{[\s\S]*?this\.scrollToTurn\(current\);[\s\S]*?this\.activateAndScroll\(previous\);/);
+    // Next mirrors the restore behavior: an exchange whose title scrolled away
+    // is realigned before the control steps forward.
+    expect(scrollSource).toMatch(/jumpToNextTurn\(\): void \{[\s\S]*?const current = this\.options\.currentTurn\?\.\(\);[\s\S]*?if \(!this\.atTurnStart\(current\)\) \{[\s\S]*?this\.scrollToTurn\(current\);[\s\S]*?this\.activateAndScroll\(next\);/);
+    // The last exchange keeps the forward control available while its title is
+    // not aligned, because pressing it returns to that open exchange.
+    expect(scrollSource).toMatch(/syncJumpControls\(\): void \{[\s\S]*?const current = next === undefined \? this\.options\.currentTurn\?\.\(\) : undefined;[\s\S]*?jumpToNextTurn\.hidden =[\s\S]*?this\.atTurnStart\(current\)/);
+    expect(scrollSource).toMatch(/private activateAndScroll\(turn: HTMLElement\): void \{[\s\S]*?this\.options\.activateTurn\?\.\(turn\);[\s\S]*?this\.viewport\.body\.scrollTop = this\.turnJumpTarget\(turn\);/);
+    expect(scrollSource).toMatch(/private turnTop\(turn: HTMLElement\): number \{[\s\S]*?turn\.getBoundingClientRect\(\)\.top/);
+    // A title that cannot reach the top edge (the transcript ends below it)
+    // must not offer a jump that would not move the view.
+    expect(scrollSource).toMatch(/private turnJumpTarget\(turn: HTMLElement\): number \{[\s\S]*?Math\.min\(this\.turnTop\(turn\), this\.maxScrollTop\(\)\)/);
   });
 
   it("offers edit-and-resend and retry on every output turn", async () => {
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
+    const transcript = await source("src/features/conversations/browser/transcriptView.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const css = await source("media/styles.css");
-    const history = await source("src/historyRender.ts");
+    const history = await source("src/features/conversations/presentation/historyRender.ts");
     // The summary is its own click target, so an action click must not fold the
     // turn it belongs to.
-    expect(main).toMatch(/function turnActionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
-    expect(main).toMatch(/turnActionButton\(TURN_EDIT_ACTION.icon, TURN_EDIT_ACTION.label, \(\) => \{[\s\S]*?editor\.setValue\(source\)/);
-    expect(main).toMatch(/turnActionButton\(TURN_RENAME_ACTION.icon, TURN_RENAME_ACTION.label, \(\) => \{[\s\S]*?type: "renameTurn", sessionId, turnId/);
+    expect(transcript).toMatch(/private actionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
+    expect(main).toMatch(/edit: \(source\) => editor\.setValue\(source\)/);
+    expect(transcript).toMatch(/this\.actionButton\(TURN_EDIT_ACTION\.icon, TURN_EDIT_ACTION\.label, \(\) => \{[\s\S]*?this\.host\.edit\(source\)/);
+    expect(main).toMatch(/renameTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "renameTurn", sessionId, turnId \}\)/);
     expect(sidebar).toMatch(/case "renameTurn":[\s\S]*?sessionId: request.sessionId/);
-    expect(main).toMatch(/turnActionButton\(TURN_RETRY_ACTION.icon, TURN_RETRY_ACTION.label, \(\) => \{[\s\S]*?type: "retryTurn", sessionId, turnId/);
-    expect(main).toMatch(/turnActionButton\(TURN_FORK_ACTION.icon, TURN_FORK_ACTION.label, \(\) => \{[\s\S]*?type: "forkFromTurn", sessionId, turnId/);
-    expect(main).toContain("summary.append(chevron, title, planExecutionStatus, time, actions);");
-    const actionOrder = [...main.matchAll(/turnActionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
+    expect(main).toMatch(/retryTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "retryTurn", sessionId, turnId \}\)/);
+    expect(main).toMatch(/forkFromTurn: \(sessionId, turnId\) => vscode\.postMessage\(\{ type: "forkFromTurn", sessionId, turnId \}\)/);
+    expect(main).toMatch(/turn\.runningIcon\.hidden = !running;/);
+    // The prompt keeps its own copy action, so copying the turn is not the only way out.
+    expect(transcript).toMatch(/TURN_COPY_INPUT_ACTION\.icon[\s\S]*?this\.host\.copyInput\(source\)/);
+    expect(main).toMatch(/copyInput: \(source\) => \{ void clipboard\.write\(source\); \}/);
+    expect(transcript).toContain("summary.append(runningIcon, chevron, title,");
+    const actionOrder = [...transcript.matchAll(/this\.actionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
     expect(actionOrder).toEqual([
-      "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_ACTION", "TURN_DELETE_ACTION"
+      "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_INPUT_ACTION", "TURN_COPY_ACTION", "TURN_ADD_TO_INPUT_ACTION", "TURN_DELETE_ACTION"
     ]);
     // Only destructive actions on the active turn go dead while a turn is
     // running; copying and editing older turns remains available.
@@ -382,16 +715,38 @@ describe("sidebar panel layout", () => {
     expect(sidebar).toMatch(/case "forkFromTurn":[\s\S]*?dext\.history\.forkFromTurn[\s\S]*?sessionId: request.sessionId \?\? this\.activeSession\.id/);
     // Retry reproduces the recorded mode rather than whatever is selected now.
     expect(sidebar).toContain("await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? \"agent\", turn.input);");
-    expect(sidebar).toContain("await this.history.addSuccess(source, events, response, sessionId, mode, turnId, planExecution);");
-    expect(css).toMatch(/\.output-turn > summary:hover \.output-turn-actions,[\s\S]*?opacity: 1;/);
+    // The coordinator persists the turn under the webview's live turn id and
+    // the mode the retry ran in, so retry/delete still address the saved row.
+    const execution = gatedExecution();
+    const h = createConversationHarness({ executeConversation: execution.executeConversation });
+    await h.controller.start();
+    const active = h.controller.active();
+    const running = h.coordinator.execute(active, "plan", "retry me");
+    await vi.waitFor(() => expect(h.coordinator.running(active.id)).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    const turnId = h.coordinator.turnOf(active.id)!;
+    execution.release();
+    await running;
+    const stored = h.history.list(true).find((session) => session.id === active.id)!.turns.at(-1)!;
+    expect(stored).toMatchObject({ id: turnId, mode: "plan", input: "retry me" });
+    expect(active.turns.at(-1)?.id).toBe(turnId);
+    h.dispose();
+    expect(css).toMatch(/\.output-turn:hover \.output-turn-actions,[\s\S]*?\.output-turn:has\(:focus-visible\) \.output-turn-actions \{[\s\S]*?opacity: 1;/);
+    // A mouse click must not leave the bar pinned open via focus.
+    expect(css).not.toContain(".output-turn:focus-within");
+    expect(css).not.toContain(".history-record:focus-within");
     expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn actions";');
-    expect(css).toMatch(/\.history-record > summary:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
+    expect(css).toMatch(/\.history-record:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
+    // An open turn parks its actions over the Worked line, clear of the prompt.
+    expect(css).toMatch(/\.output-turn-body > \.output-turn-actions \{[\s\S]*?top: 4px;[\s\S]*?transform: none;/);
+    expect(css).toMatch(/\.history-record-body > \.history-turn-actions \{[\s\S]*?top: 4px;[\s\S]*?transform: none;/);
     expect(history).toContain('<summary title="${SESSION_ACTION_HINT}">');
   });
 
   it("clears submitted text and its attachment chips without deleting the files", async () => {
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
+    const attachments = await source("src/webview/imageAttachments.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(main).toMatch(/vscode\.postMessage\(\{ type: "executeInput", mode: inputMode, source \}\);[\s\S]*?clearSubmittedInput\(\);/);
     const clear = main.slice(
       main.indexOf("function clearSubmittedInput"),
@@ -399,61 +754,100 @@ describe("sidebar panel layout", () => {
     );
     expect(clear).toContain('editor.setValue("");');
     // The chips stood for references that left with the turn, so they go too.
-    expect(clear).toContain("imageAttachments.clear();");
-    expect(clear).toContain('elements.attachmentBar.classList.add("hidden");');
+    expect(clear).toContain("attachments.clear();");
+    expect(attachments).toContain('this.host.bar.classList.add("hidden");');
     // The recorded turn still points at those files, so submitting must not
     // ask the host to delete them.
     expect(clear).not.toContain("deleteImageAttachment");
     expect(main).not.toContain("function clearImageAttachments");
-    expect(main).toMatch(/image-attachment-remove[\s\S]*?type: "deleteImageAttachment"/);
-    expect(sidebar).toMatch(/private updateRunningContext\(\): void \{[\s\S]*?"dext\.running",[\s\S]*?this\.activeExecutions\.has\(this\.activeSession\.id\)/);
-    expect(sidebar).toMatch(/stopExecution\(\): void \{[\s\S]*?this\.activeExecutions\.get\(this\.activeSession\.id\)[\s\S]*?execution\.controller\.abort\(\);/);
+    expect(attachments).toMatch(/image-attachment-remove[\s\S]*?type: "deleteImageAttachment"/);
+    // `dext.running` and Stop are still the sidebar's context/commands, but the
+    // live execution they describe now belongs to the coordinator.
+    const execution = gatedExecution();
+    const h = createConversationHarness({ executeConversation: execution.executeConversation });
+    await h.controller.start();
+    const active = h.controller.active();
+    const running = h.coordinator.execute(active, "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.running(active.id)).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    expect(h.coordinator.abort(active.id)).toBe(true);
+    expect(execution.metadata[0]?.signal?.aborted).toBe(true);
+    execution.release();
+    await running;
+    expect(h.coordinator.running(active.id)).toBe(false);
+    expect(h.history.list(true).find((session) => session.id === active.id)!.turns.at(-1)?.error).toContain("stopped by user");
+    expect(sidebar).toMatch(/private updateRunningContext\(\): void \{[\s\S]*?"dext\.running",[\s\S]*?this\.running\(this\.activeSession\.id\)/);
+    expect(sidebar).toMatch(/stopExecution\(\): void \{[\s\S]*?this\.conversation\.coordinator\.abort\(this\.activeSession\.id\)/);
+    h.dispose();
   });
 
   it("defers temporary image deletion until the running turn has consumed its input", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(sidebar).toContain("private readonly pendingAttachmentDeletes = new Set<string>();");
-    expect(sidebar).toMatch(/case "deleteImageAttachment":[\s\S]*?if \(this\.activeExecutions\.size\) this\.pendingAttachmentDeletes\.add\(request\.relativePath\);/);
-    expect(sidebar).toMatch(/if \(!this\.activeExecutions\.size\) await this\.flushAttachmentDeletes\(\);/);
+    expect(sidebar).toMatch(/case "deleteImageAttachment":[\s\S]*?if \(this\.conversation\.coordinator\.anyRunning\(\)\) this\.pendingAttachmentDeletes\.add\(request\.relativePath\);/);
+    // Deferred deletes are flushed when the coordinator reports that no
+    // conversation is running any more.
+    const setup = await source("src/app/conversationSetup.ts");
+    expect(setup).toContain("onIdle: dependencies.flushAttachmentDeletes");
+
+    const execution = gatedExecution();
+    const h = createConversationHarness({ executeConversation: execution.executeConversation });
+    await h.controller.start();
+    const running = h.coordinator.execute(h.controller.active(), "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.anyRunning()).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    execution.release();
+    await running;
+    expect(h.coordinator.anyRunning()).toBe(false);
+    h.dispose();
   });
 
   it("keeps live trace entries in event arrival order and folds consecutive commands together", async () => {
     const main = await source("src/webview/main.ts");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
     const css = await source("media/styles.css");
-    expect(main).toContain("let agentEventItems = new Map<string, HTMLElement>();");
-    expect(main).toContain("let agentToolGroup: AgentToolGroup | undefined;");
-    expect(main).toMatch(/function renderAgentEvent[\s\S]*?if \(event\.phase === "tool"\)[\s\S]*?createAgentToolCommand\(event, group\?\.body \?\? panel, group\)/);
-    expect(main).toMatch(/function renderAgentEvent[\s\S]*?agentToolGroup = undefined;[\s\S]*?panel\.append\(item\);/);
-    expect(main).toMatch(/function updateAgentToolGroupLabel[\s\S]*?Ran \$\{count\} command/);
-    expect(main).toMatch(/function createAgentToolCommand[\s\S]*?document\.createElement\("details"\)[\s\S]*?terminalText\(raw\)/);
-    expect(main).toMatch(/function renderAgentMessageItem[\s\S]*?body\.innerHTML = markdown\.render\(raw\)/);
+    expect(trace).toContain("private eventItems = new Map<string, HTMLElement>();");
+    expect(trace).toContain("private group: AgentToolGroup | undefined;");
+    expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?if \(event\.phase === "tool"\)[\s\S]*?this\.createToolCommand\(event, group\?\.body \?\? panel, group\)/);
+    expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?this\.group = undefined;[\s\S]*?panel\.append\(item\);/);
+    expect(trace).toMatch(/private updateGroupLabel[\s\S]*?Ran \$\{count\} command/);
+    expect(trace).toMatch(/private createToolCommand[\s\S]*?document\.createElement\("details"\)/);
+    expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?this\.host\.terminal\(raw\)/);
+    expect(trace).toMatch(/private renderMessageItem[\s\S]*?body\.replaceChildren\(\.\.\.renderTurnMessage/);
     expect(css).toMatch(/\.terminal-output \{[\s\S]*?max-height: 360px;[\s\S]*?overflow: auto;[\s\S]*?white-space: pre-wrap;/);
+    // Process has one whole-timeline copy control in its title bar; individual
+    // messages and commands no longer add their own floating copies.
+    expect(trace).not.toContain("this.host.copy");
+    expect(css).not.toContain(".agent-trace-command-content > .output-copy");
+    expect(css).not.toContain(".agent-stream-item > .output-copy");
+    expect(css).not.toContain(".agent-stream-item > .copy-button");
+    expect(trace).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
     expect(main).not.toContain("const order = { reasoning: 0, work: 1, files: 2, tool: 3 }");
   });
 
   it("reproduces the grouping an agent reports and falls back to adjacency otherwise", async () => {
-    const main = await source("src/webview/main.ts");
-    expect(main).toContain("let agentToolGroups = new Map<string, AgentToolGroup>();");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
+    expect(trace).toContain("private toolGroups = new Map<string, AgentToolGroup>();");
     // A named group is reused wherever it already sits, so a later step of the
     // same group is never split off into a new one.
-    expect(main).toMatch(/if \(event\.groupId\) \{[\s\S]*?agentToolGroups\.get\(event\.groupId\)[\s\S]*?agentToolGroups\.set\(event\.groupId, group\);/);
-    expect(main).toMatch(/if \(event\.solo\) \{\s*agentToolGroup = undefined;\s*return undefined;/);
-    expect(main).toMatch(/const trailingGroup = \(group: AgentToolGroup \| undefined\): AgentToolGroup \| undefined =>[\s\S]*?group\.disclosure === panel\.lastElementChild \? group : undefined;/);
-    expect(main).toMatch(/const group = trailingGroup\(agentToolGroup\) \?\? createAgentToolGroup\(\);/);
-    expect(main).toMatch(/function updateAgentToolGroupLabel[\s\S]*?if \(group\.labelText\)/);
+    expect(trace).toMatch(/if \(event\.groupId\) \{[\s\S]*?this\.toolGroups\.get\(event\.groupId\)[\s\S]*?this\.toolGroups\.set\(event\.groupId, group\);/);
+    expect(trace).toMatch(/if \(event\.solo\) \{\s*this\.group = undefined;\s*return undefined;/);
+    expect(trace).toMatch(/const trailingGroup = \(group: AgentToolGroup \| undefined\): AgentToolGroup \| undefined =>[\s\S]*?group\.disclosure === panel\.lastElementChild \? group : undefined;/);
+    expect(trace).toMatch(/const group = trailingGroup\(this\.group\) \?\? this\.createToolGroup\(parent\);/);
+    expect(trace).toMatch(/private updateGroupLabel[\s\S]*?if \(group\.labelText\)/);
     // Replacing an earlier message must not split the run of commands below it.
-    expect(main).toMatch(/if \(!item\) \{\s*\/\/[\s\S]*?agentToolGroup = undefined;/);
-    expect(main).not.toMatch(/agentToolGroup = undefined;\s*const panel = agentStreamPanel\(\);/);
-    expect(main).toMatch(/function resetAgentTrace[\s\S]*?agentToolGroups\.clear\(\);/);
+    expect(trace).toMatch(/if \(!item\) \{\s*\/\/[\s\S]*?this\.group = undefined;/);
+    expect(trace).not.toMatch(/this\.group = undefined;\s*const panel = this\.host\.panel\(\);/);
+    expect(trace).toMatch(/reset\(\): void \{[\s\S]*?this\.toolGroups\.clear\(\);/);
   });
 
   it("renders trace prose in the UI font and command output as a code panel", async () => {
     const css = await source("media/styles.css");
-    const main = await source("src/webview/main.ts");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
     expect(css).toMatch(/\.agent-trace-message > \.agent-stream-text \{[\s\S]*?font-family: var\(--vscode-font-family\);[\s\S]*?white-space: normal;/);
     expect(css).toMatch(/\.agent-trace-command-body \{[\s\S]*?border: 1px solid var\(--vscode-widget-border\);/);
-    expect(main).toContain('body.className = "terminal-output agent-trace-command-body";');
-    expect(main).toMatch(/summary\.append\(toolGlyph\(event\.toolKind\), summaryLabel, chevron\)/);
+    expect(trace).toContain('body.className = "terminal-output agent-trace-command-body";');
+    expect(trace).toMatch(/summary\.append\(this\.toolGlyph\(event\.toolKind\), summaryLabel, chevron\)/);
   });
 
   it("keeps the model category menu visible beside its option submenu", async () => {
@@ -477,109 +871,259 @@ describe("sidebar panel layout", () => {
 
   it("does not reopen Output after a user folds it during result updates", async () => {
     const main = await source("src/webview/main.ts");
+    const trace = await source("src/features/conversations/browser/agentTraceView.ts");
     const renderResult = main.slice(main.indexOf("function renderResult"), main.indexOf("function renderError"));
     const renderError = main.slice(main.indexOf("function renderError"), main.indexOf("function agentStreamPanel"));
-    const renderAgentEvent = main.slice(main.indexOf("function renderAgentEvent"), main.indexOf("function renderAgentFileChanges"));
+    const renderAgentEvent = main.slice(main.indexOf("function renderAgentEvent"), main.indexOf("function resetAgentTrace"));
     expect(renderResult).not.toContain("setSectionOpen(elements.resultHeading, elements.resultBody, true)");
     expect(renderError).not.toContain("setSectionOpen(elements.resultHeading, elements.resultBody, true)");
     expect(renderAgentEvent).not.toContain("setSectionOpen(elements.resultHeading, elements.resultBody, true)");
+    expect(trace).not.toContain("setSectionOpen");
   });
 
   it("keeps live Process output visible without disrupting manual scrolling", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/function resultIsNearBottom[\s\S]*?scrollHeight - scrollTop - clientHeight <= 24/);
-    expect(main).toMatch(/function followResultIfNeeded[\s\S]*?requestAnimationFrame[\s\S]*?scrollTop = elements\.resultBody\.scrollHeight/);
-    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId[\s\S]*?const shouldFollow = resultIsNearBottom\(\);[\s\S]*?renderAgentEvent\(message\.event\);[\s\S]*?followResultIfNeeded\(shouldFollow\);/);
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
+    // Following the stream is reader intent, not a per-batch measurement. A
+    // batch taller than the tolerance used to make every later batch measure
+    // "not at the end" and stop following for the rest of the turn.
+    expect(scrollSource).toMatch(/private followingEnd = true;/);
+    expect(scrollSource).toMatch(/isNearBottom\(\): boolean \{[\s\S]*?scrollHeight - scrollTop - clientHeight <= RESULT_END_TOLERANCE/);
+    expect(scrollSource).toMatch(/snapToBottom\(\): void \{[\s\S]*?body\.scrollHeight - body\.clientHeight/);
+    expect(scrollSource).toMatch(/pin\(\): void \{[\s\S]*?requestFrame[\s\S]*?snapToBottom\(\)/);
+    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === browser\.activeId[\s\S]*?renderAgentEvent\(message\.event\);[\s\S]*?pinResultToBottom\(\);/);
+    // A scroll the app did not start - a clamp after a disclosure shrank, a
+    // scroll-anchored adjustment, or the correction's own scrollTop write -
+    // must not cancel the pin that keeps the newest output in view.
+    const scrollListener = main.slice(
+      main.indexOf('elements.resultBody.addEventListener("scroll"'),
+      main.indexOf('elements.resultBody.addEventListener("pointerdown"')
+    );
+    expect(scrollListener).toContain("scroll.onScroll()");
+    expect(scrollListener).not.toContain("cancelScheduled");
+    expect(main).toMatch(/const endResultScrollGesture[\s\S]*?scroll\.endPointerGesture\(event\)/);
+    expect(main).toMatch(/addEventListener\("pointerup", endResultScrollGesture/);
+    expect((await source("media/styles.css"))).toMatch(/#result-body \{[\s\S]*?overflow-anchor: none;/);
   });
 
-  it("supports shared panel fullscreen and stop execution interactions", async () => {
+  it("supports stop execution interactions", async () => {
     const main = await source("src/webview/main.ts");
-    const sidebar = await source("src/sidebarProvider.ts");
-    expect(main).toContain('type PanelName = "input" | "result"');
-    expect(main).toContain('elements.main.classList.add("workspace-fullscreen")');
-    expect(main).toMatch(/if \(fullscreenPanel\)[\s\S]*toggleFullscreen\(panelName\);[\s\S]*setSectionOpen\(heading, body, false\);/);
+    const sidebar = await source("src/app/sidebarProvider.ts");
+    expect(main).not.toContain('type PanelName = "input" | "result"');
+    expect(main).not.toContain('elements.main.classList.add("workspace-fullscreen")');
+    expect(main).not.toMatch(/toggleFullscreen\(/);
     expect(main).not.toContain('onHeightChanged(height)');
     expect(main).toContain('vscode.postMessage({ type: "stopExecution", turnId: activeTurnId })');
-    expect(sidebar).toContain('private readonly activeExecutions = new Map<string, {');
-    expect(sidebar).toContain('if (execution.turnId === request.turnId) execution.controller.abort();');
+    expect(sidebar).toMatch(/case "stopExecution":[\s\S]*?this\.conversation\.coordinator\.abortTurn\(request\.turnId\)/);
+
+    // Active executions live in the coordinator, and Stop matches one turn id
+    // so another conversation's turn keeps running.
+    const execution = gatedExecution();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: execution.executeConversation
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const first = h.coordinator.execute(h.controller.session("one")!, "agent", "first");
+    const second = h.coordinator.execute(h.controller.session("two")!, "agent", "second");
+    await vi.waitFor(() => {
+      expect(h.coordinator.running("one")).toBe(true);
+      expect(h.coordinator.running("two")).toBe(true);
+      expect(execution.metadata).toHaveLength(2);
+    });
+    const firstTurn = h.coordinator.turnOf("one")!;
+    expect(h.coordinator.active("one")?.turnId).toBe(firstTurn);
+    h.coordinator.abortTurn(firstTurn);
+    expect(execution.metadata[0]?.signal?.aborted).toBe(true);
+    expect(execution.metadata[1]?.signal?.aborted).toBe(false);
+    execution.release();
+    execution.release();
+    await Promise.all([first, second]);
+    expect(h.history.list(true).find((session) => session.id === "one")!.turns.at(-1)?.error).toContain("stopped by user");
+    expect(h.history.list(true).find((session) => session.id === "two")!.turns.at(-1)?.error).toBeUndefined();
+    h.dispose();
   });
 
   it("keeps agent turns running independently across conversation tabs", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const protocol = await source("src/webviewProtocol.ts");
+    const protocol = await source("src/features/conversations/contracts/protocol.ts");
     const css = await source("media/styles.css");
     expect(sidebar).not.toContain("Wait for the current Dext turn to finish before starting another conversation.");
-    expect(sidebar).toMatch(/const session = this\.activeSession;[\s\S]*?this\.activeExecutions\.has\(sessionId\)[\s\S]*?this\.activeExecutions\.set\(sessionId/);
-    expect(sidebar).toMatch(/onAgentEvent:[\s\S]*?this\.postAgentEvent\(sessionId, update\)/);
-    expect(sidebar).toMatch(/private postAgentEvent\(sessionId: string, event: AgentStreamEvent\): void \{[\s\S]*?if \(this\.activeSession\.id !== sessionId\) return;[\s\S]*?this\.postWhenReady/);
-    expect(sidebar).toMatch(/this\.history\.addSuccess\(source, events, response, sessionId, mode, turnId, planExecution\)/);
+    // One execution per conversation: both tabs can run at once, each keeps
+    // its own buffered events, and only the visible tab receives live batches.
+    const metadataBySource = new Map<string, Readonly<ExecutionMetadata>>();
+    const gates = new Map<string, () => void>();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: async (_mode, source, metadata) => {
+        metadataBySource.set(source, metadata);
+        await new Promise<void>((resolve) => gates.set(source, resolve));
+        return emptyResponse();
+      }
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const first = h.coordinator.execute(h.controller.session("one")!, "agent", "first");
+    const second = h.coordinator.execute(h.controller.session("two")!, "agent", "second");
+    await vi.waitFor(() => {
+      expect(h.coordinator.running("one")).toBe(true);
+      expect(h.coordinator.running("two")).toBe(true);
+      expect(metadataBySource.size).toBe(2);
+    });
+    const firstTurn = h.coordinator.turnOf("one")!;
+    const secondTurn = h.coordinator.turnOf("two")!;
+    metadataBySource.get("first")!.onAgentEvent?.({ phase: "message", text: "one-event" });
+    metadataBySource.get("second")!.onAgentEvent?.({ phase: "message", text: "two-event" });
+    expect(h.coordinator.active("one")?.events).toHaveLength(1);
+    expect(h.coordinator.active("two")?.events).toHaveLength(1);
+    gates.get("first")!();
+    gates.get("second")!();
+    await Promise.all([first, second]);
+    expect(h.messages.some((message) => message.type === "agentEvent" && message.sessionId === "one")).toBe(true);
+    expect(h.messages.some((message) => message.type === "agentEvent" && message.sessionId === "two")).toBe(false);
+    expect(h.history.list(true).find((session) => session.id === "one")!.turns.at(-1)).toMatchObject({ id: firstTurn, mode: "agent" });
+    expect(h.history.list(true).find((session) => session.id === "two")!.turns.at(-1)).toMatchObject({ id: secondTurn, mode: "agent" });
+    h.dispose();
     expect(protocol).toContain('running: boolean;');
     expect(protocol).toContain('{ type: "agentEvent"; sessionId: string; event: AgentStreamEvent }');
     expect(main).toContain("const runningConversationIds = new Set<string>();");
-    expect(main).toMatch(/function selectConversation[\s\S]*?sessionId === activeConversationId/);
-    expect(main).toMatch(/const activeChanged = activeConversationId !== activeId;[\s\S]*?activeChanged \|\| !runningConversationIds\.has\(activeId\)/);
-    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === activeConversationId/);
-    expect(main).toMatch(/const existingTurn = outputTurns\.get\(message\.turnId\)/);
+    expect(main).toMatch(/function selectConversation[\s\S]*?sessionId === browser\.activeId/);
+    expect(main).toMatch(/const activeChanged = browser\.setActiveId\(activeId\);[\s\S]*?activeChanged \|\| !runningConversationIds\.has\(activeId\)/);
+    expect(main).toMatch(/message\.type === "agentEvent" && message\.sessionId === browser\.activeId/);
+    expect(main).toMatch(/const existingTurn = transcript\.get\(message\.turnId\)/);
     // Codicons declares `.codicon[class*='codicon-'] { display: inline-block }`.
-    // The idle rule needs matching specificity so the activity icon does not
-    // appear on every newly opened conversation.
-    expect(css).toMatch(/\.conversation-tab \.conversation-tab-activity \{[\s\S]*?display: none/);
+    // The idle rule must outrank even a later Monaco codicon rule.
+    expect(css).toMatch(/\.conversation-tab \.conversation-tab-activity\.codicon \{[\s\S]*?display: none/);
     expect(css).toMatch(/\.conversation-tab\.running \.conversation-tab-activity[\s\S]*?display: inline-block/);
   });
 
   it("clears stale conversation output before a tab switch waits on IPC", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/function clearVisibleConversation[\s\S]*?cacheRenderedConversation\(\);[\s\S]*?elements\.result\.replaceChildren\(\);[\s\S]*?renderedConversationId = undefined/);
-    expect(main).toMatch(/function selectConversation[\s\S]*?activeConversationId = sessionId;[\s\S]*?clearVisibleConversation\(\);[\s\S]*?type: "selectConversation", sessionId, switchId/);
-    expect(main).toMatch(/label\.addEventListener\("pointerdown",[\s\S]*?selectConversation\(conversation\.id\)/);
-    expect(main).toMatch(/message\.type === "outputSession"[\s\S]*?message\.session\.id !== activeConversationId/);
+    const tabs = await source("src/features/conversations/browser/conversationTabs.ts");
+    expect(main).toMatch(/function clearVisibleConversation[\s\S]*?cacheRenderedConversation\(\);[\s\S]*?elements\.result\.replaceChildren\(\);[\s\S]*?browser\.clearRendered\(\)/);
+    expect(main).toMatch(/function selectConversation[\s\S]*?browser\.beginSelection\(sessionId\);[\s\S]*?clearVisibleConversation\(\);[\s\S]*?type: "selectConversation", sessionId, switchId/);
+    expect(tabs).toMatch(/label\.addEventListener\("pointerdown",[\s\S]*?actions\.select\(conversation\.id\)/);
+    expect(main).toMatch(/message\.type === "outputSession"[\s\S]*?message\.session\.id !== browser\.activeId/);
   });
 
   it("pins a restored running conversation to the latest replayed event", async () => {
     const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/let forceInitialConversationScroll = false/);
-    expect(main).toMatch(/message\.switchId !== undefined[\s\S]*?forceInitialConversationScroll = true[\s\S]*?scrollResultToBottom\(\)/);
-    expect(main).toMatch(/if \(forceInitialConversationScroll\)[\s\S]*?forceInitialConversationScroll = false[\s\S]*?scrollResultToBottom\(\)/);
+    const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
+    expect(scrollSource).toMatch(/private forceInitialScroll = false;/);
+    expect(main).toMatch(/message\.switchId !== undefined[\s\S]*?scroll\.forceInitialBottom\(\)[\s\S]*?scrollResultToBottom\(\)/);
+    expect(main).toMatch(/if \(scroll\.consumeForcedInitialScroll\(\)\)[\s\S]*?scrollResultToBottom\(\)/);
   });
 
   it("preserves the original start time when restoring a running conversation", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(sidebar).toMatch(/const startedAt = Date\.now\(\);[\s\S]*?activeExecutions\.set\(sessionId, \{[^\n]*startedAt/);
-    expect(sidebar).toMatch(/type: "executing", sessionId, value: true, turnId, source, startedAt/);
+    // The coordinator snapshots startedAt when the turn begins. Switching tabs
+    // and restoring the live row reads that snapshot instead of restarting it.
+    const execution = gatedExecution();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: execution.executeConversation
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const one = h.controller.session("one")!;
+    const two = h.controller.session("two")!;
+    const running = h.coordinator.execute(one, "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.running("one")).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    const active = h.coordinator.active("one")!;
+    const startedAt = active.startedAt;
+    const turnId = active.turnId;
+    expect(startedAt).toBeGreaterThan(0);
+    h.controller.activate(two);
+    h.controller.activate(one);
+    expect(h.coordinator.active("one")?.startedAt).toBe(startedAt);
+    expect(h.coordinator.turnOf("one")).toBe(turnId);
+    const setup = await source("src/app/conversationSetup.ts");
+    expect(setup).toMatch(/type: "executing",[\s\S]*?turnId: snapshot\.turnId,[\s\S]*?startedAt: snapshot\.startedAt/);
     expect(sidebar).toMatch(/turnId: execution\.turnId,[\s\S]*?startedAt: execution\.startedAt/);
+    execution.release();
+    await running;
     expect(main).toMatch(/function startAgentProgress\(startedAt = Date\.now\(\)\)/);
     expect(main).toMatch(/startAgentProgress\(message\.startedAt\)/);
+    h.dispose();
   });
 
   it("accepts host-initiated conversation switches without weakening local stale-response guards", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(sidebar).toMatch(/activateConversation\(existing, undefined, true\)/);
-    expect(sidebar).toMatch(/postConversationState\(undefined, true\)/);
-    expect(sidebar).toMatch(/type: "outputSession", session: this\.activeSession, hostInitiated: true/);
-    expect(main).toMatch(/!message\.hostInitiated && activeConversationId && message\.session\.id !== activeConversationId/);
-    expect(main).toMatch(/!message\.hostInitiated && message\.switchId === undefined && activeConversationId && message\.activeId !== activeConversationId/);
-    expect(main).toMatch(/if \(activeConversationId !== message\.activeId\) \{[\s\S]*?activeExecutionSessionId = undefined;[\s\S]*?clearVisibleConversation\(\);/);
+    expect(sidebar).toMatch(/async openConversation\(session: DextHistorySession\): Promise<void> \{\s*await this\.conversation\.controller\.open\(session\);/);
+    // History, new conversations and closing a tab are host-initiated: their
+    // payloads carry hostInitiated so the Webview accepts an active-id change
+    // it did not request, while ordinary stale responses keep their guards.
+    const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "two" } });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const beforeOpen = h.messages.length;
+    await h.controller.open(h.controller.session("one")!);
+    await vi.waitFor(() => expect(h.messages.slice(beforeOpen)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "activeConversation", activeId: "one", hostInitiated: true }),
+      expect.objectContaining({ type: "outputSession", hostInitiated: true })
+    ])));
+    const beforeStart = h.messages.length;
+    await h.controller.start();
+    const startedId = h.controller.active().id;
+    expect(h.messages.slice(beforeStart)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "conversations", activeId: startedId, hostInitiated: true })
+    ]));
+    const beforeClose = h.messages.length;
+    await h.controller.close(startedId);
+    await vi.waitFor(() => expect(h.messages.slice(beforeClose)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "outputSession", session: expect.objectContaining({ id: "two" }), hostInitiated: true })
+    ])));
+    h.dispose();
+    expect(main).toMatch(/!message\.hostInitiated && browser\.activeId && message\.session\.id !== browser\.activeId/);
+    expect(main).toMatch(/!message\.hostInitiated && message\.switchId === undefined && browser\.activeId && message\.activeId !== browser\.activeId/);
+    expect(main).toMatch(/const activeChanged = browser\.activeId !== message\.activeId;[\s\S]*?activeExecutionSessionId = undefined;[\s\S]*?clearVisibleConversation\(\);/);
   });
 
   it("snapshots replay events before awaiting the executing message", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
+    const sidebar = await source("src/app/sidebarProvider.ts");
     expect(sidebar).toMatch(/const replayEvents = \[\.\.\.execution\.events\];[\s\S]*?await this\.post\(\{[\s\S]*?type: "executing"[\s\S]*?\}\);[\s\S]*?events: replayEvents/);
   });
 
   it("restores a running conversation without relying on an evictable DOM cache", async () => {
-    const sidebar = await source("src/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(sidebar).toMatch(/const running = this\.activeExecutions\.has\(session\.id\);[\s\S]*?!running && this\.postedSessionSignatures/);
-    expect(main).toMatch(/const liveTurn = executing && activeExecutionSessionId === session\.id && activeTurn && activeTurnId[\s\S]*?elements\.result\.append\(liveTurn\.disclosure\);[\s\S]*?activeTurn = liveTurn/);
+    // A running conversation must be restored as a full output session even if
+    // its signature was posted before: a cached-DOM ref can be evicted while
+    // the live row is replayed and leave the view stuck loading.
+    const execution = gatedExecution();
+    const h = createConversationHarness({
+      layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
+      executeConversation: execution.executeConversation
+    });
+    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    const one = h.controller.session("one")!;
+    const two = h.controller.session("two")!;
+    const running = h.coordinator.execute(one, "agent", "work");
+    await vi.waitFor(() => expect(h.coordinator.running("one")).toBe(true));
+    await vi.waitFor(() => expect(execution.started()).toBe(true));
+    h.controller.markOutputPosted(one);
+    let beforeSwitch = h.messages.length;
+    h.controller.activate(two);
+    h.controller.activate(one);
+    await vi.waitFor(() => expect(h.messages.slice(beforeSwitch).some((message) => message.type === "outputSession" && message.session.id === "one")).toBe(true));
+    expect(h.messages.slice(beforeSwitch).some((message) => message.type === "outputSessionRef")).toBe(false);
+
+    execution.release();
+    await running;
+    // Once the turn is not live, the same cached signature may take the ref path.
+    h.controller.markOutputPosted(one);
+    beforeSwitch = h.messages.length;
+    h.controller.activate(two);
+    h.controller.activate(one);
+    await vi.waitFor(() => expect(h.messages.slice(beforeSwitch).some((message) => message.type === "outputSessionRef" && message.sessionId === "one")).toBe(true));
+    h.dispose();
+    expect(main).toMatch(/const liveTurn = executing && activeExecutionSessionId === session\.id && transcript\.active && activeTurnId[\s\S]*?elements\.result\.append\(liveTurn\.disclosure\);[\s\S]*?transcript\.active = liveTurn/);
     expect(main).toMatch(/elements\.resultBody\.dataset\.loading !== "true"/);
   });
 
   it("copies turns through the host without changing the active stream", async () => {
-    const main = await source("src/webview/main.ts");
-    expect(main).toMatch(/turnActionButton\(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, \(\) => \{\s*if \(sessionId\) vscode.postMessage\(\{ type: "copyTurn", sessionId, turnId \}\);\s*\}, true\)/);
+    const transcript = await source("src/features/conversations/browser/transcriptView.ts");
+    expect(transcript).toMatch(/this\.actionButton\(TURN_COPY_ACTION\.icon, TURN_COPY_ACTION\.label, \(\) => \{\s*if \(sessionId\) this\.host\.copyTurn\(sessionId, turnId\);\s*\}, true\)/);
   });
 
   it("explains an empty Harness model picker instead of showing a blank menu", async () => {
@@ -587,17 +1131,21 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/if \(!options\.length\)[\s\S]*?No models discovered\.[\s\S]*?Dext: Configure Agent/);
   });
 
-  it("opens the complete API list in a dialog and keeps method insertion intact", async () => {
-    const html = await source("src/sidebarProvider.ts");
+  it("opens the complete API list in an editor tab with search, grouping and detail", async () => {
+    const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    const css = await source("media/styles.css");
-    expect(main).toMatch(/function openMethodsDialog[\s\S]*?methodsDialog\.showModal\(\)/);
-    expect(main).toMatch(/function closeMethodsDialog[\s\S]*?methodsDialog\.close\(\)/);
-    expect(html).toContain('id="reload-methods"');
-    expect(main).toMatch(/elements\.reloadMethods\.addEventListener\("click"[\s\S]*?type: "reload"/);
-    expect(main).toMatch(/function setMethodsReloading[\s\S]*?codicon-modifier-spin/);
-    expect(main).toMatch(/row\.addEventListener\("click", \(\) => \{[\s\S]*?editor\.insertInvocation[\s\S]*?closeMethodsDialog\(\)/);
-    expect(css).toContain('.methods-dialog {');
-    expect(css).toContain('.methods-dialog-body {');
+    const documents = await source("src/features/resources/presentation/resourceDocuments.ts");
+    // The sidebar dialog is gone: the API list is an editor tab now.
+    expect(html).not.toContain('id="reload-methods"');
+    expect(main).not.toContain("renderMethods");
+    expect(main).not.toContain("methodsDialog");
+    expect(documents).toContain("renderResourceList");
+    expect(documents).toContain("data-resource-search");
+    expect(documents).toContain("data-resource-group");
+    expect(documents).toContain("data-resource-open");
+    expect(documents).toContain("openResourceSource");
+    expect(documents).toContain("insertResourceReference");
+    expect(documents).toContain("groupResourceEntries");
   });
+
 });

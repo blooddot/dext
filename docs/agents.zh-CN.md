@@ -4,57 +4,93 @@
 
 [返回 README](../README.zh-CN.md)
 
-支持 Codex CLI、Claude CLI 和 DeepSeek Harness。先安装并登录所选 CLI，再通过 Dext 输入区域选择 Agent 和模型；需要修改命令路径时运行 **Dext: Configure Agent**。
+支持 Codex CLI、Claude CLI、DeepSeek Harness 和可选 Pi CLI。先安装并登录所选 CLI，再通过 Dext 输入区域选择 Agent 和模型；需要修改命令路径时运行 **Dext: Configure Agent**。
 
-[通用配置](#通用配置) · [DeepSeek Harness](#deepseek-harness)
+Codex 对话通过 CLI 的 App Server 将原生提问显示为 Process 上方的卡片。选择选项或输入自己的答案后点击提交；异步提问允许 Agent 在等待回答时继续工作。任务完成或中断会关闭未回答的卡片，历史记录保留只读问答。已有的纯文本问题不能补接成交互。对话沿用普通 Codex 登录与配置，独立于 Dext 的补全账号。交互对话支持 `dext.agentCliArgs` 中的 `--config`、`--enable` 和 `--disable` 参数，其他 CLI 参数会给出明确的配置错误；类型化 API 调用仍使用 `codex exec`。
+
+Claude 对话改用 CLI 的双向控制协议，它原本要问自己终端的问题与权限提示都会转成 Dext 卡片。详见 [Claude Code](#claude-code)。
+
+[通用配置](#通用配置) · [Claude Code](#claude-code) · [DeepSeek Harness](#deepseek-harness) · [Pi](#pi)
+
+`agent({ apply: false })` 只限制 Agent 进程的写入权限；若结果包含 patch，Dext 宿主仍会自动应用并清空返回的 patch。需要只读结论时同时指定 `patch: false`。应用状态与真实错误显示在对话及结果摘要中；旧历史补丁会明确忽略，不会在打开会话时写盘。
 
 ## 通用配置
 
 Agent 配置保存在 VS Code 扩展全局存储中。输入区域根据后端能力提供 Agent、Model、Reasoning 和 Speed 选项。Codex 配置优先读取本地模型缓存中的模型、推理级别和速度选项；Claude Code 使用 `opus` / `sonnet` 别名及已配置的推理级别。
 
-`.dx` 文件可以通过 `@api(agent="codex", model="...")` 覆盖 Agent 和模型，否则使用输入区域的选择。**Dext: Configure Agent** 用于编辑可执行命令和自定义模型名称，不处理登录凭据。
+API 调用可以用自身的 `cli` 和 `model` 参数覆盖这次调用的 Agent 和模型，否则使用输入区域的选择。**Dext: Configure Agent** 用于编辑可执行命令和自定义模型名称，不处理登录凭据。
 
-内置的 `agent`、`ask`、`plan`、`skill`、`create` 还支持单次调用的 `cli` 和 `model` 参数：
+内置的 `agent`、`ask`、`plan`、`template`、`skill` 还支持单次调用的 `cli` 和 `model` 参数；资源创建使用 Resources 对话，没有公开的 `create()` API：
 
-- `cli` 为 `"codex"`、`"claude"` 或 `"deepseek-harness"`；Harness 的模型对象见下方说明。
+- `cli` 为 `"codex"`、`"claude"`、`"deepseek-harness"` 或 `"pi"`；Harness 和 Pi 的模型对象见下方说明。
 - Claude 的 `model` 为 `"sonnet"` 或 `"opus"`。
 - Codex 的 `model` 为字典，必填字段 `model` 使用已配置列表中的模型 ID；可选字段 `reasoning` 支持 `"low"`、`"medium"`、`"high"`、`"xhigh"`、`"max"`、`"ultra"`，`speed` 支持 `"standard"`、`"fast"`。实际选择必须受该模型支持。本地模型列表不可用时，模型 ID 按字符串接收，待列表可用后再进行目录校验。
 
-```python
-ask(input="解释这段代码", cli="claude", model="sonnet")
-agent(input="实现这次修改", cli="codex")
+```ts
+await ask({ input: "解释这段代码", cli: "claude", model: "sonnet" });
+await agent({ input: "实现这次修改", cli: "codex" });
 ```
 
 参数继承规则如下，覆盖仅对当前调用生效：
 
 | 参数 | 行为 |
 | --- | --- |
-| 都不提供 | 使用当前输入选择，已有 `.dx` 装饰器覆盖仍然生效。 |
-| 只提供 `cli` | 使用该 CLI 的默认配置，不继承输入区域或装饰器的模型、推理和速度设置。 |
+| 都不提供 | 使用当前输入选择。 |
+| 只提供 `cli` | 使用该 CLI 的默认配置，不继承输入区域的模型、推理和速度设置。 |
 | 同时提供 `cli` 和 `model` | 使用显式模型选项，未填写的推理或速度选项由 CLI 默认值决定。 |
 | 只提供 `model` | 使用输入区域选择的 CLI；模型未变时继承未指定选项，模型改变时使用 CLI 默认值。 |
 
-`dext.agentCli` 控制输入区域显示哪些内置 Agent，默认是 `codex`、`claude` 和 `deepseek-harness`。可以编辑列表，选择显示其中哪些配置。
+`dext.agentCli` 控制输入区域显示哪些内置 Agent，默认是 `codex`、`claude`、`deepseek-harness` 和 `pi`；移除某个 ID 可隐藏对应配置，重新加入即可恢复。
 
-内置 API 始终可用。Code 输入区支持直接使用自定义 API 的完整名称，也支持显式导入；`.dx` 文件中的自定义 API 通过 `import` 或 `from ... import ...` 进入作用域。补全、悬停、参数提示和编译都支持导入后的名称。
+### 交互语言
+
+`dext.outputLanguage` 控制 Dext 的回复、进度说明、可见 reasoning 摘要和计划正文所使用的自然语言。打开 VS Code 设置，搜索 `dext.outputLanguage`，在 `auto`、`zh-CN`、`zh-TW`、`en`、`ja`、`ko` 中选择；默认是 `auto`。
+
+`auto` 跟随 VS Code 显示语言（`vscode.env.language`），不是操作系统语言。因此中文 Windows 上使用英文界面的 VS Code 时，回复是英文。若显示语言不属于这五种受支持语言，Dext 不注入语言指令，由模型自行判断，而不会强制改成英文。该设置是 window 作用域：工作区值覆盖用户值，修改后下一轮生效，不需要新建会话或重载插件。
+
+Dext 不会翻译计划格式要求的章节标题、任务 checklist 语法、代码、命令、路径、标识符、引用原文或自身的分隔符。当前轮用户明确要求翻译或改用另一种语言时，以该请求为准。Dext 可以约束可见文本，但提供方隐藏的内部思考语言由模型控制，无法保证。
+
+内置 API 始终可用。Code 输入区就是普通 TypeScript：`.dext/api` 模块就是普通的 ES 模块，自定义 API 通过 `import` 语句进入作用域，补全、悬停和 F12 由编辑器的 TypeScript 服务依据生成的声明提供。
+
+### 单轮超时
+
+Dext 默认使用 `dext.agent.timeoutMs: 0`（不限制总时长）和 `dext.agent.idleTimeoutMs: 600000`（没有已报告的活动工具时，连续十分钟没有进程输出）。stdout、stderr 的每次输出都会重新开始空闲计时。收到 Codex、Claude 或 ACP 工具开始事件后暂停空闲检测，所有未结束的工具完成或失败后重新计满十分钟。通过调用 ID 跟踪并发工具并去除重复事件，因此工具调用仍在执行时，不会把静默命令当作模型卡死。
+
+工具执行保留提供方自身的时限。报告工具正在执行不代表进程一定正常：工具卡死或缺少结束事件可能让空闲检测持续暂停，仍可手动停止或设置整轮硬时限。提供方未报告带有调用 ID 的工具开始事件时，仍按普通空闲超时处理。
+
+任一值设为 `0` 可关闭对应限制。已显式配置的正数 `dext.agent.timeoutMs` 仍是硬性总时限，不因输出而延长；要只按活动计时，请删除旧覆盖值或改为 `0`。设置对新一轮执行生效，仍可随时点击停止。提供方的网络超时和单个工具的超时独立生效。同一组限制也用于约束「结果修复」（某一轮的最终消息不是合法结果时，Dext 补跑的那次只读调用），它没有额外的内部固定上限。
+
+## Claude Code
+
+Claude 对话使用 CLI 的双向控制协议：`--input-format stream-json` 打开反向通道，`--permission-prompt-tool stdio` 把 CLI 原本要问自己终端的每个决定转交给 Dext。类型化 API 调用仍使用 CLI 的一次性 print 模式加 `--json-schema`，因为类型化调用没有人在回路中。
+
+### 提问与权限
+
+`AskUserQuestion` 显示为与 Codex、Harness 相同的 Dext 卡片（位于 Process 上方），所选选项会返回给工具。Claude 以工具调用形式提问且不带题目 id，因此由 Dext 生成稳定 id；多选回答以逗号分隔返回，自定义输入以自由文本返回。其他需要决定的工具 —— 执行命令、写入文件、交接计划 —— 显示一张 Dext 确认卡片，标明工具名以及它涉及的命令或路径，关闭即拒绝该调用。CLI 主动撤回的请求会关闭对应卡片；MCP elicitation 也走同一张提问卡片。
+
+只读的 Ask 与 Plan 轮次使用 Claude 的 `plan` 模式，Agent 轮次使用 `acceptEdits`，Full access 使用 `bypassPermissions`。`plan` 直接拒绝写入，`bypassPermissions` 不再询问，因此这两种档位下多数调用不会有卡片。对话用 `--resume` 恢复 provider 会话，分叉用 `--fork-session` 从源会话开始。没有 Dext 界面时，runner 保留 CLI 自身的 print 模式行为，而不是把每个调用都拒绝掉。
 
 ## DeepSeek Harness
 
 ### 安装与模型
 
-运行 `npm install -g @deepseek-ai/dsh@0.1.2-rc.1` 安装已验证版本，在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。Dext 在扩展启动时读取一次 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers` 和 `agent-default-model` 路由；首次选择 Harness 或运行配置命令时刷新，并把缓存结果用于临时 ACP 覆盖层；不会复制或修改用户的 profile 文件或 `.credentials.yaml`。安装和凭据由 Harness 管理。
+安装 DeepSeek Harness 桌面版，在 Harness 中配置模型凭据，再在 Dext 选择 **DeepSeek Harness**。**Dext: Configure Agent** 可配置可执行文件路径（默认使用 PATH 上桌面版的 `dsh` 启动器），并通过 ACP 发现模型和推理选项；首次选择也会发现模型。模型留空时使用 Harness 默认值。Dext 在扩展启动时读取一次 `$DSH_HOME/settings.yaml` 中的 `llm-pi-ai.providers`、`llm-deepseek` 模型和 `agent-default-model` 路由；其中未定义的字段改用桌面 profile 的 `$DSH_HOME/profiles/desktop/cordis.patch.yml`（Harness 应用把界面里新增的模型保存在这里）。两个路径都从 `$DSH_HOME`（未设置时为 `~/.dsh`）解析，因此 Windows 与 macOS 使用同一套代码。首次选择 Harness 或运行配置命令时会刷新，并把缓存结果用于临时 ACP 覆盖层；不会复制或修改用户的 profile 文件或 `.credentials.yaml`。安装和凭据由 Harness 管理。
 
-发布包 `0.1.2-rc.1` 使用 ACP SDK `1.4.0`，Dext 固定使用同一 SDK 版本。已核对实际发布包的握手、创建/恢复/关闭会话、模型配置、执行及取消接口；入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`。新安装默认显示三个后端，可通过 `dext.agentCli` 限定列表。
+Dext 使用 ACP，并固定 ACP SDK `1.4.0`——受支持的各 Harness 发布版也使用同一版本。入口为[官方 CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md) 的 `dsh --profile acp`；Dext 实际调用的启动器已核对握手、创建/恢复/关闭会话、模型配置、执行及取消接口。新安装默认显示四个后端，可通过 `dext.agentCli` 限定列表。
+
+桌面版启动器通过其内置 Electron（`--expose-internals`、`ELECTRON_RUN_AS_NODE`）执行，因为 ACP 入口在 `app.asar` 内，普通 node 读不到。
 
 ### 预设与自定义
 
-模型菜单中的 **Agent preset**：标准、PTC、极简和创造模式直接读取已安装 Harness 的预设。第一条消息发送前选择，已有会话保持原预设；**ACP default** 保留原有 ACP 配置。Dext 通过 ACP 会话工厂适配器挂载预设，不修改 Harness 安装文件。
+模型菜单中的 **Agent preset** 就是已安装 Harness 的预设目录本身：标准、PTC、极简和创造模式。新会话默认使用标准模式；要换预设请在第一条消息前选择，已有会话保持原预设。Dext 通过 ACP 会话工厂适配器挂载所选预设，不修改 Harness 安装文件，也不会用 profile 自带的 agent 组合代替预设。旧版本保存的、没有预设的会话按标准模式运行。
 
-自定义只需选择 **Let Agent create a preset**，开启创造模式会话并填入草稿；也可以使用 **Copy and open configuration** 复制预设，在 VS Code 编辑 `agent.cordis.yml`。副本保存在 `$DSH_HOME/.agent-presets`（通常为 `~/.dsh/.agent-presets`），与 Harness 网页创建的预设共用目录。修改后点击 **Refresh presets**，配置问题会自动显示。标准和 PTC 支持 Dext 的受限权限；极简、创造和自定义插件可能绕过宿主沙箱，因此需要 **Full access**，选择预设不会自动提升权限。
+预设目录来自安装本身：Harness 把预设声明为安装内的 composition patch，Dext 通过 preset registry 列出并运行，不修改安装文件。这一代 Harness 下 Dext 不复制也不编辑预设，请在 Harness 应用中创建和编辑。**Refresh presets** 会重新读取安装，两次刷新之间目录有缓存。标准和 PTC 支持 Dext 的受限权限；极简、创造和自定义插件可能绕过宿主沙箱，因此需要 **Full access**，选择预设不会自动提升权限。
 
 ### Code 调用
 
-Code 模式支持 `ask(input="解释项目", cli="deepseek-harness")`；可选模型对象包含 `model`（ACP 返回的不透明选项值）和 `reasoning`。界面展示可读模型名称，不展示速度或服务等级。类型化调用要求最终消息为 JSON 对象，由 Dext 校验；格式错误会报告失败，不自动重跑可能已经修改文件的任务。
+类型化 API 或 Code 运行可以使用 `await ask({ input: "解释项目", cli: "deepseek-harness" })`；可选模型对象包含 `model`（ACP 返回的不透明选项值）和 `reasoning`。界面展示可读模型名称，不展示速度或服务等级。格式错误会报告失败，不自动重跑可能已经修改文件的任务。
+
+ACP 的 `PromptRequest` 没有输出 schema 字段，因此 Harness 的类型化调用无法像 Codex（`--output-schema`）和 Claude（`--json-schema`）那样使用原生 schema。Dext 通过自己的 preset 覆盖插件补上这一环：在提示词之前注册一个一等工具 `dext_submit_result`，其参数 schema 就是本次调用自己的输出契约，模型通过调用它提交结果。参数以无损 JSON 到达——没有围栏、没有信封、没有转义字符串——Dext 按契约校验每次提交，并把确切的错误作为工具结果返回，模型因此在同一轮内修正答案，而不是让整轮失败。提示词中仍保留 schema 和"最终消息即 JSON 对象"的形式作为回退，因此被 preset 限制掉的工具、或压根不调用工具的模型，行为与之前完全一致。该工具按类型化调用注册，并随调用结束一并撤销。
 
 ### 会话与权限
 
@@ -62,8 +98,32 @@ Code 模式支持 `ask(input="解释项目", cli="deepseek-harness")`；可选�
 
 Ask、预览调用和计划生成使用只读权限；Agent 和明确的计划执行使用所选写入范围。Dext 最后应用的配置将全部权限预设固定在该范围内，用户保存的默认预设不会放宽范围。受限模式拒绝升级请求，因为 ACP 未提供可验证的升级范围；完全访问模式下已知工具的请求使用 Dext 确认。[Windows ACL 约束是部分约束](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/sandbox/sandbox-local/README.md)，存在 Everyone 可写对象、硬链接等边界，不能视为严格隔离。工作区写入模式还允许 Harness 使用平台临时目录。
 
+### 提问
+
+Harness 的提问显示在与 Codex 相同的 Dext 卡片中（位于 Process 上方），回答会直接返回给工具。由于卡片位于 Process 时间线上方，而长时间运行的回合会把该时间线撑得远超视口，因此当回合处于等待状态时新出现的提问会自动滚动到视野内，并暂停自动跟随，直到回答完毕；**Jump to latest** 可回到最新输出。发布包的 `dsh-acp` 只桥接了 `approval/request`，没有为 `user-questions/request` 注册应答者，因此 `dsh --profile acp` 下 `ask_user_question` 会按失败关闭原则直接报错。协议自带的替代方案是 ACP elicitation：Dext 已声明 `elicitation.form` 能力并实现 `elicitation/create`，上游一旦把该接缝桥接到 elicitation，Dext 无需改动。在此之前 Dext 通过自己的预设覆盖层注册应答者，经一次性令牌命名的回环端点与扩展通信，且只对该 Harness 进程开放。当没有 Dext 卡片接管问题时，应答者会转交下一个监听者，保持原有失败关闭行为。
+
 ### 高级配置与兼容性
 
-受信任工作区的 `dext.agentCliArgs.deepseek-harness` 接受重复的 `--patch <path>` 参数对；Dext 管理 ACP profile 并最后附加权限配置。插件属于受信任代码，自定义配置必须保留官方沙箱实现，stdout 必须仅输出 JSON-RPC。配置更改需建立新连接。单轮超时使用 `dext.agent.timeoutMs`。过程按已提交消息和工具事件更新，不保证逐 token 展示，也不把上下文占用当作计费 token 消耗。
+受信任工作区的 `dext.agentCliArgs.deepseek-harness` 接受重复的 `--patch <path>` 参数对；Dext 管理 ACP profile 并最后附加权限配置。插件属于受信任代码，自定义配置必须保留官方沙箱实现，stdout 必须仅输出 JSON-RPC。配置更改需建立新连接。单轮执行使用上文的总时限和空闲时限；ACP 初始化和模型配置请求保留各自的超时。过程按已提交消息和工具事件更新，不保证逐 token 展示。ACP 的 `usage_update` 会在 Process 中显示为 `已用/窗口 context`（上下文占用），不会被当作计费 token 消耗。
 
 AIOA/CDP 接入已移除，不提供旧 AIOA 对话兼容或迁移。
+
+## Pi
+
+请自行准备 Pi 1.4.0 或兼容的更新 CLI，完成认证和模型配置。Pi 默认显示在 Agent 列表中，运行 **Dext: Configure Agent**，选择 Pi，关联 PATH 中的 `pi` 或已有可执行路径。Dext 检查命令版本和所需 RPC 接口，区分命令缺失、启动失败及协议不兼容；不会下载 Pi、修改 PATH、选择 Node 运行时或修复环境。
+
+模型发现读取 Pi 自有的已认证模型目录，不发模型请求。需要刷新时重新配置 Pi；选择模型后按需读取支持的推理档位。清空 Model/Reasoning 会恢复 CLI 启动默认值，避免保留上一轮覆盖。模型 ID 包含提供方，例如：
+
+```ts
+await ask({ input: "审查这次修改", cli: "pi", model: { model: "deepseek/deepseek-v4-flash", reasoning: "off" } });
+```
+
+请使用实际目录返回的 ID；Pi 不接受 Codex 的速度/服务档位或 Harness 预设。对话、Code、Plan、Dext Rule/Skill、模板、资源生成和 Skill 导入沿用宿主流程。Code 的 `ui.*`、`mcp.*` 仍由宿主确定性执行，资源草稿仍需显式保存。
+
+Pi 没有 Dext 工作区沙箱。Ask、预览和计划生成限制活动工具并拒绝白名单之外的调用，这些轮次禁用原生 MCP。受信工作区中，只读回合可通过 `dext_fetch` 读取网页：它拒绝本机与私网地址，也不发送任何凭据。GitHub 文件链接（`raw.githubusercontent.com`、`blob` 与 `raw` 链接）先经 `cdn.jsdelivr.net` 读取，失败再回退原 URL；需要可复现的内容时请用 commit 或 tag 而不是分支名。写入和计划执行要求受信任的本地工作区及显式 **Full access**，该权限能访问工作区之外。Pi 的 **Workspace write** 不可选，也不会静默升级。工具限制不等于对 Pi 进程或用户可执行配置的操作系统隔离。计划执行回合还会额外获得 `dext_update_todos`，把任务状态作为工具调用上报，而不必写 `dext-todo` 注释；没有计划在跑的回合会拒绝它。
+
+Dext 加载随包提供的扩展，以及用户自己 Pi 设置（`pi install`）中列出的 Pi 包，并关闭自动功能：项目扩展、Skills、模板、主题及包更新。输入区 Model 与 Reasoning 旁的 **Plugins** 行选择本对话运行哪些已安装包，新对话默认全部启用。包工具通过通配工具选择到达模型，因此只读轮次会从选择中排除 `write`、`edit`、`bash`、`powershell`，并在 Dext 扩展里再次阻止它们。未安装 `pi-subagents` 时没有其他变化；安装后，只读轮次同样把其子会话限制为只读工具，因为子会话的工具来自它自己的 agent 文件而不是本轮的设置。保留可信项目的 AGENTS.md/CLAUDE.md 等文本指令。`dext.agentCliArgs.pi` 仅接受重复的 `--append-system-prompt` 与参数值对；不可信请求关闭项目上下文发现。用户级模型和认证文件仍由 Pi 管理。
+
+提问支持单选、多选和自定义答案；原生 select/confirm/input/editor 转为 Dext 表单。秘密答案不进入展示事件，取消、撤回和超时会结束等待。不支持异步提问、任意 TUI 嵌入、原生 schema、独立结果修复及原生 entry 分叉。类型化调用按轮注册 `dext_submit_result`，同轮校验后撤销；即将结束却未提交的回合会在同一轮内被要求提交一次结果。不自动重跑写入操作。
+
+对话按序复用 RPC 进程，只恢复 Dext 全局 `pi-sessions` 内已记录的会话；文件缺失或损坏会报错。分叉和配置变更使用可见历史新建会话。停止会清队列、取消重试并中断，必要时关闭进程树。消息用量和会话统计差值只计本轮消耗并包含压缩，已知上下文占用单独显示。真实模型的质量、速度及平台行为仍取决于用户所装 CLI 和模型。

@@ -1,10 +1,17 @@
+import { uiCallForm } from "../src/shared/contracts/uiForm.js";
 import { describe, expect, it } from "vitest";
-import { DextHistoryStore } from "../src/historyStore.js";
+import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 
 class MemoryState {
-  constructor(private value?: unknown) {}
-  get<T>(_: string, fallback: T): T { return (this.value as T | undefined) ?? fallback; }
-  async update(_: string, value: unknown): Promise<void> { this.value = value; }
+  private readonly values = new Map<string, unknown>();
+  /** A seeded value is the legacy single-blob history an older workspace holds. */
+  constructor(legacy?: unknown) { if (legacy !== undefined) this.values.set("dext.history", legacy); }
+  get<T>(key: string, fallback: T): T { return this.values.has(key) ? (this.values.get(key) as T) : fallback; }
+  async update(key: string, value: unknown): Promise<void> {
+    if (value === undefined) this.values.delete(key);
+    else this.values.set(key, value);
+  }
+  keys(): readonly string[] { return [...this.values.keys()]; }
 }
 
 class DelayedMemoryState extends MemoryState {
@@ -14,7 +21,42 @@ class DelayedMemoryState extends MemoryState {
   }
 }
 
+/** Records which Memento keys a write touched, to prove one turn no longer
+ * reserializes every conversation. */
+class RecordingState extends MemoryState {
+  readonly written: string[] = [];
+  override async update(key: string, value: unknown): Promise<void> {
+    this.written.push(key);
+    await super.update(key, value);
+  }
+}
+
 describe("DextHistoryStore", () => {
+  it("restores the saved plan target, its status and its progress", async () => {
+    const state = new MemoryState(); const store = new DextHistoryStore(state as never);
+    await store.updatePlanProgress("s", "a.plan.md", []);
+    await store.updatePlanContext("s", "a.plan.md", "active");
+    const restored = new DextHistoryStore(state as never).list()[0]!;
+    expect(restored.activePlanPath).toBe("a.plan.md");
+    expect(restored.planStatus).toBe("active");
+    expect(restored.planProgress?.path).toBe("a.plan.md");
+    await store.updatePlanContext("s", "b.plan.md", "active");
+    expect(store.list()[0]?.activePlanPath).toBe("b.plan.md");
+  });
+  it("persists a round checkpoint before a final turn exists, without losing native session bindings", async () => {
+    const state = new MemoryState(); const store = new DextHistoryStore(state as never);
+    const todos = [{ id: "plan-1", text: "Implement", status: "in_progress" as const }];
+    await store.updatePlanProgress("plan", "plans/build.plan.md", todos);
+    await store.setProviderSession("plan", "codex", "native-session");
+    const restored = new DextHistoryStore(state as never).list()[0]!;
+    expect(restored.turns).toEqual([]);
+    expect(restored.planProgress).toEqual({ path: "plans/build.plan.md", todos });
+    expect(restored.providerSessions).toEqual({ codex: "native-session" });
+    await store.addSuccess("build", [], { kind: "workflow", executions: [] }, "plan", "plan", "turn", {
+      executePlan: true, planPath: "plans/build.plan.md", planOutcome: { status: "incomplete", reason: "No progress", rounds: 3 }
+    });
+    expect(new DextHistoryStore(state as never).list()[0]?.turns[0]?.planOutcome?.status).toBe("incomplete");
+  });
   it("retains Plan execution identity after success, cancellation and reload without changing the input", async () => {
     const state = new MemoryState();
     const store = new DextHistoryStore(state as never);
@@ -28,6 +70,21 @@ describe("DextHistoryStore", () => {
       expect.objectContaining({ ...context, id: "cancelled", input: "internal build prompt", error: "Cancelled" })
     ]);
     expect(turns[2]?.executePlan).toBeUndefined();
+  });
+
+  it("persists skills, command and resource source on success and failure", async () => {
+    const state = new MemoryState();
+    const store = new DextHistoryStore(state as never);
+    const context = {
+      skills: ["ponytail-review"],
+      command: { id: "ponytail-review", skillId: "ponytail-review" },
+      resourceSource: "import" as const
+    };
+    await store.addSuccess("/ponytail-review src/a.ts", [], { kind: "workflow", executions: [] }, "session", "agent", "success", context);
+    await store.addFailure("/ponytail-review src/a.ts", [], new Error("failed"), "session", "agent", "failure", context);
+    const turns = new DextHistoryStore(state as never).list()[0]!.turns;
+    expect(turns[0]).toMatchObject({ ...context, input: "/ponytail-review src/a.ts" });
+    expect(turns[1]).toMatchObject({ ...context, input: "/ponytail-review src/a.ts", error: "failed" });
   });
 
   it("keeps CLI bindings after deleting the final Dext record and reloading", async () => {
@@ -142,14 +199,59 @@ describe("DextHistoryStore", () => {
       executions: []
     }, "session-2");
     const turn = store.list().at(-1)?.turns.at(-1);
-    expect(turn?.input).toBe(`${"a".repeat(12)}\n... output truncated ...`);
-    expect(turn?.process[0]?.text).toBe(`${"b".repeat(12)}\n... output truncated ...`);
+    expect(turn?.input).toBe("a".repeat(12));
+    expect(turn?.process[0]?.text).toBe(`${"b".repeat(6)}\n... output truncated ...\n${"b".repeat(6)}`);
 
     // Raising the limit takes effect on the next write, not the next window.
     limits.maxTurns = 10;
     limits.maxOutputLength = 100;
     await store.addSuccess("c".repeat(40), [], { kind: "workflow", executions: [] }, "session-2");
     expect(store.list().at(-1)?.turns.at(-1)?.input).toBe("c".repeat(40));
+  });
+
+  it("keeps both ends of oversized text and hands the whole value to the spill writer", async () => {
+    const spilled: string[][] = [];
+    const store = new DextHistoryStore(
+      new MemoryState() as never,
+      () => ({ maxTurns: 10, maxOutputLength: 12 }),
+      async (parts) => { spilled.push([...parts]); return "/tmp/overflow.txt"; }
+    );
+    const input = `begin${"-".repeat(28)}end`;
+    const text = `head${"=".repeat(28)}tail`;
+    await store.addSuccess(input, [{ phase: "status", text }], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
+    const turn = store.list()[0]!.turns[0]!;
+    // Input is re-sent by retry, so it is clipped without a marker.
+    expect(turn.input.startsWith("begin")).toBe(true);
+    expect(turn.input.endsWith("end")).toBe(true);
+    expect(turn.input).not.toContain("truncated");
+    expect(turn.process[0]?.text.startsWith("head")).toBe(true);
+    expect(turn.process[0]?.text).toContain("\n... output truncated ...\n");
+    expect(turn.process[0]?.text.endsWith("tail")).toBe(true);
+    expect(spilled[0]).toContain(input);
+    expect(spilled[0]).toContain(text);
+    expect(turn.spillPath).toBe("/tmp/overflow.txt");
+    expect(store.spillPath("session-1", "turn-1")).toBe("/tmp/overflow.txt");
+    expect(store.spillPath("session-1", "missing")).toBeUndefined();
+  });
+
+  it("bounds a value that already carries the truncation marker like any other", async () => {
+    const spilled: string[][] = [];
+    const store = new DextHistoryStore(
+      new MemoryState() as never,
+      () => ({ maxTurns: 10, maxOutputLength: 12 }),
+      async (parts) => { spilled.push([...parts]); return "/tmp/overflow.txt"; }
+    );
+    // The event log bounds with the same limit, so a long line reaching the store
+    // usually already bears the marker; that must not exempt it from the limit.
+    const text = `head\n... output truncated ...\n${"middle".repeat(20)}tail`;
+    await store.addSuccess("input", [{ phase: "status", text }], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-2");
+    const turn = store.list()[0]!.turns[0]!;
+    expect(turn.process[0]?.text.length).toBeLessThan(text.length);
+    expect(turn.process[0]?.text.startsWith("head\n.")).toBe(true);
+    expect(turn.process[0]?.text).toContain("\n... output truncated ...\n");
+    expect(turn.process[0]?.text.endsWith("tail")).toBe(true);
+    expect(spilled[0]).toContain(text);
+    expect(turn.spillPath).toBe("/tmp/overflow.txt");
   });
 
   it("falls back to the built-in limits when a setting is nonsense", async () => {
@@ -218,6 +320,47 @@ describe("DextHistoryStore", () => {
     })]);
   });
 
+  it("writes only the conversation a turn belongs to", async () => {
+    const state = new RecordingState();
+    const store = new DextHistoryStore(state as never);
+    await store.addSuccess("first", [], { kind: "workflow", executions: [] }, "session-1");
+    await store.addSuccess("second", [], { kind: "workflow", executions: [] }, "session-2");
+    state.written.length = 0;
+    await store.addSuccess("third", [], { kind: "workflow", executions: [] }, "session-1");
+    expect(state.written).toEqual(["dext.history.session:session-1"]);
+  });
+
+  it("migrates the whole-history blob into one key per conversation", async () => {
+    const legacy = [{ id: "s", createdAt: 1, updatedAt: 1, turns: [] }, { id: "t", createdAt: 2, updatedAt: 2, turns: [] }];
+    const state = new RecordingState(legacy);
+    const store = new DextHistoryStore(state as never);
+    expect(store.list().map((session) => session.id)).toEqual(["s", "t"]);
+
+    await store.setArchived("t", true);
+
+    expect(state.get("dext.history", undefined)).toBeUndefined();
+    expect(state.get<string[]>("dext.history.order", [])).toEqual(["s", "t"]);
+    expect(state.get("dext.history.session:t", undefined)).toMatchObject({ archivedAt: expect.any(Number) });
+    expect(new DextHistoryStore(state as never).list().map((session) => session.id)).toEqual(["s"]);
+  });
+
+  it("resumes an interrupted migration instead of rewriting every conversation", async () => {
+    const legacy = [
+      { id: "s1", createdAt: 1, updatedAt: 1, turns: [] },
+      { id: "s2", createdAt: 2, updatedAt: 2, turns: [] }
+    ];
+    const state = new RecordingState(legacy);
+    await state.update("dext.history.session:s1", legacy[0]);
+    state.written.length = 0;
+    const store = new DextHistoryStore(state as never);
+
+    await store.setArchived("s2", true);
+
+    expect(state.written.filter((key) => key.startsWith("dext.history.session:"))).toEqual(["dext.history.session:s2"]);
+    expect(state.get("dext.history", undefined)).toBeUndefined();
+    expect(state.get<string[]>("dext.history.order", [])).toEqual(["s1", "s2"]);
+  });
+
   it("normalizes legacy inline reference storage before history presentation", () => {
     const marker = "\uE000eyJraW5kIjoiZmlsZSIsInBheWxvYWQiOiJzcmMvYS50cyJ9\uE001";
     const stored = [{
@@ -231,4 +374,21 @@ describe("DextHistoryStore", () => {
 
     expect(store.list()[0]?.turns[0]?.input).toBe('ask(input="Read @src/a.ts")');
   });
+});
+
+it("preserves raw unknown history while bounding new interaction summaries and omitting secrets", async () => {
+  const legacy = { id: "old", createdAt: 1, input: 'ui.choose(label="Old", options=["a"])', process: [], output: '{"kind":"ui","type":"choice","selected":["a"]}' };
+  const memory = new MemoryState([legacy]); const store = new DextHistoryStore(memory as never, () => ({ maxTurns: 10, maxOutputLength: 500 }));
+  expect(store.list()[0]?.turns[0]).toEqual(legacy);
+  const form = uiCallForm("input", { label: "Text" });
+  await store.addSuccess("Input", [
+    { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "t", requestId: "r", status: "waiting", form } },
+    { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "t", requestId: "r", status: "submitted", form, answers: { answer: { type: "input", value: "x".repeat(2000) } } } },
+    { phase: "input", text: "", userInput: { id: "native", blocking: true, status: "answered", questions: [{ id: "secret", question: "Secret", header: "", options: [], isSecret: true }], answers: { secret: { answers: ["private-value"] } } } }
+  ], { kind: "workflow", executions: [] }, "new", "code", "new-turn");
+  const record = store.list().find((session) => session.id === "new")!.turns[0]!;
+  expect(record.process).toHaveLength(2);
+  expect(record.process[0]?.text.length).toBeLessThan(550);
+  expect(JSON.stringify(record)).not.toContain("private-value");
+  expect(store.list()[0]?.turns[0]).toEqual(legacy);
 });

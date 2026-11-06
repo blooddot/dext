@@ -5,12 +5,16 @@ const state = vi.hoisted(() => ({
   editor: undefined as VSCode.TextEditor | undefined,
   document: undefined as VSCode.TextDocument | undefined,
   workspace: true,
-  clipboard: ""
+  clipboard: "",
+  commands: [] as string[],
+  selection: { isEmpty: false, start: { line: 1, character: 0 }, end: { line: 4, character: 0 } },
+  selections: [] as Array<{ isEmpty: boolean }>
 }));
 
 vi.mock("vscode", () => ({
   window: { get activeTextEditor() { return state.editor; } },
   Uri: { parse: (uri: string) => ({ toString: () => uri }) },
+  commands: { executeCommand: async (command: string) => { state.commands.push(command); } },
   workspace: {
     getWorkspaceFolder: () => state.workspace ? {} : undefined,
     asRelativePath: (uri: VSCode.Uri) => uri.toString().replace("file:///repo/", ""),
@@ -23,8 +27,8 @@ vi.mock("vscode", () => ({
   } }
 }));
 
-import { AttachmentStore } from "../src/attachmentStore.js";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
+import { AttachmentStore, MAX_ATTACHMENT_BYTES } from "../src/shared/lib/attachmentStore.js";
+import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 
 const selectedText = "# 项目说明\n\n保留文本内容。\n";
 const payload = "README.md#L2,1-L5,1";
@@ -36,18 +40,21 @@ let attachments: AttachmentStore;
 beforeEach(() => {
   state.workspace = true;
   state.clipboard = selectedText;
+  state.commands = [];
+  state.selections = [state.selection];
   state.document = {
     uri: { toString: () => "file:///repo/README.md" },
     languageId: "markdown", version: 1, getText: () => selectedText
   } as unknown as VSCode.TextDocument;
   state.editor = {
     document: state.document,
-    selection: { isEmpty: false, start: { line: 1, character: 0 }, end: { line: 4, character: 0 } }
-  } as VSCode.TextEditor;
+    get selection() { return state.selection; },
+    get selections() { return state.selections; }
+  } as unknown as VSCode.TextEditor;
   sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
   post = vi.fn().mockResolvedValue(undefined);
   attachments = new AttachmentStore();
-  Object.assign(sidebar, { attachments, post });
+  Object.assign(sidebar, { attachments, post, application: { storage: { attachmentByteLimit: () => MAX_ATTACHMENT_BYTES } } });
 });
 
 async function paste(purpose: "code" | "text" = "code") {
@@ -106,6 +113,15 @@ describe("workspace text selection clipboard references", () => {
     state.workspace = false;
     await sidebar.copySelectionWithContext();
     expect(state.clipboard).toBe(selectedText);
+    expect(attachments.clipboardReference(selectedText)).toBeUndefined();
+  });
+
+  it("leaves a multi-cursor copy entirely to VS Code", async () => {
+    state.selections = [state.selection, { isEmpty: false }];
+    await expect(sidebar.copySelectionWithContext()).resolves.toBe(selectedText);
+    expect(state.commands).toEqual(["editor.action.clipboardCopyAction"]);
+    // The primary selection alone is not what a multi-cursor copy means, so
+    // nothing is staged for the next paste.
     expect(attachments.clipboardReference(selectedText)).toBeUndefined();
   });
 });

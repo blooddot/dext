@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { MethodRegistry } from "../src/core/registry.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
 
 describe("MethodRegistry", () => {
   it("keeps builtin API contracts reserved", () => {

@@ -5,7 +5,7 @@ import {
   planPathSegments,
   planSlug,
   planTimestamp
-} from "../src/core/planFile.js";
+} from "../src/features/conversations/domain/planFile.js";
 
 describe("plan documents", () => {
   it("reduces a goal to a portable file name", () => {
@@ -30,6 +30,12 @@ describe("plan documents", () => {
     expect(later < earlier).toBe(false);
     expect(planFileName("Add a cache", new Date(2026, 7, 21, 9, 5, 3)))
       .toBe("20260821-090503-add-a-cache.plan.md");
+  });
+
+  it("numbers a second plan saved in the same second", () => {
+    const now = new Date(2026, 7, 21, 9, 5, 3);
+    expect(planFileName("Add a cache", now, 2)).toBe("20260821-090503-add-a-cache-2.plan.md");
+    expect(planFileName("Add a cache", now, 1)).toBe("20260821-090503-add-a-cache.plan.md");
   });
 
   it("accepts workspace-relative plan paths and rejects escapes", () => {

@@ -1,7 +1,55 @@
 import { createInterface } from "node:readline";
+import { connect as netConnect } from "node:net";
+import { appendFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+const net = { connect: netConnect };
 const sessions = new Map();
 const send = (value) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...value })}\n`);
+/** Dext's private bridge, as the real overlay plugin uses it: questions out, and
+ * the per-turn result tool registered in both directions. */
+function dextChannel() {
+  const endpoint = process.env.DEXT_HARNESS_BRIDGE;
+  if (!endpoint) return undefined;
+  const socket = net.connect(endpoint);
+  const awaiting = new Map();
+  let buffer = "";
+  const send = (frame) => socket.write(`${JSON.stringify(frame)}\n`);
+  socket.on("connect", () => socket.write(`${JSON.stringify({ token: process.env.DEXT_HARNESS_BRIDGE_TOKEN })}\n`));
+  socket.on("data", (chunk) => {
+    buffer += chunk.toString("utf8");
+    const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const frame = JSON.parse(line);
+      // Dext publishes (or withdraws) the result tool before each contract turn.
+      if (frame.kind === "tool") {
+        tool = frame.tool;
+        // The turn's clear is awaited before Dext closes the session, so a log
+        // written here is the deterministic record of the tool's lifetime.
+        if (toolLog) appendFileSync(toolLog, `${JSON.stringify({ published: Boolean(frame.tool) })}\n`);
+        send({ id: frame.id, status: "ready" });
+        continue;
+      }
+      awaiting.get(frame.id)?.(frame);
+      awaiting.delete(frame.id);
+    }
+  });
+  socket.on("error", () => { for (const settle of awaiting.values()) settle(undefined); awaiting.clear(); });
+  socket.on("close", () => { for (const settle of awaiting.values()) settle(undefined); awaiting.clear(); });
+  let sequence = 0;
+  const request = (body) => new Promise((resolve) => {
+    const id = `fixture-call-${++sequence}`;
+    awaiting.set(id, resolve);
+    send({ id, ...body });
+  });
+  return { ask: (questions) => request({ questions }), submit: (args) => request({ kind: "submit", args }) };
+}
+/** The result tool Dext published for the current turn, if any. */
+let tool;
+/** Optional path recording every publish and withdrawal, for lifetime tests. */
+const toolLog = process.env.DEXT_TEST_HARNESS_TOOL_LOG;
+const channel = dextChannel();
+const askDext = channel?.ask;
 const options = (model = "model-a", effort = "high") => [
   { id: "model", name: "Model", type: "select", currentValue: model, options: [
     { group: "deepseek", name: "DeepSeek", options: [{ value: "model-a", name: "Model A" }] },
@@ -11,6 +59,14 @@ const options = (model = "model-a", effort = "high") => [
 ];
 const update = (sessionId, event) => send({ method: "session/update", params: { sessionId, update: event } });
 const pending = new Map();
+/** A model that ignores the JSON envelope and answers with Markdown. */
+const MARKDOWN_RESULT = [
+  "[DEV_PLAN_TASKLIST] T1,T2,T4",
+  "",
+  "| ID | Task | Status |",
+  "| --- | --- | --- |",
+  "| T1 | Load rules | pending |"
+].join("\n");
 if (process.argv.includes("--malformed")) process.stdout.write("not json\n");
 const lines = createInterface({ input: process.stdin });
 lines.on("close", () => { if (process.argv.includes("--hang-on-close")) setInterval(() => {}, 1000); else process.exit(); });
@@ -22,8 +78,12 @@ lines.on("line", async (line) => {
     case "initialize":
       if (process.argv.includes("--no-handshake")) return;
       process.stderr.write("fixture diagnostic\n");
-      return result({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {}, list: {} } }, authMethods: [] });
-    case "session/new": { const id = randomUUID(); sessions.set(id, options()); return result({ sessionId: id, configOptions: options() }); }
+      return result({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {}, list: {} } }, authMethods: [],
+        _meta: { clientCapabilities: p.clientCapabilities ?? null } });
+    case "session/new": {
+      if (process.argv.includes("--internal-error")) return send({ id: message.id, error: { code: -32603, message: "Internal error", data: { details: "Cannot read properties of undefined (reading 'session')" } } });
+      const id = randomUUID(); sessions.set(id, options()); return result({ sessionId: id, configOptions: options() });
+    }
     case "session/resume":
       if (p.sessionId === "missing") return send({ id: message.id, error: { code: -32602, message: "not resumable" } });
       sessions.set(p.sessionId, options()); return result({ configOptions: options() });
@@ -37,6 +97,13 @@ lines.on("line", async (line) => {
       const text = p.prompt.map((item) => item.text ?? "").join("");
       if (text === "crash") return process.exit(7);
       if (text === "hang") return;
+      if (text === "stream" || text === "stderr-stream") {
+        for (let index = 0; index < 8; index++) {
+          if (text === "stderr-stream") process.stderr.write("still working\n");
+          else update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "progress", content: { type: "text", text: "." } });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
       if (text === "slow") await new Promise((resolve) => setTimeout(resolve, 120));
       if (text === "todo") update(p.sessionId, { sessionUpdate: "plan", entries: [
         { content: "Inspect", status: "in_progress", priority: "high" },
@@ -44,6 +111,7 @@ lines.on("line", async (line) => {
       ] });
       update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "progress", content: { type: "text", text: "Inspecting" } });
       update(p.sessionId, { sessionUpdate: "tool_call", toolCallId: "tool-1", title: "Inspect workspace", kind: "read", status: "in_progress" });
+      if (text.startsWith("tool-silent")) await new Promise((resolve) => setTimeout(resolve, 900));
       let answer = text;
       if (text === "permission") {
         const id = randomUUID();
@@ -53,12 +121,55 @@ lines.on("line", async (line) => {
         ] } });
         answer = JSON.stringify(await response);
       }
+      if (text === "elicitation" || text === "elicitation-unsupported") {
+        const id = randomUUID();
+        const response = new Promise((resolve) => pending.set(id, resolve));
+        send({ id, method: "elicitation/create", params: {
+          mode: "form", sessionId: p.sessionId, message: "Which scope?",
+          requestedSchema: text === "elicitation"
+            ? { type: "object", required: ["scope"], properties: {
+              scope: { type: "string", title: "Scope", description: "Where to apply it", oneOf: [
+                { const: "workspace", title: "Workspace" }, { const: "user", title: "User", description: "All projects" }
+              ] },
+              notes: { type: "string", title: "Notes" }
+            } }
+            : { type: "object", properties: { level: { type: "string", title: "Level", enum: [] } } }
+        } });
+        answer = JSON.stringify(await response);
+      }
+      if (text === "bridge-question" && askDext) {
+        answer = JSON.stringify(await askDext([{ id: "q", question: "Which one?", header: "Confirm",
+          options: [{ label: "A" }, { label: "B", description: "Second" }] }]));
+      }
       update(p.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "tool-1", status: "completed", content: [{ type: "content", content: { type: "text", text: "done" } }] });
+      if (text === "tool-silent-hang") return;
       if (text === "todo") update(p.sessionId, { sessionUpdate: "plan", entries: [
         { content: "Inspect", status: "completed", priority: "high" },
         { content: "Verify", status: "in_progress", priority: "medium" }
       ] });
-      if (text.includes("Dext JSON payload:")) answer = text.includes("bad-json") ? "invalid" : JSON.stringify({ kind: "chat", text: "typed answer" });
+      if (text.includes("Dext JSON payload:")) {
+        answer = text.includes("bad-json") ? "invalid"
+          : text.includes("wrapped-json")
+            ? "分析完成（未修改任何文件）。\n\n```json\n" + JSON.stringify({ kind: "ask", text: "typed answer" }) + "\n```"
+            : text.includes("plain-markdown") ? MARKDOWN_RESULT
+              // Echo the whole prompt so a test can assert the envelope Dext built.
+              : text.includes("echo-prompt") ? text
+                : JSON.stringify({ kind: "ask", text: "typed answer" });
+      }
+      // The result tool replaces the final message as the answer channel: the
+      // submission is what Dext validates, and prose written afterwards must not
+      // win over it.
+      if (channel && text.includes("submit-repair")) {
+        const rejected = await channel.submit({ nope: true });
+        update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "verdict", content: { type: "text", text: JSON.stringify(rejected) } });
+        await channel.submit({ kind: "ask", text: "typed answer" });
+        answer = "repaired after the tool's diagnostics";
+      } else if (channel && text.includes("submit-result")) {
+        answer = `final message prose: ${JSON.stringify(await channel.submit({ kind: "ask", text: "submitted answer" }))}`;
+      } else if (text.includes("received-tool")) {
+        answer = JSON.stringify(tool ?? null);
+      }
+      if (text === "usage") update(p.sessionId, { sessionUpdate: "usage_update", used: 12345, size: 1000000 });
       update(p.sessionId, { sessionUpdate: "agent_message_chunk", messageId: "final", content: { type: "text", text: answer } });
       return result({ stopReason: "end_turn" });
     }

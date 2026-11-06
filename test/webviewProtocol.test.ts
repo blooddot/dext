@@ -1,7 +1,82 @@
 import { describe, expect, it } from "vitest";
-import { webviewRequestSchema } from "../src/webviewProtocol.js";
+import { webviewRequestSchema } from "../src/platform/webviewProtocol.js";
+import type { SidebarState } from "../src/platform/webviewProtocol.js";
 
 describe("Webview protocol", () => {
+  it("describes pack-aware skills without exposing host source paths", () => {
+    const state: SidebarState = {
+      methods: [], diagnostics: [], mcpServers: [], globalDiagnostics: [],
+      agentProfiles: [], agentSelection: {},
+      skillsEnabled: true,
+      skills: [{
+        id: "ponytail-review", title: "Review", description: "Review a change",
+        packId: "ponytail", packName: "Ponytail", commandIds: ["ponytail-review"]
+      }],
+      skillCommands: [{
+        id: "ponytail-review", title: "Review", description: "Review a change",
+        skillId: "ponytail-review", packId: "ponytail", packName: "Ponytail",
+        syntax: "/ponytail-review"
+      }]
+    };
+    expect(state.skills?.[0]?.packId).toBe("ponytail");
+    expect(state.skillCommands?.[0]?.syntax).toBe("/ponytail-review");
+    expect(JSON.stringify(state)).not.toContain("sourcePath");
+    const disabled: SidebarState = { ...state, skillsEnabled: false, skillsDisabledReason: "Skills require a trusted local workspace." };
+    expect(disabled.skillsDisabledReason).toContain("trusted");
+  });
+
+  it("refuses the definition requests the removed language service answered", () => {
+    // F12 and completion come from Monaco's TypeScript worker now, so these
+    // requests no longer exist on the wire.
+    expect(webviewRequestSchema.safeParse({ type: "inputDefinition", requestId: 3, source: "agent()", cursor: 2 }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "openInputDefinition", source: "agent()", cursor: 2 }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "language", requestId: 1, source: "ask(", cursor: 4 }).success).toBe(false);
+  });
+  it("scopes resource controls and saves to their conversation", () => {
+    const options = { type: "resourceOptions", sessionId: "session", resourceType: "skill", scope: "global" };
+    expect(webviewRequestSchema.parse(options)).toEqual(options);
+    expect(webviewRequestSchema.safeParse({ ...options, resourceType: "plugin" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...options, scope: "arbitrary" }).success).toBe(false);
+    for (const type of ["saveResource", "chooseResource", "previewResource"]) {
+      expect(webviewRequestSchema.safeParse({ type, sessionId: "session" }).success).toBe(true);
+      expect(webviewRequestSchema.safeParse({ type, sessionId: "" }).success).toBe(false);
+      expect(webviewRequestSchema.safeParse({ type, draftId: "draft" }).success).toBe(false);
+    }
+  });
+
+  it("accepts only well-formed built-in API definition requests", () => {
+    expect(webviewRequestSchema.safeParse({ type: "openBuiltinApiDefinition", id: "node.url.parse" }).success).toBe(true);
+    expect(webviewRequestSchema.safeParse({ type: "openBuiltinApiDefinition", id: "node/url/parse" }).success).toBe(false);
+  });
+
+  it("rejects retired Review decisions and knowledge adoption messages", () => {
+    for (const type of ["reviewDecision", "planReviewDecision", "adoptKnowledgeSuggestion"]) {
+      const request = { type, sessionId: "session", turnId: "turn", runId: "run", planVersion: "v1", suggestionId: "draft", decision: "accepted" };
+      expect(webviewRequestSchema.safeParse(request).success).toBe(false);
+    }
+  });
+
+  it("requires conversation ownership and bounds agent question answers", () => {
+    const request = { type: "agentInputResponse", sessionId: "session", turnId: "turn", requestId: "request", answers: { q: { answers: ["Yes"] } } };
+    expect(webviewRequestSchema.parse(request)).toEqual(request);
+    expect(webviewRequestSchema.safeParse({ ...request, sessionId: "" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: [] } } }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: ["x".repeat(20001)] } } }).success).toBe(false);
+    // A multi-select question keeps every chosen label in one answer array, so
+    // more than one value per question is valid up to the option bound.
+    const multi = { ...request, answers: { q: { answers: ["A", "B", "C"] } } };
+    expect(webviewRequestSchema.parse(multi)).toEqual(multi);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: { q: { answers: Array(202).fill("A") } } }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ ...request, answers: null }).success).toBe(true);
+  });
+  it("bounds dropped file requests and rejects embedded line breaks", () => {
+    const request = { type: "resolveDroppedFiles", requestId: 1, paths: ["file:///repo/a.ts", "file:///repo/b.ts"] };
+    expect(webviewRequestSchema.parse(request)).toEqual(request);
+    for (const paths of [[], Array(101).fill("/repo/a.ts"), ["/repo/a.ts\n/repo/b.ts"], ["x".repeat(8193)]]) {
+      expect(webviewRequestSchema.safeParse({ ...request, paths }).success).toBe(false);
+    }
+  });
+
   it("requires the original conversation and turn for a rename request", () => {
     expect(webviewRequestSchema.parse({ type: "renameTurn", sessionId: "session-1", turnId: "turn-1" }))
       .toEqual({ type: "renameTurn", sessionId: "session-1", turnId: "turn-1" });
@@ -86,31 +161,7 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({ type: "buildPlan", planPath: "" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "buildPlan", planPath: "x".repeat(513) }).success)
       .toBe(false);
-    // An empty uri list is how Accept all asks for every pending file.
-    expect(webviewRequestSchema.parse({
-      type: "resolvePatch",
-      turnId: "turn-1",
-      uris: [],
-      accept: true
-    })).toMatchObject({ type: "resolvePatch", accept: true });
-    expect(webviewRequestSchema.safeParse({
-      type: "resolvePatch",
-      turnId: "turn-1",
-      uris: ["file:///a.ts"],
-      accept: false
-    }).success).toBe(true);
-    expect(webviewRequestSchema.safeParse({
-      type: "resolvePatch",
-      turnId: "",
-      uris: [],
-      accept: true
-    }).success).toBe(false);
-    expect(webviewRequestSchema.safeParse({
-      type: "resolvePatch",
-      turnId: "turn-1",
-      uris: [""],
-      accept: true
-    }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "resolvePatch", turnId: "turn-1", uris: [], accept: true }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({
       type: "clipboardWrite",
       requestId: 3,
@@ -152,6 +203,27 @@ describe("Webview protocol", () => {
     expect(webviewRequestSchema.safeParse({ type: "searchFiles", query: "src" }).success).toBe(false);
   });
 
+  it("accepts bearer and query HTTP credentials on MCP requests but never inline secrets", () => {
+    const base = { name: "gateway", transport: "http", url: "https://mcp.example.test/server/abc" };
+    const prepare = (auth: unknown) => webviewRequestSchema.safeParse({
+      type: "prepareMcp",
+      requestId: "request",
+      server: { ...base, ...(auth === undefined ? {} : { auth }) }
+    });
+    expect(prepare(undefined).success).toBe(true);
+    expect(prepare({ type: "bearer" }).success).toBe(true);
+    expect(prepare({ type: "query", name: "key" }).success).toBe(true);
+    expect(prepare({ type: "query" }).success).toBe(false);
+    expect(prepare({ type: "query", name: "not valid" }).success).toBe(false);
+    expect(prepare({ type: "query", name: "key", token: "leak" }).success).toBe(false);
+    expect(prepare({ type: "bearer", name: "key" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({
+      type: "createMcp",
+      selectedTools: [],
+      server: { ...base, auth: { type: "query", name: "key" } }
+    }).success).toBe(true);
+  });
+
   it("rejects old mode-specific execution shapes", () => {
     expect(webviewRequestSchema.safeParse({ type: "executeChat", message: "hello" }).success)
       .toBe(false);
@@ -167,4 +239,12 @@ describe("Webview protocol", () => {
     }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "openExternalLink", url: "" }).success).toBe(false);
   });
+});
+
+it("requires scope and form answers in interaction responses", () => {
+  const current = { type: "uiResponse", sessionId: "s", turnId: "t", requestId: "r", response: { kind: "ui", type: "form", status: "submitted", answers: { q: { type: "radio", selected: ["yes"] } } } };
+  expect(webviewRequestSchema.safeParse(current).success).toBe(true);
+  expect(webviewRequestSchema.safeParse({ ...current, turnId: undefined }).success).toBe(false);
+  expect(webviewRequestSchema.safeParse({ ...current, response: { type: "choice", selected: [] } }).success).toBe(false);
+  expect(webviewRequestSchema.safeParse({ ...current, response: { ...current.response, status: "cancelled" } }).success).toBe(false);
 });

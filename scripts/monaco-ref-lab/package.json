@@ -1,0 +1,13 @@
+{
+  "name": "dext-monaco-ref-lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node serve.mjs",
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "dext": "file:../..",
+    "monaco-editor": "0.56.0"
+  }
+}

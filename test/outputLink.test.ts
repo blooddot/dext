@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { outputExternalLink, outputLinkReference } from "../src/webview/outputLink.js";
+import { outputExternalLink, outputLinkReference } from "../src/features/workspace/browser/outputLink.js";
 
 describe("output Markdown links", () => {
   it("turns workspace-relative Markdown links into editor references", () => {

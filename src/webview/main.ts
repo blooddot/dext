@@ -1,51 +1,69 @@
 import "../../media/styles.css";
-import MarkdownIt from "markdown-it";
-import { markdownCodeCopy } from "../markdownCopy.js";
-import { parser as pythonParser } from "@lezer/python";
-import { classHighlighter, highlightCode } from "@lezer/highlight";
+import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
+import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
+import type { DextHistoryRecord, DextHistorySession } from "../features/conversations/contracts/history.js";
+import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
+import { prepareHistoryTrace } from "../features/conversations/domain/agentTraceReplay.js";
+import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
+import { renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
+import {
+  formatTurnTokenUsage,
+  presentTurn,
+  resultCopyText,
+  updateTurnTokenUsage
+} from "../features/conversations/presentation/turnPresentation.js";
+import { RESOURCE_DIRECTORIES, RESOURCE_ICONS, RESOURCE_LABELS, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
+import { FileSearchClient } from "../features/workspace/browser/fileSearchClient.js";
+import type { SidebarState, WebviewRequest, WebviewResponse } from "../platform/webviewProtocol.js";
 import type {
-  FieldDefinition,
   AgentStreamEvent,
-  AgentToolKind,
   AgentTokenUsage,
-  DextResult,
   InputExecutionResponse,
-  PatchChange,
   RuntimeResponse,
   WorkflowStepResponse
-} from "../core/types.js";
-import { formatMethodSignature } from "../core/methodSignature.js";
-import type { ConversationSummary, SidebarState, WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
+} from "../shared/contracts/types.js";
+import type { UiFormAnswers } from "../shared/contracts/uiForm.js";
+import { formatDuration } from "../shared/lib/duration.js";
+import { markdownCodeCopy } from "../shared/lib/markdownCopy.js";
+import { dextMarkdown } from "../shared/lib/markdown.js";
 import { ClipboardClient } from "./clipboardClient.js";
-import { FileSearchClient } from "./fileSearchClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
-import { LanguageRequestBroker } from "./languageClient.js";
-import { formatDuration } from "./duration.js";
-import { agentMessageCopyText, presentAgentMessage } from "../agentMessagePresentation.js";
-import type { AgentMessagePresentation } from "../agentMessagePresentation.js";
-import { presentDiff } from "../diffPresentation.js";
-import type { DextHistoryRecord, DextHistorySession } from "../historyStore.js";
-import { TURN_EDIT_ACTION, TURN_RENAME_ACTION, TURN_RETRY_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_DELETE_ACTION, TurnTitle, turnModeLabel } from "../turnPresentation.js";
-import { groupMethodsForDisplay, isSyntheticBuiltinGroup } from "./methodGroups.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImageItem, isFileDrag } from "../platform/browser/fileDrop.js";
+import { FileDropClient } from "./fileDropClient.js";
+import { ImageAttachments } from "./imageAttachments.js";
+import { McpAssistantView } from "./mcpAssistantView.js";
+import { colorizeCodeBlocks, colorizeSource } from "./sourceHighlight.js";
+
+import type { HarnessPresetOption } from "../features/agents/contracts/agent.js";
+import { CLI_SPEEDS } from "../features/agents/domain/builtinCli.js";
+import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../features/agents/domain/harnessPresetDefault.js";
+import { presentAgentSelection } from "../features/agents/presentation/agentSelectionDefaults.js";
+import { AgentInputView } from "../features/conversations/browser/agentInputView.js";
+import { AgentTodoView } from "../features/conversations/browser/agentTodoView.js";
+import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
+import { ComposerDraftStore } from "../features/conversations/browser/composerController.js";
+import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
+import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
+import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
+import { renderConversationTabs } from "../features/conversations/browser/conversationTabs.js";
+import { OutputScrollController } from "../features/conversations/browser/outputScrollController.js";
+import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
+import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
 import {
-  compactFileReferenceLabel,
-  inputReferenceDisplayParts,
-  inputReferenceDisplayText,
-  normalizeInputReferenceSource,
-  type ContextReferenceOccurrence
-} from "../core/fileReference.js";
-import { createFileReferenceChip, fileReferenceChipDescriptor } from "./fileReferenceChip.js";
-import { outputExternalLink, outputLinkReference } from "./outputLink.js";
-import { dextHighlightClass, dextHighlightRanges } from "../dextHighlight.js";
-import { formatJsonOutput } from "./jsonOutput.js";
-import { observeComposerOverflow } from "./composerOverflow.js";
-import { enableConversationTabDrag } from "./conversationTabDrag.js";
-import { AgentTodoView } from "./agentTodoView.js";
-import { CLI_SPEEDS } from "../core/builtinCli.js";
-import { presentAgentSelection } from "../agentSelectionDefaults.js";
+  groupSkills, packCheckState, selectionLabel, togglePack, toggleSkill
+} from "../features/conversations/browser/skillSelection.js";
+import { planExecutionLabel } from "../features/conversations/presentation/agentTodoPresentation.js";
+import { terminalSegments } from "../features/conversations/presentation/terminalText.js";
+import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
+import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
+import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
+import { renderMarkdownDiagrams, rerenderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
+import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
 
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
+  getState(): { interactionDrafts?: Record<string, UiFormAnswers> } | undefined;
+  setState(state: { interactionDrafts: Record<string, UiFormAnswers> }): void;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -56,21 +74,13 @@ function element<T extends HTMLElement>(id: string): T {
   return value as T;
 }
 
-const vscode = acquireVsCodeApi();
+// The shared appearance bundle loaded first only mirrors the host theme choice;
+// this bundle still owns the single acquireVsCodeApi() call.
+const apiWindow = window as typeof window & { __dextApi?: VsCodeApi };
+const vscode = apiWindow.__dextApi ?? (apiWindow.__dextApi = acquireVsCodeApi());
 
 const elements = {
-  main: element<HTMLElement>("dext-main"),
   conversationTabs: element<HTMLElement>("conversation-tabs"),
-  methodsDialog: element<HTMLDialogElement>("methods-dialog"),
-  closeMethods: element<HTMLButtonElement>("close-methods"),
-  mcpDialog: element<HTMLDialogElement>("mcp-dialog"),
-  closeMcp: element<HTMLButtonElement>("close-mcp"),
-  mcpToggle: element<HTMLButtonElement>("mcp-toggle"),
-  mcpServers: element<HTMLElement>("mcp-servers"),
-  mcpSearch: element<HTMLInputElement>("mcp-search"),
-  mcpCount: element<HTMLElement>("mcp-count"),
-  mcpErrors: element<HTMLElement>("mcp-errors"),
-  mcpEmpty: element<HTMLElement>("mcp-empty"),
   mcpAssistantDialog: element<HTMLDialogElement>("mcp-assistant-dialog"),
   mcpAssistantClose: element<HTMLButtonElement>("mcp-assistant-close"),
   mcpAssistantInput: element<HTMLTextAreaElement>("mcp-assistant-input"),
@@ -84,6 +94,13 @@ const elements = {
   mcpAssistantScopeLabel: element<HTMLElement>("mcp-assistant-scope-label"),
   mcpAssistantGenerate: element<HTMLButtonElement>("mcp-assistant-generate"),
   mcpAssistantSave: element<HTMLButtonElement>("mcp-assistant-save"),
+  resourceToolbar: element<HTMLElement>("resource-toolbar"),
+  resourceTarget: element<HTMLButtonElement>("resource-target"),
+  resourceChoose: element<HTMLButtonElement>("resource-choose"),
+  resourceTargetLabel: element<HTMLElement>("resource-target-label"),
+  resourceStatus: element<HTMLElement>("resource-status"),
+  resourcePreview: element<HTMLButtonElement>("resource-preview"),
+  resourceSave: element<HTMLButtonElement>("resource-save"),
   uiDialog: element<HTMLDialogElement>("ui-dialog"),
   uiDialogForm: element<HTMLFormElement>("ui-dialog-form"),
   uiDialogTitle: element<HTMLElement>("ui-dialog-title"),
@@ -91,8 +108,6 @@ const elements = {
   uiDialogBody: element<HTMLElement>("ui-dialog-body"),
   uiDialogActions: element<HTMLElement>("ui-dialog-actions"),
   inputSection: element<HTMLElement>("input-section"),
-  inputHeading: element<HTMLElement>("input-heading"),
-  inputBody: element<HTMLElement>("input-body"),
   inputShell: element<HTMLElement>("input-shell"),
   inputError: element<HTMLElement>("input-error"),
   inputErrorMessage: element<HTMLElement>("input-error-message"),
@@ -103,6 +118,13 @@ const elements = {
   modeControlIcon: element<HTMLElement>("mode-control-icon"),
   modeControlValue: element<HTMLElement>("mode-control-value"),
   modeMenu: element<HTMLElement>("mode-menu"),
+  skillsMenuShell: element<HTMLElement>("skills-menu-shell"),
+  skillsControl: element<HTMLButtonElement>("skills-control"),
+  skillsControlValue: element<HTMLElement>("skills-control-value"),
+  skillsMenu: element<HTMLElement>("skills-menu"),
+  resourceSourceToggle: element<HTMLElement>("resource-source-toggle"),
+  resourceSourceDescribe: element<HTMLButtonElement>("resource-source-describe"),
+  resourceSourceImport: element<HTMLButtonElement>("resource-source-import"),
   permissionMenuShell: element<HTMLElement>("permission-menu-shell"),
   permissionControl: element<HTMLButtonElement>("permission-control"),
   permissionControlIcon: element<HTMLElement>("permission-control-icon"),
@@ -120,17 +142,8 @@ const elements = {
   runLabel: element<HTMLElement>("run-label"),
   problems: element<HTMLButtonElement>("problems"),
   resultSection: element<HTMLElement>("result-section"),
-  resultHeading: element<HTMLElement>("result-heading"),
   resultBody: element<HTMLElement>("result-body"),
-  methods: element<HTMLElement>("methods"),
-  methodCount: element<HTMLElement>("method-count"),
-  methodsToggle: element<HTMLButtonElement>("methods-toggle"),
-  reloadMethods: element<HTMLButtonElement>("reload-methods"),
-  configErrors: element<HTMLElement>("config-errors"),
   result: element<HTMLElement>("result"),
-  resultToggle: element<HTMLButtonElement>("result-toggle"),
-  inputFullscreen: element<HTMLButtonElement>("input-fullscreen"),
-  resultFullscreen: element<HTMLButtonElement>("result-fullscreen"),
   planToolbar: element<HTMLElement>("plan-toolbar"),
   planTarget: element<HTMLButtonElement>("plan-target"),
   planChoose: element<HTMLButtonElement>("plan-choose"),
@@ -140,27 +153,104 @@ const elements = {
   attachmentBar: element<HTMLElement>("attachment-bar")
 };
 
+const browser = new ConversationBrowser();
+const drafts = new ComposerDraftStore();
+/** The turn the turn-stepping controls treat as current. It follows explicit
+ * navigation or an expansion the reader performs, and falls back to the active
+ * turn after a conversation is rebuilt. */
+let turnAnchorId: string | undefined;
+/** Codicons has no double-chevron glyph, so the transcript ends stack two: the
+ * pair marks "all the way", one chevron is a single turn. */
+function jumpGlyph(direction: "up" | "down"): HTMLElement[] {
+  return [0, 1].map(() => {
+    const icon = document.createElement("i");
+    icon.className = `codicon codicon-chevron-${direction}`;
+    icon.setAttribute("aria-hidden", "true");
+    return icon;
+  });
+}
 const jumpToLatest = document.createElement("button");
 jumpToLatest.type = "button";
 jumpToLatest.className = "stream-jump-latest";
-const jumpToLatestIcon = document.createElement("i");
-jumpToLatestIcon.className = "codicon codicon-arrow-down";
-jumpToLatestIcon.setAttribute("aria-hidden", "true");
-jumpToLatest.append(jumpToLatestIcon);
+jumpToLatest.append(...jumpGlyph("down"));
 jumpToLatest.setAttribute("aria-label", "Jump to latest output");
 jumpToLatest.title = "Jump to latest output";
 jumpToLatest.hidden = true;
-// Keep the control in the result panel's viewport layer instead of inside the
-// scrollable output. This keeps it visible while the reader inspects history.
+const jumpToTop = document.createElement("button");
+jumpToTop.type = "button";
+jumpToTop.className = "stream-jump-top";
+jumpToTop.append(...jumpGlyph("up"));
+jumpToTop.setAttribute("aria-label", "Jump to top");
+jumpToTop.title = "Jump to top";
+jumpToTop.hidden = true;
+const jumpToPrevTurn = document.createElement("button");
+jumpToPrevTurn.type = "button";
+jumpToPrevTurn.className = "stream-jump-prev-turn";
+const jumpToPrevTurnIcon = document.createElement("i");
+jumpToPrevTurnIcon.className = "codicon codicon-chevron-up";
+jumpToPrevTurnIcon.setAttribute("aria-hidden", "true");
+jumpToPrevTurn.append(jumpToPrevTurnIcon);
+jumpToPrevTurn.setAttribute("aria-label", "Jump to previous turn");
+jumpToPrevTurn.title = "Jump to previous turn";
+jumpToPrevTurn.hidden = true;
+const jumpToNextTurn = document.createElement("button");
+jumpToNextTurn.type = "button";
+jumpToNextTurn.className = "stream-jump-next-turn";
+const jumpToNextTurnIcon = document.createElement("i");
+jumpToNextTurnIcon.className = "codicon codicon-chevron-down";
+jumpToNextTurnIcon.setAttribute("aria-hidden", "true");
+jumpToNextTurn.append(jumpToNextTurnIcon);
+jumpToNextTurn.setAttribute("aria-label", "Jump to next turn");
+jumpToNextTurn.title = "Jump to next turn";
+jumpToNextTurn.hidden = true;
+const scroll = new OutputScrollController({
+  viewport: {
+    body: elements.resultBody, result: elements.result, section: elements.resultSection,
+    jumpToLatest, jumpToPrevTurn, jumpToNextTurn, jumpToTop
+  },
+  conversation: { activeId: () => browser.activeId, renderedId: () => browser.renderedId },
+  canFollow: () => resultFollowAllowed(),
+  currentTurn: () => navigationTurn(),
+  adjacentTurn: (offset) => neighboringTurn(offset),
+  activateTurn: (turn) => activateNavigationTurn(turn),
+  onDiagnostic: (message) => renderInputError(message)
+});
+// Keep the controls in the result panel's viewport layer instead of inside the
+// scrollable output. This keeps them visible while the reader inspects history.
+elements.resultSection.append(jumpToTop);
+elements.resultSection.append(jumpToPrevTurn);
+elements.resultSection.append(jumpToNextTurn);
 elements.resultSection.append(jumpToLatest);
+syncResultScrollGutter();
+window.addEventListener("resize", syncResultScrollGutter, { passive: true });
+if (typeof ResizeObserver === "function") {
+  // Docked, collapsed, and resized panels all change the scrollbar gutter.
+  // A following reader also expects the newest output to stay in view when the
+  // composer grows or the panel is maximized under the same conversation. The
+  // result itself is observed as well: streamed Markdown, fonts, and hydrated
+  // disclosures can grow the scrollHeight without changing the scroll port's
+  // own size.
+  const syncResultLayout = (): void => {
+    syncResultScrollGutter();
+    syncJumpToLatest();
+    reportStaleResultRange();
+    scroll.measureLayout();
+    pinResultToBottom();
+  };
+  const resultLayoutObserver = new ResizeObserver(syncResultLayout);
+  resultLayoutObserver.observe(elements.resultBody);
+  resultLayoutObserver.observe(elements.result);
+}
+// Console surface for the scroll port: `dextScrollWatch = true` logs a
+// measurement on every scroll/layout pass and `dextScrollReport()` returns one
+// on demand, naming whatever makes the range disagree with what it paints.
+installResultScrollProbe({ body: elements.resultBody, result: elements.result });
 
-type UiRequestMessage = Extract<WebviewResponse, { type: "uiRequest" }>;
-let activeUiRequest: UiRequestMessage | undefined;
 let pendingConfirmation: (() => void) | undefined;
 
-const broker = new LanguageRequestBroker((request) => vscode.postMessage(request));
 const clipboard = new ClipboardClient((request) => vscode.postMessage(request));
 const fileSearch = new FileSearchClient((request) => vscode.postMessage(request));
+const fileDrop = new FileDropClient((request) => vscode.postMessage(request));
 let executing = false;
 let stopping = false;
 let activeTurnId: string | undefined;
@@ -175,6 +265,11 @@ type InputMode = "agent" | "ask" | "plan" | "code";
 let inputMode: InputMode = "agent";
 let activePlanPath: string | undefined;
 let planStatus: "new" | "active" | "running" | "completed" | "failed" = "new";
+// A Build leaves the composer before the host starts a turn: it re-reads the plan
+// first. Remember whose build is
+// still being prepared, so the wait survives a re-render (including a tab
+// switch) instead of turning back into a clickable Build.
+const pendingBuilds = new Map<string, string>();
 type AgentPermission = "workspace-write" | "full-access";
 const PERMISSION_LABEL: Record<AgentPermission, string> = {
   "workspace-write": "Workspace write",
@@ -185,43 +280,18 @@ const PERMISSION_ICON: Record<AgentPermission, string> = {
   "full-access": "codicon-unlock"
 };
 let agentPermission: AgentPermission = "workspace-write";
+type ResourceSource = "describe" | "import";
+let resourceSource: ResourceSource = "describe";
+let resourceSourceKey = "";
 let sidebarState: SidebarState | undefined;
 let lastSidebarState: SidebarState | undefined;
-// The API/resource trees are independent of the active conversation. Keep a
-// compact signature so switching tabs only updates the composer controls
-// instead of rebuilding both trees on every state message.
-let renderedMethodsKey: string | undefined;
-let renderedMcpKey: string | undefined;
-let activeConversationId: string | undefined;
-// Monotonically identifies the latest tab click. Host responses can be
-// delayed by the Webview IPC queue, so stale responses must not overwrite a
-// newer local selection.
-let conversationSwitchId = 0;
-// Scroll correction is deferred until layout has settled.  A tab switch or a
-// real user scroll must invalidate an older correction; otherwise a queued
-// frame from the previous conversation can yank the newly selected view while
-// the user is trying to read it.
-let resultScrollFrame: number | undefined;
-let resultScrollGeneration = 0;
-// A restored running conversation receives its live row and buffered events
-// after the cached/history DOM has been painted. Force one final bottom snap
-// for that replay; otherwise adding the running row makes the old bottom look
-// like a manual scroll and the normal follow logic deliberately preserves it.
-let forceInitialConversationScroll = false;
-// Rendering a restored conversation can include Markdown, syntax highlighting,
-// and diff construction. Keep the tab switch responsive by yielding once so
-// the browser can paint an empty loading viewport before that work starts.
-let conversationRenderGeneration = 0;
-interface DraftAttachment {
-  relativePath: string;
-  webviewUri: string;
-  name: string;
-}
-interface ConversationDraft {
-  source: string;
-  attachments: DraftAttachment[];
-}
-const conversationDrafts = new Map<string, ConversationDraft>();
+// The theme is independent of the active conversation. Keep a compact signature so switching tabs
+// only updates the composer controls instead of rebuilding the document styles again.
+let renderedThemeKey: string | undefined;
+const resourceSessions = new Map<string, ResourceSession>();
+const resourcePending = new Set<string>();
+const resourceErrors = new Map<string, string>();
+function activeResource(): ResourceSession | undefined { return resourceSessions.get(browser.activeId ?? ""); }
 let restoringDraft = false;
 const runningConversationIds = new Set<string>();
 let agentStream: HTMLElement | undefined;
@@ -230,100 +300,130 @@ let agentRunTimer: ReturnType<typeof setInterval> | undefined;
 let agentProgress: HTMLElement | undefined;
 let agentProgressState = "Thinking";
 let agentTokenUsage: AgentTokenUsage | undefined;
-let agentCommandIds = new Set<string>();
-let agentEditedUris = new Set<string>();
-let agentEventItems = new Map<string, HTMLElement>();
-let pendingAgentRenders = new Set<HTMLElement>();
-let agentRenderFrame: number | undefined;
 let pendingAgentEventBatches: Array<{ sessionId: string; events: AgentStreamEvent[] }> = [];
 let agentEventBatchFrame: number | undefined;
-interface AgentToolCommand {
-  body: HTMLElement;
-  copy: HTMLButtonElement;
-  label: string;
-  summaryLabel: HTMLElement;
-  group?: AgentToolGroup;
+const attachments = new ImageAttachments({
+  bar: elements.attachmentBar,
+  post: (message) => vscode.postMessage(message),
+  removeReference: (relativePath) => editor.removeFileReference(relativePath),
+  onChanged: () => persistComposerDraft()
+});
+/** Form fields awaiting a stored image, keyed by the request that asked for it. */
+const pendingFormImages = new Map<number, (relativePath: string) => void>();
+let nextFormImage = 0;
+function readImageData(file: File): Promise<{ data: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read the pasted image."));
+    reader.onload = () => {
+      if (typeof reader.result !== "string") { reject(new Error("Could not read the pasted image.")); return; }
+      const comma = reader.result.indexOf(",");
+      resolve({ data: reader.result.slice(comma + 1), mimeType: reader.result.slice(5, reader.result.indexOf(";")) });
+    };
+    reader.readAsDataURL(file);
+  });
 }
-interface AgentToolGroup {
-  disclosure: HTMLDetailsElement;
-  label: HTMLElement;
-  body: HTMLElement;
-  commands: AgentToolCommand[];
-  /** Set when the agent named the group itself, which wins over a counted label. */
-  labelText?: string;
+/** A form answer is text, so an attached image arrives as the stored @path. */
+async function attachFormImage(file: File): Promise<string> {
+  const image = await readImageData(file);
+  return new Promise((resolve) => {
+    const requestId = ++nextFormImage;
+    pendingFormImages.set(requestId, resolve);
+    vscode.postMessage({ type: "pasteImage", requestId, ...image });
+  });
 }
-let agentToolItems = new Map<string, AgentToolCommand>();
-let agentToolGroups = new Map<string, AgentToolGroup>();
-let agentToolGroup: AgentToolGroup | undefined;
-let agentFileChanges: { disclosure: HTMLDetailsElement; body: HTMLElement; label: HTMLElement } | undefined;
-const imageAttachments = new Map<string, HTMLElement>();
-interface OutputTurnElements {
-  disclosure: HTMLDetailsElement;
-  title: TurnTitle;
-  planExecutionStatus?: HTMLElement;
-  input?: HTMLElement;
-  process: HTMLElement;
-  processDisclosure: HTMLDetailsElement;
-  todos: AgentTodoView;
-  output: HTMLElement;
-  outputDisclosure: HTMLDetailsElement;
-  hydrated?: boolean;
-  hydrate?: () => void;
+
+function createTurnQuestions(turnId: string, sessionId: string | undefined): AgentInputView {
+  return new AgentInputView((requestId, answers) => {
+    if (sessionId) vscode.postMessage({ type: "agentInputResponse", sessionId, turnId, requestId, answers });
+  }, (state, response) => vscode.postMessage({ type: "uiResponse", sessionId: state.sessionId, turnId: state.turnId, requestId: state.requestId, response }),
+  `${sessionId}:${turnId}`, {
+    get: (key) => vscode.getState()?.interactionDrafts?.[key],
+    set: (key, draft) => {
+      const interactionDrafts = { ...vscode.getState()?.interactionDrafts };
+      delete interactionDrafts[key];
+      if (Object.keys(draft).length) interactionDrafts[key] = draft;
+      const entries = Object.entries(interactionDrafts).slice(-32);
+      while (JSON.stringify(entries).length > 200000) entries.shift();
+      vscode.setState({ interactionDrafts: Object.fromEntries(entries) });
+    }
+  }, { resolve: (paths) => fileDrop.resolve(paths), attach: attachFormImage, onError: renderError });
 }
-const outputTurns = new Map<string, OutputTurnElements>();
-let activeTurn: OutputTurnElements | undefined;
+
+const transcript = new TranscriptView({
+  document,
+  result: elements.result,
+  activeSessionId: () => browser.activeId,
+  isExecuting: () => executing,
+  activeTurnId: () => activeTurnId,
+  activeExecutionSessionId: () => activeExecutionSessionId,
+  copyInput: (source) => { void clipboard.write(source); },
+  copyLive: (read) => copyButtonFrom(read),
+  edit: (source) => editor.setValue(source),
+  openInput: () => editor.focus(),
+  retryTurn: (sessionId, turnId) => vscode.postMessage({ type: "retryTurn", sessionId, turnId }),
+  renameTurn: (sessionId, turnId) => vscode.postMessage({ type: "renameTurn", sessionId, turnId }),
+  forkFromTurn: (sessionId, turnId) => vscode.postMessage({ type: "forkFromTurn", sessionId, turnId }),
+  addTurnToInput: (sessionId, turnId) => vscode.postMessage({ type: "addTurnToDext", sessionId, turnId }),
+  copyTurn: (sessionId, turnId) => vscode.postMessage({ type: "copyTurn", sessionId, turnId }),
+  deleteTurn: (sessionId, turnId) => vscode.postMessage({ type: "deleteTurn", sessionId, turnId }),
+  openSpill: (sessionId, turnId) => vscode.postMessage({ type: "openSpillFile", sessionId, turnId }),
+  createTodos: () => new AgentTodoView(),
+  createQuestions: (turnId, sessionId) => createTurnQuestions(turnId, sessionId),
+  openReference: (reference) => openInputReference(reference),
+  colorizeSource: (pre) => colorizeSource(pre)
+});
+
+const trace = new AgentTraceView({
+  document,
+  markdown: (text) => markdown.render(text),
+  colorizeCode: (root) => colorizeCodeBlocks(root),
+  codeBlock: (text) => codeBlock(text),
+  terminal: (text) => terminalText(text),
+  panel: () => agentStreamPanel(),
+  progressState: () => agentProgressState,
+  updateProgress: (label) => updateAgentProgress(label),
+  revealResult: () => elements.resultSection.classList.remove("hidden"),
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (handle) => cancelAnimationFrame(handle)
+});
 
 // Keep the rendered DOM for recently visited conversations. Rebuilding a
 // long conversation means reparsing every process event and rerendering every
 // diff, which made an ordinary tab switch scale with conversation size.
-type ConversationViewCache = {
+type CachedConversationViewState = {
   nodes: Node[];
   turns: Map<string, OutputTurnElements>;
   pendingAgentItems: HTMLElement[];
   activeTurnId?: string;
   signature: string;
 };
-const conversationViewCache = new Map<string, ConversationViewCache>();
-const MAX_CONVERSATION_VIEW_CACHE = 6;
-let renderedConversationId: string | undefined;
-let renderedConversationSignature: string | undefined;
-
-function conversationSignature(session: DextHistorySession): string {
-  const last = session.turns.at(-1);
-  return `${session.updatedAt}:${session.turns.length}:${last?.id ?? ""}:${last?.process.length ?? 0}`;
-}
+const conversationViewCache = new ConversationViewStore<CachedConversationViewState>();
 
 function cacheRenderedConversation(): void {
-  if (!renderedConversationId || !renderedConversationSignature) return;
+  if (!browser.renderedId || !browser.renderedSignature) return;
   // A running turn is represented by a live, non-persisted output row and
   // its process events are replayed when the tab becomes active again. Do
   // not cache that transient DOM or those events would be appended twice.
-  if (runningConversationIds.has(renderedConversationId)) {
+  if (runningConversationIds.has(browser.renderedId)) {
+    for (const turn of transcript.values()) turn.questions?.suspend();
     elements.result.replaceChildren();
     return;
   }
   // Do not synchronously Markdown-render a potentially large trace from the
   // pointerdown handler. Keep the dirty items with the detached nodes and
   // render them after that conversation is restored.
-  const pendingAgentItems = [...pendingAgentRenders].filter((item) => item.isConnected);
-  pendingAgentRenders.clear();
-  if (agentRenderFrame !== undefined) cancelAnimationFrame(agentRenderFrame);
-  agentRenderFrame = undefined;
-  const activeTurnId = activeTurn?.disclosure.dataset.turnId;
-  conversationViewCache.delete(renderedConversationId);
-  conversationViewCache.set(renderedConversationId, {
+  const pendingAgentItems = trace.takePendingItems();
+  const activeTurnId = transcript.active?.disclosure.dataset.turnId;
+  conversationViewCache.put(browser.renderedId, {
     nodes: [...elements.result.childNodes],
-    turns: new Map(outputTurns),
+    turns: new Map(transcript.entries()),
     pendingAgentItems,
     ...(activeTurnId ? { activeTurnId } : {}),
-    signature: renderedConversationSignature
+    signature: browser.renderedSignature
   });
+  for (const turn of transcript.values()) turn.questions?.suspend();
   elements.result.replaceChildren();
-  while (conversationViewCache.size > MAX_CONVERSATION_VIEW_CACHE) {
-    const oldest = conversationViewCache.keys().next().value;
-    if (!oldest) break;
-    conversationViewCache.delete(oldest);
-  }
 }
 
 /**
@@ -335,23 +435,24 @@ function cacheRenderedConversation(): void {
  * loading state and lets the browser paint the selection change immediately.
  */
 function clearVisibleConversation(): void {
-  conversationRenderGeneration += 1;
-  cancelScheduledResultScroll();
-  forceInitialConversationScroll = false;
+  browser.renderGeneration += 1;
+  scroll.beginSwitch();
   cacheRenderedConversation();
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
   resetAgentTrace();
   clearInputError();
+  for (const turn of transcript.values()) turn.questions?.suspend();
   elements.result.replaceChildren();
-  outputTurns.clear();
-  activeTurn = undefined;
-  renderedConversationId = undefined;
-  renderedConversationSignature = undefined;
+  transcript.clear();
+  transcript.active = undefined;
+  turnAnchorId = undefined;
+  browser.clearRendered();
   jumpToLatest.hidden = true;
+  jumpToPrevTurn.hidden = true;
+  jumpToNextTurn.hidden = true;
   elements.resultBody.dataset.loading = "true";
   elements.resultBody.setAttribute("aria-busy", "true");
-  syncResultToggle();
 }
 
 function finishConversationLoading(): void {
@@ -359,71 +460,23 @@ function finishConversationLoading(): void {
   elements.resultBody.setAttribute("aria-busy", "false");
 }
 
-function cancelScheduledResultScroll(): void {
-  resultScrollGeneration += 1;
-  if (resultScrollFrame !== undefined) cancelAnimationFrame(resultScrollFrame);
-  resultScrollFrame = undefined;
-}
-
-function restoreCachedAgentRenders(cached: ConversationViewCache): void {
+function restoreCachedAgentRenders(cached: CachedConversationViewState): void {
   for (const item of cached.pendingAgentItems) {
-    if (item.isConnected) scheduleAgentMessageRender(item);
+    if (item.isConnected) trace.scheduleMessageRender(item);
   }
   cached.pendingAgentItems = [];
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"]/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;"
-  })[character] ?? character);
-}
-
-const markdown = new MarkdownIt({
-  html: false,
-  breaks: true,
-  // Agent output often contains a bare URL instead of Markdown's
-  // `[label](url)` form. Turn those into anchors as well, so the shared
-  // output-link handler can hand them to the extension host.
-  linkify: true,
-  highlight(source, language) {
-    const normalized = language.trim().toLowerCase();
-    if (normalized !== "python" && normalized !== "py") return "";
-    try {
-      let html = "";
-      highlightCode(
-        source,
-        pythonParser.parse(source),
-        classHighlighter,
-        (text, classes) => {
-          html += classes
-            ? `<span class="${classes}">${escapeHtml(text)}</span>`
-            : escapeHtml(text);
-        },
-        () => { html += "\n"; }
-      );
-      return html;
-    } catch {
-      return "";
-    }
-  }
-});
-
-// markdown-it intentionally rejects `file:` destinations. Dext's host-side
-// handler validates these URLs against the current workspace, so keep the
-// renderer from turning an otherwise valid file link into inert plain text.
-const defaultValidateLink = markdown.validateLink.bind(markdown);
+const markdown = dextMarkdown();
 markdown.use(markdownCodeCopy);
-markdown.validateLink = (url: string): boolean =>
-  /^file:/i.test(url.trim()) || defaultValidateLink(url);
 
 const editor = new DextCodeEditor({
   parent: elements.codeEditor,
-  broker,
+  workerUri: document.querySelector<HTMLMetaElement>('meta[name="dext-editor-worker"]')!.content,
+  dropTarget: elements.inputShell,
   clipboard,
   files: fileSearch,
+  resolveDroppedFiles: (paths) => fileDrop.resolve(paths),
   onRun: run,
   onOpenReference: openInputReference,
   onDiagnosticsChanged(counts) {
@@ -440,8 +493,17 @@ const editor = new DextCodeEditor({
     persistComposerDraft();
     updateRunState();
   },
-  onError: renderError
+  onError: renderError,
+  // The host pushes the types too; asking means a Webview that missed that message
+  // still gets a working editor instead of one that silently completes nothing.
+  requestComposerTypes: () => vscode.postMessage({ type: "composerTypes" }),
+  reportComposerTypes: (counts) => vscode.postMessage({ type: "composerTypesApplied", ...counts })
 });
+
+registerSlashCommandProvider(() => ({
+  commands: sidebarState?.skillCommands ?? [],
+  selectedSkillIds: sidebarState?.agentSelection.skills ?? []
+}));
 
 function openInputReference(reference: ContextReferenceOccurrence): void {
   if (reference.kind === "file") {
@@ -468,7 +530,22 @@ function openOutputLink(event: MouseEvent): void {
 }
 
 function composerSelectionLocked(): boolean {
-  return executing || runningConversationIds.has(activeConversationId ?? "");
+  return executing || runningConversationIds.has(browser.activeId ?? "") || resourcePending.has(browser.activeId ?? "");
+}
+
+/** A preset that runs outside the Harness sandbox needs Full access on every
+ * writable turn. Read-only turns substitute a confined preset, so only the turns
+ * that apply the selection as-is are blocked. */
+function fullAccessPresetRestriction(writableTurn: boolean): string | undefined {
+  const selection = sidebarState?.agentSelection;
+  // An unset preset blocks the turn when the Harness default it will run as does.
+  const selectedPreset = harnessPresetOrDefault(selection?.agentPreset);
+  const preset = selection?.profileId === "deepseek-harness"
+    ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selectedPreset)
+    : undefined;
+  if (!preset || !writableTurn) return undefined;
+  return preset.error ?? (preset.requiresFullAccess && agentPermission !== "full-access"
+    ? "This preset requires Full access in Agent or Plan mode." : undefined);
 }
 
 function updateRunState(): void {
@@ -476,30 +553,36 @@ function updateRunState(): void {
   for (const control of [elements.modeControl, elements.permissionControl, elements.agentControl, elements.modelControl]) {
     control.disabled = selectionLocked;
   }
+  elements.skillsControl.disabled = selectionLocked || sidebarState?.skillsEnabled === false;
   for (const menu of [elements.modeMenu, elements.permissionMenu, elements.agentMenu, elements.modelMenu, elements.modelSubmenu]) {
-    for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked || button.dataset.presetDisabled === "true";
+    for (const button of menu.querySelectorAll<HTMLButtonElement>("button")) button.disabled = selectionLocked || button.dataset.presetDisabled === "true" || button.dataset.permissionDisabled === "true";
   }
   if (selectionLocked) closeComposerMenus();
-  const codeMode = inputMode === "code";
-  const selection = sidebarState?.agentSelection;
-  const preset = selection?.profileId === "deepseek-harness"
-    ? sidebarState?.agentProfiles.find((profile) => profile.id === selection.profileId)?.presets?.find((item) => item.id === selection.agentPreset) : undefined;
-  const presetRestriction = preset?.requiresFullAccess && (inputMode !== "agent" || agentPermission !== "full-access")
-    ? "This preset requires Full access in Agent mode." : preset?.error;
-  elements.inputSection.dataset.mode = inputMode;
+  const codeMode = !activeResource() && inputMode === "code";
+  // Agent and Code send a writable turn, so they apply the preset as-is. Ask and
+  // Plan's Send are read-only and substitute a confined preset instead.
+  const presetRestriction = fullAccessPresetRestriction(inputMode === "agent" || codeMode);
+  const resource = activeResource();
+  const importing = pristineNewSkill(resource) && resourceSource === "import";
+  const invalidImport = importing && !looksLikeGithubUrl(editor.source.trim());
+  elements.inputSection.dataset.mode = resource ? "resource" : inputMode;
+  if (resource) elements.inputSection.dataset.resourceType = resource.type;
+  else delete elements.inputSection.dataset.resourceType;
   elements.run.disabled = executing
     ? stopping || !activeTurnId
-    : !editor.source.trim() || Boolean(presetRestriction) || (codeMode && (hasErrors || inputKind === "invalid"));
-  elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : codeMode ? "Run" : "Send";
-  elements.run.title = !executing && presetRestriction ? presetRestriction : elements.runLabel.textContent;
+    : resourcePending.has(browser.activeId ?? "") || !editor.source.trim() || Boolean(presetRestriction) || (codeMode && (hasErrors || inputKind === "invalid")) || invalidImport;
+  elements.runLabel.textContent = executing ? (stopping ? "Stopping" : "Stop") : importing ? "Import" : codeMode ? "Run" : "Send";
+  elements.run.title = !executing && (invalidImport ? "Paste a public GitHub URL" : presetRestriction) || elements.runLabel.textContent;
   elements.run.setAttribute("aria-label", elements.runLabel.textContent);
   const runIcon = elements.run.querySelector<HTMLElement>("i");
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : codeMode ? "play" : "arrow-up"}`;
   elements.run.classList.toggle("stopping", stopping);
   elements.run.classList.toggle("executing", executing);
-  for (const [turnId, turn] of outputTurns) {
-    turn.processDisclosure.classList.toggle("running-process",
-      executing && turnId === activeTurnId && activeExecutionSessionId === activeConversationId);
+  for (const [turnId, turn] of transcript.entries()) {
+    const running = executing && turnId === activeTurnId && activeExecutionSessionId === browser.activeId;
+    // The spinner replaces the chevron in the leading slot while it runs, so the
+    // row is identifiable in the collapsed list without widening the gutter.
+    turn.runningIcon.hidden = !running;
   }
   const parts = [
     problemCounts.errors ? `${problemCounts.errors} error${problemCounts.errors === 1 ? "" : "s"}` : "",
@@ -511,44 +594,52 @@ function updateRunState(): void {
   elements.problems.classList.toggle("hidden", !codeMode);
   elements.inputShell.classList.toggle("conversation-mode", !codeMode);
   renderPlanToolbar();
+  renderResourceToolbar();
+  editor.setPlaceholder(composerPlaceholder(resource));
   syncTurnActions();
 }
 
+/** One line per mode (and per resource draft) saying what the composer accepts. */
+function composerPlaceholder(resource: ResourceSession | undefined): string {
+  // The run button is Stop while a turn runs, so the composer has to say the
+  // next message waits rather than looking ready to send.
+  if (executing) return stopping ? "Stopping…" : "Working… press Stop to cancel, then send again";
+  if (resource) {
+    return pristineNewSkill(resource) && resourceSource === "import"
+      ? "Paste a GitHub URL"
+      : resource.target ? `Describe changes to ${resource.target.name}…` : `Describe the ${RESOURCE_LABELS[resource.type]} to create…`;
+  }
+  if (inputMode === "plan") return activePlanPath ? "Describe changes to the selected plan…" : "Describe a new plan…";
+  if (inputMode === "code") return "Write code to run…";
+  return inputMode === "ask" ? "Ask a question, / for skills, @ for files" : "Describe a task, / for skills, @ for files";
+}
+
 function renderPlanToolbar(): void {
-  const visible = inputMode === "plan";
-  editor.setPlaceholder(visible
-    ? activePlanPath ? "Describe changes to the selected plan…" : "Describe a new plan…"
-    : "");
-  elements.planToolbar.hidden = !visible;
-  if (!visible) return;
-  elements.planTargetLabel.textContent = activePlanPath?.split("/").pop() ?? "New plan";
-  elements.planTarget.title = activePlanPath ? `Open ${activePlanPath}` : "Select a plan";
-  const labels = { new: "New plan", active: "Active", running: "Running", completed: "Completed", failed: "Failed" };
-  elements.planStatus.textContent = labels[planStatus];
-  elements.planStatus.hidden = !activePlanPath;
-  elements.planBuild.hidden = !activePlanPath;
-  // A plan cannot be switched while its current turn is being edited or built.
-  // Keep the chooser in sync with Build so the host never receives a
-  // plan-selection request that it must reject because an execution is active.
-  const planLocked = executing || planStatus === "running";
-  elements.planChoose.disabled = planLocked;
-  // Opening the already-selected document remains useful while it runs. For a
-  // new plan, the target button is itself a chooser and must be locked too.
-  elements.planTarget.disabled = planLocked && !activePlanPath;
-  const planBuildRunning = planStatus === "running" && executing;
-  elements.planBuild.disabled = planBuildRunning
-    ? stopping || !activeTurnId
-    : executing || planStatus === "running" || !activePlanPath;
-  elements.planBuild.classList.toggle("executing", planBuildRunning);
-  elements.planBuild.classList.toggle("stopping", planBuildRunning && stopping);
-  const buildLabel = elements.planBuild.querySelector("span");
-  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : planStatus === "completed" ? "Rebuild" : "Build";
-  elements.planBuild.title = planBuildRunning
-    ? stopping ? "Stopping the active plan" : "Stop building the active plan"
-    : planStatus === "completed" ? "Rebuild the active plan" : "Build the active plan";
-  elements.planBuild.setAttribute("aria-label", elements.planBuild.title);
-  const buildIcon = elements.planBuild.querySelector<HTMLElement>("i");
-  if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : "play"}`;
+  renderPlanToolbarView({
+    document,
+    elements: {
+      toolbar: elements.planToolbar,
+      target: elements.planTarget,
+      choose: elements.planChoose,
+      targetLabel: elements.planTargetLabel,
+      status: elements.planStatus,
+      build: elements.planBuild
+    },
+    hasResource: () => Boolean(activeResource()),
+    inputMode: () => inputMode,
+    activePlanPath: () => activePlanPath,
+    planStatus: () => planStatus,
+    executing: () => executing,
+    stopping: () => stopping,
+    activeTurnId: () => activeTurnId,
+    buildRestriction: () => fullAccessPresetRestriction(true),
+    preparingBuild: () => Boolean(activePlanPath) && !executing
+      && (planStatus === "running"
+        // The host reports its own state for this plan; the local wait only covers
+        // the time before the first of those messages arrives.
+        || (planStatus === "active" && pendingBuilds.get(browser.activeId ?? "") === activePlanPath)),
+    onResourceActive: renderResourceToolbar
+  });
 }
 
 function run(): void {
@@ -562,7 +653,11 @@ function run(): void {
   const source = editor.source.trim();
   if (!source || elements.run.disabled) return;
   clearInputError();
-  if (inputMode === "plan" && activePlanPath) {
+  const importing = pristineNewSkill(activeResource()) && resourceSource === "import";
+  if (importing) {
+    if (!looksLikeGithubUrl(source)) return;
+    vscode.postMessage({ type: "executeInput", mode: "ask", source, resourceSource: "import" });
+  } else if (inputMode === "plan" && activePlanPath) {
     vscode.postMessage({ type: "executeInput", mode: inputMode, source, planPath: activePlanPath });
   } else {
     vscode.postMessage({ type: "executeInput", mode: inputMode, source });
@@ -570,125 +665,13 @@ function run(): void {
   clearSubmittedInput();
 }
 
-type PanelName = "input" | "result";
-
-const panels: Record<PanelName, { section: HTMLElement; heading: HTMLElement; body: HTMLElement; button: HTMLButtonElement; label: string }> = {
-  input: { section: elements.inputSection, heading: elements.inputHeading, body: elements.inputBody, button: elements.inputFullscreen, label: "Input" },
-  result: { section: elements.resultSection, heading: elements.resultHeading, body: elements.resultBody, button: elements.resultFullscreen, label: "Conversation" }
-};
-let fullscreenPanel: PanelName | undefined;
-let fullscreenSnapshot: Record<PanelName, boolean> | undefined;
-
-function syncFullscreenButtons(): void {
-  for (const [name, panel] of Object.entries(panels) as [PanelName, typeof panels[PanelName]][]) {
-    const active = fullscreenPanel === name;
-    const title = active ? `Restore ${panel.label}` : `Maximize ${panel.label}`;
-    panel.button.title = title;
-    panel.button.setAttribute("aria-label", title);
-    const icon = panel.button.querySelector<HTMLElement>("i");
-    if (icon) icon.className = `codicon codicon-screen-${active ? "normal" : "full"}`;
-  }
-}
-
-function toggleFullscreen(name: PanelName): void {
-  if (fullscreenPanel === name) {
-    fullscreenPanel = undefined;
-    elements.main.classList.remove("workspace-fullscreen");
-    for (const panelName of Object.keys(panels) as PanelName[]) {
-      panels[panelName].section.classList.remove("panel-expanded");
-      setSectionOpen(panels[panelName].heading, panels[panelName].body, fullscreenSnapshot?.[panelName] ?? true);
-    }
-    fullscreenSnapshot = undefined;
-    syncFullscreenButtons();
-    return;
-  }
-  if (!fullscreenPanel) {
-    fullscreenSnapshot = Object.fromEntries((Object.keys(panels) as PanelName[]).map((panelName) => [
-      panelName,
-      panels[panelName].heading.getAttribute("aria-expanded") === "true"
-    ])) as Record<PanelName, boolean>;
-  }
-  fullscreenPanel = name;
-  elements.main.classList.add("workspace-fullscreen");
-  for (const panelName of Object.keys(panels) as PanelName[]) {
-    const active = panelName === name;
-    panels[panelName].section.classList.toggle("panel-expanded", active);
-    setSectionOpen(panels[panelName].heading, panels[panelName].body, active);
-  }
-  syncFullscreenButtons();
-}
-
-function setMethodsReloading(reloading: boolean): void {
-  elements.reloadMethods.disabled = reloading;
-  elements.reloadMethods.querySelector(".codicon")
-    ?.classList.toggle("codicon-modifier-spin", reloading);
-}
-
-function openMethodsDialog(): void {
-  closeComposerMenus();
-  if (!elements.methodsDialog.open) elements.methodsDialog.showModal();
-}
-
-function closeMethodsDialog(): void {
-  if (elements.methodsDialog.open) elements.methodsDialog.close();
-}
-
-function openMcpDialog(): void {
-  closeComposerMenus();
-  if (!elements.mcpDialog.open) elements.mcpDialog.showModal();
-}
-
-function closeMcpDialog(): void {
-  if (elements.mcpDialog.open) elements.mcpDialog.close();
-}
-
-function syncResourceToggle(): void {
-  const groups = [...elements.mcpServers.querySelectorAll<HTMLDetailsElement>("details.resource-category")];
-  const open = groups.length === 0 || groups.every((group) => group.open);
-  const icon = elements.mcpToggle.querySelector("i");
-  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
-  const title = open ? "Collapse resource categories" : "Expand resource categories";
-  elements.mcpToggle.title = title;
-  elements.mcpToggle.setAttribute("aria-label", title);
-}
-
-function toggleResourceCategories(): void {
-  const groups = [...elements.mcpServers.querySelectorAll<HTMLDetailsElement>("details.resource-category")];
-  const open = groups.some((group) => !group.open);
-  groups.forEach((group) => { group.open = open; });
-  syncResourceToggle();
-}
-
-function openMcpAssistantDialog(): void {
-  closeComposerMenus();
-  if (!elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.showModal();
-  updateMcpAssistantAction();
-  elements.mcpAssistantInput.focus();
-}
-
-function finishUi(response: Extract<WebviewRequest, { type: "uiResponse" }>["response"]): void {
-  if (!activeUiRequest) return;
-  vscode.postMessage({ type: "uiResponse", requestId: activeUiRequest.requestId, response });
-  activeUiRequest = undefined;
-  if (elements.uiDialog.open) elements.uiDialog.close();
-}
-
 function cancelUi(): void {
-  if (pendingConfirmation) {
-    pendingConfirmation = undefined;
-    if (elements.uiDialog.open) elements.uiDialog.close();
-    return;
-  }
-  const request = activeUiRequest?.request;
-  if (!request) return;
-  if (request.type === "choice") finishUi({ type: "choice", selected: [] });
-  else if (request.type === "confirm") finishUi({ type: "confirm", confirmed: false });
-  else finishUi({ type: "input" });
+  pendingConfirmation = undefined;
+  if (elements.uiDialog.open) elements.uiDialog.close();
 }
 
 function openConfirmationDialog(message: string, onConfirm: () => void): void {
   pendingConfirmation = onConfirm;
-  activeUiRequest = undefined;
   closeComposerMenus();
   elements.uiDialogTitle.textContent = "Confirm";
   elements.uiDialogBody.replaceChildren();
@@ -717,511 +700,154 @@ function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLB
   return button;
 }
 
-function openUiDialog(message: UiRequestMessage): void {
-  pendingConfirmation = undefined;
-  activeUiRequest = message;
+const mcp = new McpAssistantView({
+  elements: {
+    dialog: elements.mcpAssistantDialog, close: elements.mcpAssistantClose, input: elements.mcpAssistantInput,
+    status: elements.mcpAssistantStatus, process: elements.mcpAssistantProcess, processMeta: elements.mcpAssistantProcessMeta,
+    processBody: elements.mcpAssistantProcessBody, tools: elements.mcpAssistantTools, preview: elements.mcpAssistantPreview,
+    scope: elements.mcpAssistantScope, scopeLabel: elements.mcpAssistantScopeLabel,
+    generate: elements.mcpAssistantGenerate, save: elements.mcpAssistantSave
+  },
+  post: (message) => vscode.postMessage(message),
+  beforeOpen: () => closeComposerMenus()
+});
+
+function sendResourceAction(type: "chooseResource" | "previewResource" | "saveResource"): void {
+  if (!browser.activeId || composerSelectionLocked()) return;
+  resourceErrors.delete(browser.activeId);
+  clearInputError();
+  resourcePending.add(browser.activeId);
+  vscode.postMessage({ type, sessionId: browser.activeId });
+  updateRunState();
+}
+
+function changeResourceOptions(resourceType: ResourceKind, scope: ResourceScope): void {
+  const sessionId = browser.activeId;
+  const resource = activeResource();
+  if (!sessionId || !resource || composerSelectionLocked()) return;
   closeComposerMenus();
-  elements.uiDialogTitle.textContent = message.request.type === "confirm" ? "Confirm" : message.request.label;
-  elements.uiDialogBody.replaceChildren();
-  elements.uiDialogActions.replaceChildren();
-  if (message.request.type === "choice") {
-    const choiceRequest = message.request;
-    const prompt = document.createElement("div");
-    prompt.className = "ui-dialog-label";
-    prompt.textContent = message.request.label;
-    elements.uiDialogBody.append(prompt);
-    const group = document.createElement("div");
-    const inputType = choiceRequest.multiple ? "checkbox" : "radio";
-    choiceRequest.options.forEach((option, index) => {
-      const label = document.createElement("label");
-      label.className = "ui-dialog-option";
-      const input = document.createElement("input");
-      input.type = inputType;
-      input.name = "ui-choice";
-      input.value = option;
-      if (!choiceRequest.multiple && index === 0) input.checked = true;
-      label.append(input, document.createTextNode(option));
-      group.append(label);
-    });
-    let customInput: HTMLInputElement | undefined;
-    if (choiceRequest.allowCustom) {
-      const customLabel = document.createElement("label");
-      customLabel.className = "ui-dialog-option";
-      customLabel.append(document.createTextNode("Other"));
-      customInput = document.createElement("input");
-      customInput.type = "text";
-      customInput.className = "ui-dialog-input";
-      customInput.placeholder = choiceRequest.customPlaceholder ?? "Enter a custom option";
-      customLabel.append(customInput);
-      group.append(customLabel);
-    }
-    elements.uiDialogBody.append(group);
-    elements.uiDialogActions.append(
-      uiButton("Cancel", true, cancelUi),
-      uiButton("Continue", false, () => {
-        const selected = [...elements.uiDialogBody.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked, input[type="radio"]:checked')].map((input) => input.value);
-        const custom = customInput?.value.trim();
-        finishUi({ type: "choice", selected: custom && !choiceRequest.multiple ? [] : selected, ...(custom ? { custom } : {}) });
-      })
-    );
-    queueMicrotask(() => elements.uiDialogBody.querySelector<HTMLElement>("input")?.focus());
-  } else if (message.request.type === "confirm") {
-    const text = document.createElement("div");
-    text.textContent = message.request.message;
-    elements.uiDialogBody.append(text);
-    elements.uiDialogActions.append(
-      uiButton(message.request.cancelLabel, true, cancelUi),
-      uiButton(message.request.confirmLabel, false, () => finishUi({ type: "confirm", confirmed: true }))
-    );
-  } else {
-    const label = document.createElement("div");
-    label.className = "ui-dialog-label";
-    label.textContent = message.request.label;
-    const input = message.request.multiline ? document.createElement("textarea") : document.createElement("input");
-    input.className = "ui-dialog-input";
-    input.placeholder = message.request.placeholder ?? "";
-    elements.uiDialogBody.append(label, input);
-    elements.uiDialogActions.append(
-      uiButton("Cancel", true, cancelUi),
-      uiButton("Submit", false, () => finishUi({ type: "input", value: input.value }))
-    );
-    if (!message.request.multiline) {
-      input.addEventListener("keydown", (event) => {
-        if ((event as KeyboardEvent).key === "Enter") {
-          event.preventDefault();
-          finishUi({ type: "input", value: input.value });
-        }
-      });
-    }
-    queueMicrotask(() => input.focus());
-  }
-  if (!elements.uiDialog.open) elements.uiDialog.showModal();
-}
-
-function renderMcp(state: SidebarState): void {
-  const resources = state.globalResources ?? {
-    apis: [],
-    mcps: state.mcpServers.map((server) => ({ name: server.name, detail: server.transport })),
-    rules: [],
-    skills: []
+  const submit = (): void => {
+    resourceErrors.delete(sessionId);
+    resourcePending.add(sessionId);
+    vscode.postMessage({ type: "resourceOptions", sessionId, resourceType, scope });
+    updateRunState();
   };
-  elements.mcpServers.replaceChildren();
-  const query = elements.mcpSearch.value.trim().toLowerCase();
-  const matches = (item: { name: string; detail?: string }): boolean =>
-    !query || `${item.name} ${item.detail ?? ""}`.toLowerCase().includes(query);
-  const categories = [
-    ["APIs", "symbol-method", resources.apis.filter(matches)],
-    ["MCP", "server", resources.mcps.filter(matches)],
-    ["Rules", "law", resources.rules.filter(matches)],
-    ["Skills", "sparkle", resources.skills.filter(matches)]
-  ] as const;
-  const total = categories.reduce((sum, [, , items]) => sum + items.length, 0);
-  elements.mcpCount.textContent = String(total);
-  elements.mcpEmpty.hidden = total !== 0;
-  for (const [title, icon, items] of categories) {
-    const group = document.createElement("details");
-    group.className = "resource-category";
-    group.open = true;
-    const summary = document.createElement("summary");
-    const chevron = document.createElement("i");
-    // Keep resource categories in step with API groups: closed categories use
-    // an explicit right chevron and open categories use a down chevron. Using
-    // the generic disclosure chevron here applies a rotation transform that
-    // makes the closed state point left instead.
-    chevron.className = "method-chevron codicon codicon-chevron-down";
-    const categoryIcon = document.createElement("i");
-    categoryIcon.className = `resource-category-icon codicon codicon-${icon}`;
-    const label = document.createElement("span");
-    label.className = "resource-category-label";
-    label.textContent = title;
-    const count = document.createElement("span");
-    count.className = "resource-category-count";
-    count.textContent = String(items.length);
-    summary.append(chevron, categoryIcon, label, count);
-    const body = document.createElement("div");
-    body.className = "resource-category-body";
-    if (!items.length) {
-      const empty = document.createElement("div");
-      empty.className = "resource-empty";
-      empty.textContent = `No global ${title.toLowerCase()} found.`;
-      body.append(empty);
-    }
-    for (const resource of items) {
-      const row = document.createElement("div");
-      row.className = "method-row resource-row";
-      const identity = document.createElement("span");
-      identity.className = "method-identity";
-      const name = document.createElement("span");
-      name.className = "method-name";
-      name.textContent = resource.name;
-      identity.append(name);
-      if (resource.detail) {
-        const detail = document.createElement("span");
-        detail.className = "method-signature";
-        detail.textContent = resource.detail;
-        identity.append(detail);
-      }
-      row.append(identity);
-      body.append(row);
-    }
-    group.append(summary, body);
-    group.addEventListener("toggle", syncResourceToggle);
-    group.addEventListener("toggle", () => {
-      chevron.className = `method-chevron codicon codicon-chevron-${group.open ? "down" : "right"}`;
-    });
-    elements.mcpServers.append(group);
+  if (resourceType !== resource.type && resource.draft) {
+    openConfirmationDialog("Discard the current resource draft and change its type?", submit);
+  } else submit();
+}
+
+function pristineNewSkill(resource: ResourceSession | undefined): resource is ResourceSession {
+  return Boolean(resource && resource.type === "skill" && !resource.target && !resource.draft);
+}
+
+/** Describe | Import belongs to one new Skill. A different type, target, draft,
+ * conversation or mode starts a new decision, so the toggle resets to Describe. */
+function renderResourceSource(resource: ResourceSession | undefined): void {
+  const key = [
+    browser.activeId ?? "", inputMode, resource?.type ?? "", resource?.scope ?? "",
+    resource?.target?.path ?? "", resource?.draft ? "draft" : "", pristineNewSkill(resource) ? "new" : ""
+  ].join("|");
+  if (key !== resourceSourceKey) {
+    resourceSourceKey = key;
+    resourceSource = "describe";
   }
-  syncResourceToggle();
-  elements.mcpErrors.replaceChildren();
-  for (const diagnostic of state.globalDiagnostics) {
-    const item = document.createElement("div");
-    item.textContent = diagnostic;
-    elements.mcpErrors.append(item);
+  const visible = pristineNewSkill(resource);
+  elements.resourceSourceToggle.hidden = !visible;
+  for (const button of [elements.resourceSourceDescribe, elements.resourceSourceImport]) {
+    const selected = button.dataset.resourceSource === resourceSource;
+    button.setAttribute("aria-selected", String(selected));
+    button.classList.toggle("is-selected", selected);
+    button.disabled = composerSelectionLocked();
+  }
+  elements.inputSection.classList.toggle("resource-import", visible && resourceSource === "import");
+}
+
+function renderResourceControls(): void {
+  const resource = activeResource();
+  renderResourceSource(resource);
+  elements.modeControl.querySelector(".composer-control-label")!.textContent = resource ? "Resource" : "Mode";
+  elements.permissionControl.querySelector(".composer-control-label")!.textContent = resource ? "Save to" : "Permission";
+  elements.modeControl.title = resource ? "Resource type" : "Mode";
+  elements.permissionControl.title = resource ? resourceDirectory(resource.scope, resource.type) : "Permission";
+  if (!resource) return;
+  elements.modeControlValue.textContent = RESOURCE_LABELS[resource.type];
+  elements.modeControlIcon.className = `codicon codicon-${RESOURCE_ICONS[resource.type]}`;
+  elements.permissionMenuShell.hidden = false;
+  elements.permissionControlValue.textContent = resource.scope === "project" ? "Project" : "Global";
+  elements.permissionControlIcon.className = "codicon codicon-folder";
+  elements.permissionControl.classList.remove("is-full-access");
+  renderComposerMenu(elements.modeMenu, (Object.entries(RESOURCE_LABELS) as Array<[ResourceKind, string]>)
+    .map(([type, label]) => [type, label, `codicon-${RESOURCE_ICONS[type]}`]), resource.type,
+  (type) => changeResourceOptions(type as ResourceKind, resource.scope));
+  const resourceKindKeys = (Object.keys(RESOURCE_LABELS) as ResourceKind[]);
+  for (const [index, button] of Array.from(elements.modeMenu.querySelectorAll("button")).entries()) {
+    button.dataset.resourceType = resourceKindKeys[index]!;
+  }
+  const scopes: ResourceScope[] = resource.type === "file"
+    ? (sidebarState?.resourceRoots?.project ? ["project"] : [])
+    : sidebarState?.resourceRoots?.project ? ["project", "global"] : ["global"];
+  renderComposerMenu(elements.permissionMenu, scopes.map((scope) => [scope,
+    `${resource.target && resource.scope !== scope ? "Save as · " : ""}${scope === "project" ? "Project" : "Global"}`, "codicon-folder"]), resource.scope,
+    (scope) => changeResourceOptions(resource.type, scope as ResourceScope));
+  for (const [index, button] of Array.from(elements.permissionMenu.querySelectorAll("button")).entries()) {
+    const path = resourceDirectory(scopes[index]!, resource.type);
+    button.title = path;
+    const detail = document.createElement("small");
+    detail.className = "resource-directory";
+    detail.textContent = path;
+    button.querySelector("span")?.append(detail);
   }
 }
 
-let mcpAssistantRequestId: string | undefined;
-let mcpAssistantRunningRequestId: string | undefined;
-let mcpAssistantStopping = false;
-let mcpAssistantServer: SidebarState["mcpServers"][number] | undefined;
-let mcpAssistantProcessStartedAt: number | undefined;
-let mcpAssistantProcessCount = 0;
-let mcpAssistantProcessTokens: number | undefined;
-let mcpAssistantPendingTools: string[] | undefined;
-
-function resetMcpAssistantProcess(): void {
-  mcpAssistantProcessStartedAt = undefined;
-  mcpAssistantProcessCount = 0;
-  mcpAssistantProcessTokens = undefined;
-  mcpAssistantPendingTools = undefined;
-  elements.mcpAssistantProcessBody.replaceChildren();
-  elements.mcpAssistantProcessMeta.textContent = "";
-  elements.mcpAssistantProcess.hidden = true;
-  elements.mcpAssistantProcess.open = false;
-  elements.mcpAssistantTools.replaceChildren();
-  elements.mcpAssistantTools.hidden = true;
-}
-
-function updateMcpAssistantAction(): void {
-  // MCP generation is presented in its own dialog. Keep its Stop state
-  // independent from the conversation composer run control below.
-  const closeLabel = mcpAssistantRunningRequestId
-    ? mcpAssistantStopping ? "Stopping MCP generation" : "Stop MCP generation"
-    : "Close MCP Assistant";
-  elements.mcpAssistantClose.title = closeLabel;
-  elements.mcpAssistantClose.setAttribute("aria-label", closeLabel);
-  const closeIcon = elements.mcpAssistantClose.querySelector<HTMLElement>("i");
-  if (closeIcon) closeIcon.className = `codicon codicon-${mcpAssistantRunningRequestId ? "debug-stop" : "close"}`;
-  if (mcpAssistantRunningRequestId) {
-    elements.mcpAssistantGenerate.hidden = false;
-    elements.mcpAssistantGenerate.disabled = mcpAssistantStopping;
-    elements.mcpAssistantGenerate.textContent = mcpAssistantStopping ? "Stopping" : "Stop";
-    elements.mcpAssistantGenerate.classList.toggle("stopping", mcpAssistantStopping);
-    return;
+function resourceDirectory(scope: ResourceScope, type: ResourceKind): string {
+  if (type === "file" && scope === "project") {
+    const dextRoot = sidebarState?.resourceRoots?.project;
+    if (dextRoot) return dextRoot.replace(/[\\/]\.dext$/, "") || ".";
   }
-  elements.mcpAssistantGenerate.disabled = false;
-  elements.mcpAssistantGenerate.textContent = "Generate";
-  elements.mcpAssistantGenerate.classList.remove("stopping");
+  return `${sidebarState?.resourceRoots?.[scope] ?? (scope === "project" ? ".dext" : ".dext-global")}/${RESOURCE_DIRECTORIES[type]}`;
 }
 
-function renderMcpAssistantEvent(event: AgentStreamEvent): void {
-  if (event.phase === "todo") return;
-  if (!mcpAssistantProcessStartedAt) mcpAssistantProcessStartedAt = Date.now();
-  mcpAssistantProcessCount += 1;
-  const usage = event.usage;
-  if (usage) {
-    mcpAssistantProcessTokens = usage.totalTokens
-      ?? (usage.inputTokens !== undefined && usage.outputTokens !== undefined
-        ? usage.inputTokens + usage.outputTokens
-        : mcpAssistantProcessTokens);
-  }
-  elements.mcpAssistantProcess.hidden = false;
-  const elapsed = Math.max(0, Date.now() - mcpAssistantProcessStartedAt);
-  const tokenLabel = mcpAssistantProcessTokens === undefined ? "" : ` · ${mcpAssistantProcessTokens} tokens`;
-  elements.mcpAssistantProcessMeta.textContent = `Worked for ${formatDuration(elapsed)} · ${mcpAssistantProcessCount} events${tokenLabel}`;
-  if (event.phase === "status" && !event.text.trim()) return;
-  const row = document.createElement("div");
-  row.className = `mcp-process-event mcp-process-${event.phase}`;
-  const title = document.createElement("strong");
-  title.textContent = event.title || (event.phase === "tool" ? "Tool" : event.phase[0]!.toUpperCase() + event.phase.slice(1));
-  const text = document.createElement("div");
-  text.textContent = event.text;
-  row.append(title, text);
-  elements.mcpAssistantProcessBody.append(row);
-  elements.mcpAssistantProcessBody.scrollTop = elements.mcpAssistantProcessBody.scrollHeight;
+function renderResourceToolbar(): void {
+  const resource = activeResource();
+  elements.resourceToolbar.hidden = !resource;
+  if (!resource) return;
+  const locked = composerSelectionLocked();
+  const document = resource.draft ?? resource.target;
+  const fileCount = 1 + (document?.files?.length ?? 0);
+  elements.resourceTargetLabel.textContent = document?.name ?? "New resource";
+  elements.resourceTarget.querySelector(".codicon")!.className = `codicon codicon-${RESOURCE_ICONS[resource.type]}`;
+  elements.resourceTarget.title = resource.target ? `${resourceDirectory(resource.scope, resource.type)}/${resource.target.path}` : "Select a resource (or hold Shift and drop a file)";
+  elements.resourceTarget.disabled = locked;
+  elements.resourceChoose.disabled = locked;
+  elements.resourcePreview.disabled = locked || !document;
+  elements.resourcePreview.textContent = resource.draft && resource.target ? "View changes" : "Preview";
+  elements.resourceSave.disabled = locked || !resource.draft;
+  elements.resourceSave.textContent = resource.target ? "Save changes" : "Create";
+  elements.resourceStatus.dataset.state = resourceErrors.has(browser.activeId ?? "") ? "error" : !locked && !resource.draft && resource.saved ? "saved" : "idle";
+  elements.resourceStatus.textContent = resourceErrors.get(browser.activeId ?? "") ?? (resourcePending.has(browser.activeId ?? "") ? "Working…" : executing ? "Generating…" : resource.draft ? "Unsaved draft" : resource.saved ? "Saved" : resource.target ? "Editing" : "New resource");
+  if (fileCount > 1 && !resourceErrors.has(browser.activeId ?? "")) elements.resourceStatus.textContent += ` · ${fileCount} files`;
 }
 
-function generateMcpAssistant(): void {
-  if (mcpAssistantRunningRequestId) {
-    if (mcpAssistantStopping) return;
-    mcpAssistantStopping = true;
-    elements.mcpAssistantStatus.textContent = "Stopping MCP generation…";
-    vscode.postMessage({ type: "stopExecution", turnId: mcpAssistantRunningRequestId });
-    updateMcpAssistantAction();
-    return;
-  }
-  const documentText = elements.mcpAssistantInput.value.trim();
-  if (!documentText) { elements.mcpAssistantStatus.textContent = "Paste a documentation or registry URL first."; return; }
-  const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  mcpAssistantRequestId = requestId;
-  // Mark the request busy immediately, before the host's executing event
-  // comes back. This closes the small race where a fast click on X/Esc could
-  // dismiss the dialog while generation was already in flight.
-  mcpAssistantRunningRequestId = requestId;
-  mcpAssistantStopping = false;
-  elements.mcpAssistantStatus.textContent = "Dext is reading the documentation and drafting a safe configuration…";
-  resetMcpAssistantProcess();
-  elements.mcpAssistantProcess.hidden = false;
-  elements.mcpAssistantProcess.open = true;
-  mcpAssistantProcessStartedAt = Date.now();
-  updateMcpAssistantAction();
-  vscode.postMessage({ type: "generateMcp", requestId, document: documentText });
-}
-
-function saveMcpAssistant(): void {
-  if (!mcpAssistantServer) return;
-  let value: unknown;
-  try { value = JSON.parse(elements.mcpAssistantPreview.value); } catch { elements.mcpAssistantStatus.textContent = "Configuration must be valid JSON."; return; }
-  if (!value || typeof value !== "object" || Array.isArray(value)) { elements.mcpAssistantStatus.textContent = "Configuration must be a JSON object."; return; }
-  const server = value as Record<string, unknown>;
-  if ((server.transport !== "http" && server.transport !== "stdio") || typeof server.name !== "string") {
-    elements.mcpAssistantStatus.textContent = "Configuration needs a name and a supported transport."; return;
-  }
-  const candidate = server.transport === "http"
-    ? { name: server.name, transport: "http" as const, url: typeof server.url === "string" ? server.url : "", ...(server.auth ? { auth: { type: "bearer" as const } } : {}) }
-    : {
-      name: server.name,
-      transport: "stdio" as const,
-      command: typeof server.command === "string" ? server.command : "",
-      ...(Array.isArray(server.args) ? { args: server.args.filter((item): item is string => typeof item === "string") } : {}),
-      ...(server.auth && typeof server.auth === "object" && (server.auth as Record<string, unknown>).type === "token"
-        && typeof (server.auth as Record<string, unknown>).env === "string"
-        ? { auth: { type: "token" as const, env: (server.auth as Record<string, unknown>).env as string } }
-        : {})
-    };
-  if (mcpAssistantPendingTools === undefined) {
-    const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    mcpAssistantRequestId = requestId;
-    vscode.postMessage({ type: "prepareMcp", requestId, scope: elements.mcpAssistantScope.value as "project" | "global", server: candidate });
-    elements.mcpAssistantStatus.textContent = "Discovering MCP tools…";
-    elements.mcpAssistantSave.disabled = true;
-    return;
-  }
-  vscode.postMessage({ type: "createMcp", scope: elements.mcpAssistantScope.value as "project" | "global", selectedTools: mcpAssistantPendingTools, server: candidate });
-  elements.mcpAssistantStatus.textContent = "MCP saved. Refreshing its tools…";
-  elements.mcpAssistantSave.disabled = true;
-}
-
-function renderMcpToolChoices(tools: Array<{ name: string; description?: string }>): void {
-  mcpAssistantPendingTools = tools.map((tool) => tool.name);
-  elements.mcpAssistantTools.replaceChildren();
-  elements.mcpAssistantTools.hidden = false;
-  const heading = document.createElement("div");
-  heading.className = "mcp-assistant-label";
-  heading.textContent = `Select tools to add (${tools.length})`;
-  elements.mcpAssistantTools.append(heading);
-  for (const tool of tools) {
-    const label = document.createElement("label");
-    label.className = "mcp-tool-choice";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = true;
-    input.addEventListener("change", () => {
-      if (!mcpAssistantPendingTools) return;
-      mcpAssistantPendingTools = input.checked
-        ? [...new Set([...mcpAssistantPendingTools, tool.name])]
-        : mcpAssistantPendingTools.filter((name) => name !== tool.name);
-    });
-    const text = document.createElement("span");
-    text.textContent = tool.name;
-    const description = document.createElement("small");
-    description.textContent = tool.description ?? "";
-    label.append(input, text, description);
-    elements.mcpAssistantTools.append(label);
-  }
-  elements.mcpAssistantStatus.textContent = "Choose the tools to include, then save MCP.";
-  elements.mcpAssistantSave.disabled = false;
-}
-
-function defaultValue(field: FieldDefinition): string {
-  if (field.multiple) return `[${defaultValue({ ...field, multiple: false })}]`;
-  if (field.default !== undefined) {
-    if (typeof field.default === "string") return `"${field.default}"`;
-    if (typeof field.default === "object") return JSON.stringify(field.default);
-    return String(field.default);
-  }
-  if (field.type === "context") return "@selection";
-  if (field.type === "result") return "edit_result";
-  if (field.type === "number") return "0";
-  if (field.type === "boolean") return "False";
-  if (field.type === "enum") return `"${field.values?.[0] ?? ""}"`;
-  if (field.type === "object") return "{}";
-  return '""';
-}
-
-function methodTemplate(method: SidebarState["methods"][number]): string {
-  const args = method.input
-    .filter((field) => field.required && field.default === undefined)
-    .map((field) => `${field.name}=${defaultValue(field)}`);
-  return `${method.id}(${args.join(", ")})`;
-}
-
-function renderMethods(state: SidebarState): void {
+/** Applies the editor theme and Dext token styles to the sidebar document. */
+function applySidebarTheme(state: SidebarState): void {
   editor.applyTheme(state.theme);
-  elements.methods.replaceChildren();
-  elements.methodCount.textContent = String(state.methods.length);
-  const root = groupMethodsForDisplay(state.methods);
-  const collectSources = (node: typeof root): Set<string> => {
-    const sources = new Set<string>(node.methods.map((method) => method.source === "builtin" ? "builtin" : "project"));
-    for (const child of node.children.values()) {
-      for (const source of collectSources(child)) sources.add(source);
-    }
-    return sources;
-  };
-  const renderNode = (node: typeof root, parent: HTMLElement, prefix = ""): void => {
-    for (const [name, child] of [...node.children].sort(([a], [b]) => a.localeCompare(b))) {
-      const group = document.createElement("details");
-      group.className = "method-group";
-      group.open = true;
-      group.addEventListener("toggle", syncMethodToggle);
-      const summary = document.createElement("summary");
-      summary.className = "method-group-summary";
-      const chevron = document.createElement("i");
-      chevron.className = "method-chevron codicon codicon-chevron-down";
-      const label = document.createElement("span");
-      label.className = "method-group-label";
-      const groupName = document.createElement("span");
-      groupName.textContent = `${prefix}${name}`;
-      label.append(groupName);
-      const sources = [...collectSources(child)];
-      const sourceName = isSyntheticBuiltinGroup(name, prefix, child)
-        ? undefined
-        : sources.length === 1 ? sources[0] : undefined;
-      if (sourceName) {
-        const source = document.createElement("span");
-        source.className = "method-source";
-        source.textContent = sourceName;
-        label.append(source);
-      }
-      summary.append(chevron, label);
-      group.append(summary);
-      group.addEventListener("toggle", () => {
-        chevron.className = `method-chevron codicon codicon-chevron-${group.open ? "down" : "right"}`;
-      });
-      renderNode(child, group, `${prefix}${name}.`);
-      parent.append(group);
-    }
-    for (const method of node.methods) {
-      const row = document.createElement("button");
-      row.type = "button";
-      row.className = "method-row";
-      row.title = method.description;
-      const identity = document.createElement("span");
-      identity.className = "method-identity";
-      const name = document.createElement("span");
-      name.className = "method-name";
-      name.textContent = method.id.split(".").at(-1) ?? method.id;
-      const signature = document.createElement("span");
-      signature.className = "method-signature";
-      signature.textContent = formatMethodSignature({
-        ...method,
-        id: method.id.split(".").at(-1) ?? method.id
-      }, { includeInternal: ["agent", "ask", "plan"].includes(method.id) });
-      if (!prefix) {
-        const source = document.createElement("span");
-        source.className = "method-source-inline";
-        source.textContent = method.source === "builtin" ? "builtin" : "project";
-        identity.append(name, source, signature);
-      } else {
-        identity.append(name, signature);
-      }
-      const insert = document.createElement("i");
-      insert.className = "codicon codicon-add";
-      row.append(identity, insert);
-      row.addEventListener("click", () => {
-        editor.insertInvocation(methodTemplate(method));
-        closeMethodsDialog();
-      });
-      parent.append(row);
-    }
-  }
-  renderNode(root, elements.methods);
-  syncMethodToggle();
-  elements.configErrors.replaceChildren();
-  for (const diagnostic of state.diagnostics) {
-    const item = document.createElement("div");
-    item.textContent = diagnostic;
-    elements.configErrors.append(item);
+  let tokenStyle = document.getElementById("dext-token-theme");
+  if (!tokenStyle) {
+    tokenStyle = document.createElement("style");
+    tokenStyle.id = "dext-token-theme";
+    document.head.append(tokenStyle);
   }
   editor.refreshLanguageState();
 }
 
-function setMethodGroupsOpen(open: boolean): void {
-  elements.methods.querySelectorAll<HTMLDetailsElement>("details.method-group").forEach((group) => {
-    group.open = open;
-  });
-  syncMethodToggle();
-}
-
-function syncMethodToggle(): void {
-  const groups = [...elements.methods.querySelectorAll<HTMLDetailsElement>("details.method-group")];
-  const open = groups.length === 0 || groups.every((group) => group.open);
-  const icon = elements.methodsToggle.querySelector("i");
-  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
-  const title = open ? "Collapse API groups" : "Expand API groups";
-  elements.methodsToggle.title = title;
-  elements.methodsToggle.setAttribute("aria-label", title);
-}
-
-function toggleMethodGroups(): void {
-  const groups = [...elements.methods.querySelectorAll<HTMLDetailsElement>("details.method-group")];
-  setMethodGroupsOpen(groups.some((group) => !group.open));
-}
-
-function setResultDetailsOpen(open: boolean): void {
-  elements.result.querySelectorAll<HTMLDetailsElement>("details").forEach((detail) => {
-    detail.open = open;
-  });
-  syncResultToggle();
-}
-
-function syncResultToggle(): void {
-  const details = [...elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")];
-  // Show the collapse action as soon as any conversation content is open.
-  const open = details.length === 0 || details.some((detail) => detail.open);
-  const icon = elements.resultToggle.querySelector("i");
-  if (icon) icon.className = `codicon codicon-${open ? "collapse-all" : "expand-all"}`;
-  const title = open ? "Collapse conversation" : "Expand conversation";
-  elements.resultToggle.title = title;
-  elements.resultToggle.setAttribute("aria-label", title);
-}
-
-function toggleResultDetails(): void {
-  const details = [...elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")];
-  // The button is a collapse action whenever at least one turn is open. In a
-  // mixed state it must therefore collapse everything, rather than expand the
-  // closed turns just because one happens to be closed.
-  setResultDetailsOpen(!details.some((detail) => detail.open));
-}
-
-function setSectionOpen(heading: HTMLElement, body: HTMLElement, open: boolean): void {
-  heading.setAttribute("aria-expanded", String(open));
-  body.classList.toggle("collapsed", !open);
-  heading.parentElement?.classList.toggle("section-collapsed", !open);
-  const icon = heading.querySelector<HTMLElement>(".section-chevron");
-  if (icon) icon.className = `section-chevron codicon codicon-chevron-${open ? "down" : "right"}`;
-}
-
-function toggleSection(heading: HTMLElement, body: HTMLElement): void {
-  if (fullscreenPanel) {
-    if (panels[fullscreenPanel].heading !== heading) return;
-    const panelName = fullscreenPanel;
-    toggleFullscreen(panelName);
-    setSectionOpen(heading, body, false);
-    return;
-  }
-  setSectionOpen(heading, body, heading.getAttribute("aria-expanded") !== "true");
-}
+// The host-level appearance bundle writes `data-dext-theme` before dispatching
+// this. Monaco and already-rendered Mermaid diagrams cannot recolour themselves
+// from CSS alone, so they are rebuilt with the new light/dark base.
+document.addEventListener("dext-appearance-change", () => {
+  if (lastSidebarState) applySidebarTheme(lastSidebarState);
+  rerenderMarkdownDiagrams(elements.result);
+});
 
 function displayOptionValue(value: string): string {
   return value
@@ -1229,16 +855,116 @@ function displayOptionValue(value: string): string {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function renderSkillsMenu(state: SidebarState, selected: readonly string[], enabled: boolean): void {
+  const menu = elements.skillsMenu;
+  menu.replaceChildren();
+  const groups = groupSkills(state.skills ?? [], state.skillCommands ?? [], selected);
+  if (!enabled) {
+    const note = document.createElement("div");
+    note.className = "composer-menu-empty";
+    note.textContent = state.skillsDisabledReason ?? "Skills are disabled in this workspace.";
+    menu.append(note);
+    return;
+  }
+  if (!groups.length) {
+    const note = document.createElement("div");
+    note.className = "composer-menu-empty";
+    note.textContent = (state.skills ?? []).length
+      ? "Every installed Skill is hidden from this menu. Toggle visibility in the Dext Resources page."
+      : "No skills are installed. Add a SKILL.md package under .dext/skills or import a GitHub repository.";
+    menu.append(note);
+    return;
+  }
+  const row = (options: {
+    label: string;
+    value: string;
+    checked: "checked" | "mixed" | "unchecked";
+    level: number;
+    pack?: boolean;
+    commands?: string;
+    disabled?: boolean;
+    onToggle(): void;
+  }): HTMLButtonElement => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.disabled = options.disabled === true;
+    button.className = `composer-menu-option composer-skill-option${options.pack ? " composer-skill-pack" : ""}`;
+    button.dataset.level = String(options.level);
+    button.dataset.value = options.value;
+    button.tabIndex = -1;
+    button.setAttribute("role", "menuitemcheckbox");
+    button.setAttribute("aria-checked", options.checked);
+    const glyph = document.createElement("i");
+    glyph.className = `codicon codicon-${options.checked === "checked" ? "check" : options.checked === "mixed" ? "circle-filled" : "blank"}`;
+    const text = document.createElement("span");
+    text.textContent = options.label;
+    if (options.commands) {
+      const hint = document.createElement("small");
+      hint.className = "composer-skill-commands";
+      hint.textContent = options.commands;
+      text.append(hint);
+    }
+    button.append(glyph, text);
+    button.addEventListener("click", () => { if (!composerSelectionLocked() && enabled) options.onToggle(); });
+    return button;
+  };
+  for (const group of groups) {
+    if (group.packId) {
+      const availableIds = group.skills.filter((skill) => skill.available !== false).map((skill) => skill.id);
+      const check = packCheckState(availableIds, selected);
+      menu.append(row({
+        label: group.name, value: `pack:${group.packId}`, checked: check, level: 0, pack: true,
+        commands: `${group.skills.length} skill${group.skills.length === 1 ? "" : "s"}`,
+        disabled: availableIds.length === 0,
+        onToggle: () => submitAgentSelection({ skills: togglePack(selected, availableIds, check !== "checked") }, true)
+      }));
+    }
+    for (const skill of group.skills) {
+      const commands = group.commands.filter((command) => command.skillId === skill.id);
+      menu.append(row({
+        label: skill.title, value: `skill:${skill.id}`, checked: selected.includes(skill.id) ? "checked" : "unchecked", level: 1,
+        commands: skill.available === false ? "No version for this Agent or shared fallback"
+          : [skill.variant ? `${displayOptionValue(skill.variant)} version` : "", ...commands.map((command) => command.syntax)].filter(Boolean).join(" · "),
+        disabled: skill.available === false && !selected.includes(skill.id),
+        onToggle: () => submitAgentSelection({ skills: toggleSkill(selected, skill.id) }, true)
+      }));
+    }
+  }
+}
+
+function renderSkillsControl(state: SidebarState): void {
+  const resource = activeResource();
+  const visible = !resource && inputMode !== "code";
+  elements.skillsMenuShell.hidden = !visible;
+  if (!visible) {
+    if (!elements.skillsMenu.hidden) closeComposerMenus();
+    return;
+  }
+  const selected = state.agentSelection.skills ?? [];
+  const enabled = state.skillsEnabled !== false;
+  elements.skillsControl.disabled = composerSelectionLocked() || !enabled;
+  elements.skillsControl.title = enabled
+    ? "Skills for this conversation"
+    : state.skillsDisabledReason ?? "Skills are disabled in this workspace.";
+  elements.skillsControlValue.textContent = selectionLabel(selected, state.skills ?? []);
+  elements.skillsControl.classList.toggle("has-skills", selected.length > 0);
+  const focused = document.activeElement instanceof HTMLElement && elements.skillsMenu.contains(document.activeElement)
+    ? document.activeElement.dataset.value
+    : undefined;
+  renderSkillsMenu(state, selected, enabled);
+  // Rebuilding the tree must not drop roving keyboard focus after a toggle.
+  if (focused) elements.skillsMenu.querySelector<HTMLButtonElement>(`button[data-value="${focused}"]`)?.focus();
+}
+
 function renderAgentControls(state: SidebarState): void {
   sidebarState = state;
   // A tab with no stored mode is a fresh conversation and must use Agent. Do
   // not retain the previous tab's mode in the webview-local fallback.
-  inputMode = state.agentSelection.mode ?? "agent";
+  inputMode = activeResource() ? "ask" : state.agentSelection.mode ?? "agent";
   if (state.settings) {
-    defaultDiffMode = state.settings.diffView;
     editor.setSubmitOnEnter(state.settings.submitOnEnter);
   }
-  editor.setLanguageEnabled(inputMode === "code");
+  editor.setMode(inputMode === "code" ? "code" : "chat");
   const selected = state.agentProfiles.find((item) => item.id === state.agentSelection.profileId)
     ?? state.agentProfiles[0];
   const effective = presentAgentSelection(selected, state.agentSelection);
@@ -1275,6 +1001,10 @@ function renderAgentControls(state: SidebarState): void {
     ["code", "Code", "codicon-code"]
   ], inputMode, (mode) => {
     inputMode = mode as InputMode;
+    // The badge is local, so the editor has to follow it now: waiting for the host to
+    // echo the selection leaves a Code badge above a plain-text model, which completes
+    // nothing and shows no diagnostics at all.
+    editor.setMode(inputMode === "code" ? "code" : "chat");
     submitAgentSelection({});
   }, [], {
     agent: "composer-menu-option-mode-agent",
@@ -1289,11 +1019,23 @@ function renderAgentControls(state: SidebarState): void {
     agentPermission = permission as AgentPermission;
     submitAgentSelection({ permission: agentPermission });
   }, ["full-access"]);
+  for (const button of elements.permissionMenu.querySelectorAll<HTMLButtonElement>("button[data-value]")) {
+    const permission = button.dataset.value as AgentPermission;
+    if (selected?.writablePermissions && !selected.writablePermissions.includes(permission)) {
+      button.disabled = true;
+      button.dataset.permissionDisabled = "true";
+      button.title = `${selected.label} requires an explicit Full access selection for writes. Ask and plan generation remain read-only.`;
+    }
+  }
+  elements.permissionControl.title = selected?.provider === "pi" && agentPermission === "workspace-write"
+    ? "Pi does not support Workspace write. Select Full access explicitly for Agent edits or plan execution." : "Permission";
   renderComposerMenu(elements.agentMenu, state.agentProfiles.map((item) => [item.id, item.label, "codicon-account"]), selected?.id ?? "", (profileId) => {
     submitAgentSelection({ profileId, model: "", reasoningEffort: "", speed: "", serviceTier: "",
-      agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !outputTurns.size ? "standard" : "") });
+      agentPreset: state.agentSelection.agentPreset ?? (profileId === "deepseek-harness" && !transcript.size ? DEFAULT_HARNESS_PRESET : "") });
   });
   renderModelMenu(state, options, selectedModel);
+  renderSkillsControl(state);
+  renderResourceControls();
   updateRunState();
 }
 
@@ -1310,6 +1052,7 @@ function renderComposerMenu(
     const button = document.createElement("button");
     button.type = "button";
     const itemClass = itemClasses[value];
+    button.dataset.value = value;
     button.className = `composer-menu-option${warningValues.includes(value) ? " composer-menu-option-warning" : ""}${itemClass ? ` ${itemClass}` : ""}`;
     button.tabIndex = -1;
     button.setAttribute("role", "menuitemradio");
@@ -1376,7 +1119,10 @@ function renderModelMenu(
     title.textContent = "Agent preset";
     const value = document.createElement("span");
     value.className = "composer-menu-category-value";
-    value.textContent = profile.presets?.find((preset) => preset.id === current.agentPreset)?.label || current.agentPreset || "ACP default";
+    // The catalog is the only source of preset choices; an unset selection is
+    // shown as the Harness default it will run as.
+    const selectedPreset = harnessPresetOrDefault(current.agentPreset);
+    value.textContent = profile.presets?.find((preset) => preset.id === selectedPreset)?.label ?? selectedPreset;
     const chevron = document.createElement("i");
     chevron.className = "codicon codicon-chevron-right";
     button.append(title, value, chevron);
@@ -1389,11 +1135,12 @@ function renderModelMenu(
   if (!options.length) {
     const empty = document.createElement("div");
     empty.className = "composer-menu-empty";
-    empty.textContent = profile?.provider === "deepseek-harness"
+    empty.textContent = profile?.provider === "pi" ? "No Pi models discovered. Associate an installed Pi CLI using Dext: Configure Agent; configure models and authentication in Pi."
+      : profile?.provider === "deepseek-harness"
       ? "No models discovered. Using the Harness configuration; run Dext: Configure Agent to refresh this list."
       : "No models are available for this Agent.";
     elements.modelMenu.append(empty);
-    if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu(state);
+    if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu();
     return;
   }
   for (const category of categories) {
@@ -1418,10 +1165,62 @@ function renderModelMenu(
     button.addEventListener("click", openChoices);
     elements.modelMenu.append(button);
   }
-  if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu(state);
+  if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu();
+  if (profile?.provider === "pi" && state.piPlugins?.length) appendPluginCategory(state);
 }
 
-function appendHarnessPresetManagementMenu(state: SidebarState): void {
+/** The installed Pi packages this conversation runs with. An absent selection
+ * means every package, which is what a new conversation starts on. */
+function appendPluginCategory(state: SidebarState): void {
+  const installed = state.piPlugins ?? [];
+  const selected = state.agentSelection.piPlugins;
+  const count = selected ? selected.length : installed.length;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "composer-menu-option composer-menu-category";
+  button.tabIndex = -1;
+  const title = document.createElement("span");
+  title.textContent = "Plugins";
+  const value = document.createElement("span");
+  value.className = "composer-menu-category-value";
+  value.textContent = count === 0 ? "None" : count === installed.length ? `All (${count})` : `${count} of ${installed.length}`;
+  const chevron = document.createElement("i");
+  chevron.className = "codicon codicon-chevron-right";
+  button.append(title, value, chevron);
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (!composerSelectionLocked()) renderPluginChoices(state);
+  });
+  elements.modelMenu.append(button);
+}
+
+function renderPluginChoices(state: SidebarState): void {
+  const menu = elements.modelSubmenu;
+  renderModelChoices(menu, "Plugins", [], "", () => undefined);
+  const installed = state.piPlugins ?? [];
+  const selected = state.agentSelection.piPlugins ?? installed.map((plugin) => plugin.id);
+  for (const plugin of installed) {
+    const checked = selected.includes(plugin.id);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "composer-menu-option";
+    button.tabIndex = -1;
+    button.setAttribute("role", "menuitemcheckbox");
+    button.setAttribute("aria-checked", String(checked));
+    const text = document.createElement("span");
+    text.textContent = plugin.label;
+    const check = document.createElement("i");
+    check.className = `codicon codicon-${checked ? "check" : "blank"}`;
+    button.append(text, check);
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      submitAgentSelection({ piPlugins: checked ? selected.filter((id) => id !== plugin.id) : [...selected, plugin.id] });
+    });
+    menu.append(button);
+  }
+}
+
+function appendHarnessPresetManagementMenu(): void {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "composer-menu-option composer-preset-management";
@@ -1433,16 +1232,23 @@ function appendHarnessPresetManagementMenu(state: SidebarState): void {
   button.append(label, chevron);
   button.addEventListener("click", (event) => {
     event.stopPropagation();
-    if (!composerSelectionLocked()) renderHarnessPresetManagement(state);
+    if (!composerSelectionLocked()) renderHarnessPresetManagement();
   });
   elements.modelMenu.append(button);
 }
 
 function renderHarnessPresetChoices(state: SidebarState): void {
   const profile = state.agentProfiles.find((item) => item.id === "deepseek-harness");
-  const current = state.agentSelection.agentPreset ?? "";
-  const locked = outputTurns.size > 0;
-  const fullAccess = state.agentSelection.permission === "full-access" && inputMode === "agent";
+  // Dext offers exactly the installed Harness catalog, and an unset selection
+  // reads as the Harness default it will run as.
+  const presets: readonly HarnessPresetOption[] = profile?.presets ?? [];
+  const current = harnessPresetOrDefault(state.agentSelection.agentPreset);
+  const locked = transcript.size > 0;
+  // Agent turns are always writable, and a Plan conversation applies the preset
+  // when the plan builds. Ask is read-only and Code carries its own per-call
+  // permission, so neither mode can decide a preset that needs Full access.
+  const writable = inputMode === "agent" || inputMode === "plan";
+  const fullAccess = state.agentSelection.permission === "full-access" && writable;
   const menu = elements.modelSubmenu;
   renderModelChoices(menu, "Agent preset", [], current, () => undefined);
   if (locked) {
@@ -1451,7 +1257,12 @@ function renderHarnessPresetChoices(state: SidebarState): void {
     note.textContent = "This conversation keeps its preset. Start a new conversation to change it.";
     menu.append(note);
   }
-  const presets = [{ id: "", label: "ACP default", description: "Use the existing ACP profile configuration.", error: undefined, requiresFullAccess: false }, ...(profile?.presets ?? [])];
+  if (!presets.length) {
+    const missing = document.createElement("div");
+    missing.className = "composer-menu-empty";
+    missing.textContent = "No Harness presets found. Refresh presets or check the installed Harness.";
+    menu.append(missing);
+  }
   for (const preset of presets) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1460,18 +1271,20 @@ function renderHarnessPresetChoices(state: SidebarState): void {
     button.setAttribute("role", "menuitemradio");
     button.setAttribute("aria-checked", String(preset.id === current));
     const restriction = preset.requiresFullAccess && !fullAccess;
+    const buildOnly = !restriction && Boolean(preset.writableTurnsOnly) && writable && inputMode === "plan";
     button.disabled = locked || Boolean(preset.error) || restriction;
     button.dataset.presetDisabled = String(button.disabled);
-    button.title = preset.error || (restriction ? "Requires Full access in Agent mode." : preset.description);
+    button.title = preset.error || (restriction ? "Requires Full access in Agent or Plan mode."
+      : buildOnly ? "Planning turns stay read-only; this preset runs when the plan builds." : preset.description);
     const label = document.createElement("span");
-    label.textContent = `${preset.label}${preset.error ? " (unavailable)" : restriction ? " (Full access)" : ""}`;
+    label.textContent = `${preset.label}${preset.error ? " (unavailable)" : restriction ? " (Full access)" : buildOnly ? " (Build only)" : ""}`;
     const check = document.createElement("i");
     check.className = `codicon codicon-${preset.id === current ? "check" : "blank"}`;
     button.append(label, check);
     button.addEventListener("click", (event) => { event.stopPropagation(); submitAgentSelection({ agentPreset: preset.id }); });
     menu.append(button);
   }
-  if (current && !presets.some((preset) => preset.id === current)) {
+  if (presets.length && !presets.some((preset) => preset.id === current)) {
     const missing = document.createElement("div");
     missing.className = "composer-menu-empty";
     missing.textContent = `Preset '${current}' is unavailable. Refresh presets or choose another in a new conversation.`;
@@ -1480,15 +1293,10 @@ function renderHarnessPresetChoices(state: SidebarState): void {
   positionModelSubmenu();
 }
 
-function renderHarnessPresetManagement(state: SidebarState): void {
-  const profile = state.agentProfiles.find((item) => item.id === "deepseek-harness");
+function renderHarnessPresetManagement(): void {
   const menu = elements.modelSubmenu;
   renderModelChoices(menu, "Manage presets", [], "", () => undefined);
-  const actions: ["create" | "copy" | "edit" | "refresh", string][] = [
-    ["create", "Let Agent create a preset"], ["copy", "Copy and open configuration"],
-    ...(profile?.presets?.some((preset) => !preset.builtin) ? [["edit", "Open custom configuration"] as ["edit", string]] : []),
-    ["refresh", "Refresh presets"]
-  ];
+  const actions: ["refresh", string][] = [["refresh", "Refresh presets"]];
   for (const [action, label] of actions) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1502,8 +1310,7 @@ function renderHarnessPresetManagement(state: SidebarState): void {
       event.stopPropagation();
       if (composerSelectionLocked()) return;
       closeComposerMenus();
-      vscode.postMessage({ type: "harnessPresetAction", action });
-    });
+      vscode.postMessage({ type: "harnessPresetAction", action });    });
     menu.append(button);
   }
   positionModelSubmenu();
@@ -1575,33 +1382,38 @@ function positionModelSubmenu(): void {
 
 window.addEventListener("resize", positionModelSubmenu);
 
-function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>): void {
+function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>, keepMenuOpen = false): void {
   if (composerSelectionLocked()) return;
   const selection = sidebarState?.agentSelection;
-  closeComposerMenus();
+  if (!keepMenuOpen) closeComposerMenus();
   vscode.postMessage({
     type: "agentSelection", selection: {
       mode: inputMode,
       permission: change.permission ?? agentPermission,
       profileId: change.profileId ?? selection?.profileId ?? "",
       model: change.model ?? selection?.model ?? "",
-      agentPreset: change.agentPreset ?? selection?.agentPreset ?? "",
+      agentPreset: harnessPresetOrDefault(change.agentPreset ?? selection?.agentPreset),
       reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
       speed: change.speed ?? selection?.speed ?? "",
-      serviceTier: change.serviceTier ?? selection?.serviceTier ?? ""
+      serviceTier: change.serviceTier ?? selection?.serviceTier ?? "",
+      ...(change.skills !== undefined || selection?.skills?.length
+        ? { skills: change.skills ?? selection?.skills ?? [] }
+        : {}),
+      ...(change.piPlugins !== undefined || selection?.piPlugins
+        ? { piPlugins: change.piPlugins ?? selection?.piPlugins ?? [] }
+        : {})
     }
   });
 }
 
 function selectConversation(sessionId: string): void {
-  if (sessionId === activeConversationId) return;
-  const switchId = ++conversationSwitchId;
+  if (sessionId === browser.activeId) return;
+  const switchId = browser.beginSelection(sessionId);
   // Commit the tab highlight and remove the prior tab's view in the same
   // event.  The replacement is restored from cache or received from the host
   // afterwards, so a slow response never leaves stale conversation content
   // below an already-selected tab.
-  persistComposerDraft();
-  activeConversationId = sessionId;
+  if (sidebarState) renderAgentControls(sidebarState);
   scheduleComposerDraftRestore(sessionId, switchId);
   for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
     const active = tab.dataset.sessionId === sessionId;
@@ -1621,12 +1433,11 @@ function selectConversation(sessionId: string): void {
 
 function closeConversation(sessionId: string): void {
   if (runningConversationIds.has(sessionId)) return;
-  const draft = conversationDrafts.get(sessionId);
-  if (draft?.source.trim() || draft?.attachments.length) {
+  if (drafts.hasUnsent(sessionId)) {
     const title = [...elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")]
       .find((tab) => tab.dataset.sessionId === sessionId)?.title ?? "this conversation";
     openConfirmationDialog(`Discard the unsent draft in “${title}” and close it?`, () => {
-      conversationDrafts.delete(sessionId);
+      drafts.delete(sessionId);
       vscode.postMessage({ type: "closeConversation", sessionId });
     });
     return;
@@ -1650,9 +1461,7 @@ const conversationTabDrag = enableConversationTabDrag(elements.conversationTabs,
 });
 
 function renderConversations(sessions: readonly ConversationSummary[], activeId: string): void {
-  const activeChanged = activeConversationId !== activeId;
-  if (activeChanged) persistComposerDraft();
-  activeConversationId = activeId;
+  const activeChanged = browser.setActiveId(activeId);
   if (activeChanged) scheduleComposerDraftRestore(activeId);
   runningConversationIds.clear();
   for (const conversation of sessions) {
@@ -1668,100 +1477,20 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
     activeExecutionSessionId = undefined;
   }
   updateRunState();
-  elements.conversationTabs.replaceChildren();
-  elements.conversationTabs.hidden = sessions.length === 0;
-  let activeTab: HTMLElement | undefined;
-  for (const conversation of sessions) {
-    const active = conversation.id === activeId;
-    const tab = document.createElement("div");
-    tab.className = `conversation-tab${active ? " active" : ""}${conversation.pinned ? " pinned" : ""}${conversation.running ? " running" : ""}`;
-    tab.dataset.sessionId = conversation.id;
-    tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-selected", String(active));
-    tab.title = conversation.running ? `${conversation.title} — running` : conversation.title;
-    // VS Code reads this attribute to build the native tab context menu and
-    // passes the merged object to the invoked command.
-    tab.dataset.vscodeContext = JSON.stringify({
-      webviewSection: "conversationTab",
-      sessionId: conversation.id,
-      dextTabPinned: conversation.pinned,
-      // Renaming seeds its input box from the name shown on the tab, which is
-      // the only place an unsaved conversation's name exists.
-      dextTabTitle: conversation.title,
-      preventDefaultContextMenuItems: true
-    });
-    // Middle-click closes a tab, matching VS Code editor tabs. Prevent the
-    // mousedown default as well: Chromium otherwise enables autoscroll on a
-    // horizontally overflowing tab strip before `auxclick` is dispatched.
-    let middleButtonDown = false;
-    tab.addEventListener("mousedown", (event) => {
-      if (event.button !== 1) return;
-      event.preventDefault();
-      event.stopPropagation();
-      middleButtonDown = true;
-      closeConversation(conversation.id);
-    });
-    tab.addEventListener("auxclick", (event) => {
-      if (event.button !== 1) return;
-      event.preventDefault();
-      event.stopPropagation();
-      // Keep a fallback for environments that do not deliver mousedown for
-      // auxiliary buttons, while avoiding a duplicate close request.
-      if (!middleButtonDown) closeConversation(conversation.id);
-      middleButtonDown = false;
-    });
-    tab.addEventListener("mouseup", (event) => {
-      if (event.button === 1) middleButtonDown = false;
-    });
-    const label = document.createElement("button");
-    label.type = "button";
-    label.className = "conversation-tab-label";
-    label.textContent = conversation.title;
-    // Select on press instead of waiting for the browser's click synthesis.
-    // In the trace, pointerup/click can arrive 90–180ms after pointerdown
-    // while the webview is busy.  The tab highlight and viewport reset are
-    // local, so there is no reason to make the visual switch wait for that
-    // extra event latency.  Keep click as the keyboard-accessible fallback;
-    // selectConversation is idempotent for the already-active tab.
-    label.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      selectConversation(conversation.id);
-    });
-    label.addEventListener("click", () => {
-      selectConversation(conversation.id);
-    });
-    const activity = document.createElement("i");
-    activity.className = "conversation-tab-activity codicon codicon-loading codicon-modifier-spin";
-    activity.title = "Dext turn running";
-    activity.setAttribute("aria-label", "Dext turn running");
-    // A pinned tab trades its close button for the pin that releases it, so
-    // that pinned conversations are not dismissed by a stray click.
-    const action = document.createElement("button");
-    action.type = "button";
-    action.className = conversation.pinned ? "conversation-tab-pin" : "conversation-tab-close";
-    action.title = conversation.running
-      ? "Stop the running turn before closing"
-      : conversation.pinned ? "Unpin conversation" : "Close conversation";
-    action.disabled = conversation.running;
-    action.setAttribute("aria-label", `${conversation.pinned ? "Unpin" : "Close"} ${conversation.title}`);
-    const actionIcon = document.createElement("i");
-    actionIcon.className = `codicon codicon-${conversation.pinned ? "pinned" : "close"}`;
-    action.append(actionIcon);
-    action.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (conversation.pinned) pinConversation(conversation.id, false);
-      else closeConversation(conversation.id);
-    });
-    tab.append(label, activity, action);
-    if (active) activeTab = tab;
-    elements.conversationTabs.append(tab);
-  }
+  const activeTab = renderConversationTabs({
+    document,
+    container: elements.conversationTabs,
+    actions: { select: selectConversation, close: closeConversation, pin: pinConversation }
+  }, sessions, activeId);
+  conversationTabDrag.refresh();
+  if (!conversationTabDrag.tracking()) activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
   conversationTabDrag.refresh();
   if (!conversationTabDrag.tracking()) activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 const composerMenus = [
   { control: elements.modeControl, menu: elements.modeMenu },
+  { control: elements.skillsControl, menu: elements.skillsMenu },
   { control: elements.permissionControl, menu: elements.permissionMenu },
   { control: elements.agentControl, menu: elements.agentMenu },
   { control: elements.modelControl, menu: elements.modelMenu }
@@ -1848,48 +1577,30 @@ function toggleComposerMenu(menu: HTMLElement): void {
   }
 }
 
-function resultHeading(response: RuntimeResponse): HTMLElement {
-  const heading = document.createElement("div");
-  heading.className = "result-meta execution-heading";
-  heading.textContent = `${response.method.id} | ${formatDuration(response.durationMs)}`;
-  let copyText: string;
-  try {
-    copyText = JSON.stringify(response.result, null, 2);
-  } catch {
-    copyText = "Unable to serialize execution output.";
-  }
-  heading.append(copyButton(copyText));
-  return heading;
+function copyButton(text: string): HTMLButtonElement {
+  return copyButtonFrom(() => text);
 }
 
-function copyButton(text: string): HTMLButtonElement {
+/** Streaming sections resolve their payload at click time. */
+function copyButtonFrom(read: () => string): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "icon-button compact output-copy";
-  button.title = "Copy output";
-  button.setAttribute("aria-label", "Copy output");
+  button.title = "Copy";
+  button.setAttribute("aria-label", "Copy");
   const icon = document.createElement("i");
   icon.className = "codicon codicon-copy";
   button.append(icon);
   button.addEventListener("click", (event) => {
+    event.preventDefault();
     event.stopPropagation();
-    void clipboard.write(text).then((success) => {
+    void clipboard.write(read()).then((success) => {
       if (!success) return;
       icon.className = "codicon codicon-check";
       window.setTimeout(() => { icon.className = "codicon codicon-copy"; }, 900);
     });
   });
   return button;
-}
-
-function markdownCopyToolbar(text: string, label = "Copy Markdown"): HTMLElement {
-  const toolbar = document.createElement("div");
-  toolbar.className = "markdown-copy-toolbar";
-  const button = copyButton(text);
-  button.title = label;
-  button.setAttribute("aria-label", button.title);
-  toolbar.append(button);
-  return toolbar;
 }
 
 function copyableContent(content: string, className = ""): HTMLElement {
@@ -1909,212 +1620,33 @@ function codeBlock(content: string): HTMLElement {
 }
 
 function jsonOutput(content: string): HTMLElement {
-  const formatted = formatJsonOutput(content);
-  if (!formatted) return copyableText(content);
-  const wrapper = document.createElement("div");
-  wrapper.className = "output-text-copyable json-output";
-  const body = document.createElement("div");
-  body.className = "markdown-body";
-  // Keep one shared Markdown rendering path for every output. The fence is
-  // needed to preserve JSON whitespace while still letting Markdown own the
-  // surrounding layout and code-block styling.
-  body.innerHTML = markdown.render("```json\n" + formatted + "\n```");
-  wrapper.append(markdownCopyToolbar(formatted, "Copy JSON"), body);
-  return wrapper;
+  return renderTurnJson(turnDomAdapter(document), content, copyButton(content)) ?? copyableText(content);
 }
 
-function uiResultText(result: Extract<DextResult, { kind: "ui" }>): string {
-  if (result.type === "choice") {
-    const selected = result.selected.length ? result.selected.join(", ") : "No selection";
-    return result.custom ? `${selected} (custom: ${result.custom})` : selected;
-  }
-  if (result.type === "confirm") return result.confirmed ? "Confirmed" : "Cancelled";
-  return result.value ?? "No input";
-}
-
-const ANSI_COLOR_CLASSES = [
-  "ansi-black", "ansi-red", "ansi-green", "ansi-yellow",
-  "ansi-blue", "ansi-magenta", "ansi-cyan", "ansi-white",
-  "ansi-bright-black", "ansi-bright-red", "ansi-bright-green", "ansi-bright-yellow",
-  "ansi-bright-blue", "ansi-bright-magenta", "ansi-bright-cyan", "ansi-bright-white"
-];
-
-const ANSI_COLORS = new Map<number, string>([
-  [30, "ansi-black"], [31, "ansi-red"], [32, "ansi-green"], [33, "ansi-yellow"],
-  [34, "ansi-blue"], [35, "ansi-magenta"], [36, "ansi-cyan"], [37, "ansi-white"],
-  [90, "ansi-bright-black"], [91, "ansi-bright-red"], [92, "ansi-bright-green"], [93, "ansi-bright-yellow"],
-  [94, "ansi-bright-blue"], [95, "ansi-bright-magenta"], [96, "ansi-bright-cyan"], [97, "ansi-bright-white"]
-]);
-
-const ANSI_PALETTE = [
-  "#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
-  "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff"
-];
-
-function ansi256Color(value: number): string {
-  if (value < 16) return ANSI_PALETTE[value] ?? ANSI_PALETTE[7]!;
-  if (value >= 232) {
-    const gray = 8 + (value - 232) * 10;
-    return `rgb(${gray}, ${gray}, ${gray})`;
-  }
-  const index = value - 16;
-  const red = Math.floor(index / 36);
-  const green = Math.floor((index % 36) / 6);
-  const blue = index % 6;
-  const channel = (component: number): number => component === 0 ? 0 : 55 + component * 40;
-  return `rgb(${channel(red)}, ${channel(green)}, ${channel(blue)})`;
-}
-
-function normalizeTerminalText(content: string): string {
-  // Progress tools redraw a line with a bare carriage return. Resolve that
-  // redraw before putting the text into a webview <pre>, which cannot emulate
-  // a terminal cursor.
-  return content
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
-    .join("\n");
-}
-
-/**
- * A number of CLIs (notably when launched through a JSON/non-TTY adapter)
- * deliberately omit ANSI SGR codes. Keep the output readable in that case by
- * highlighting the small, tool-agnostic vocabulary used by test runners and
- * shell prompts. This is only a fallback; real ANSI styling always wins.
- */
-function plainTerminalClass(line: string): string | undefined {
-  if (/^\s*(?:[>$]|PS [^>]*>)\s+/.test(line)) return "ansi-cyan";
-  if (/\b(?:fail(?:ed|ure)?|errors?|fatal)\b|[✗×]/i.test(line)) return "ansi-red";
-  if (/\b(?:pass(?:ed)?|success(?:ful)?|succeed(?:ed)?|ok)\b|✓/i.test(line)) return "ansi-green";
-  if (/^\s*(?:RUN|Test Files|Tests|Snapshots|Start|Duration)\b/.test(line)) return "ansi-bright-blue";
-  return undefined;
-}
 
 function terminalText(content: string): DocumentFragment {
-  content = normalizeTerminalText(content);
   const fragment = document.createDocumentFragment();
-  const active = new Set<string>();
-  let foreground: string | undefined;
-  const escape = String.fromCharCode(27);
-  const bell = String.fromCharCode(7);
-  const ansi = new RegExp(
-    `${escape}(?:\\[([0-9;]*)m|\\[[0-?]*[ -/]*[@-~]|\\][^${bell}]*(?:${bell}|${escape}\\\\))`,
-    "g"
-  );
-  let cursor = 0;
-  const hasAnsi = content.includes(escape);
-
-  const appendText = (value: string): void => {
-    if (!value) return;
-    if (active.size === 0 && !foreground) {
-      if (hasAnsi) {
-        fragment.append(document.createTextNode(value));
-        return;
-      }
-      const lines = value.split("\n");
-      lines.forEach((line, index) => {
-        const className = plainTerminalClass(line);
-        if (className) {
-          const span = document.createElement("span");
-          span.className = className;
-          span.textContent = line;
-          fragment.append(span);
-        } else {
-          fragment.append(document.createTextNode(line));
-        }
-        if (index < lines.length - 1) fragment.append(document.createTextNode("\n"));
-      });
-      return;
+  for (const segment of terminalSegments(content)) {
+    if (!segment.classes.length && segment.color === undefined) {
+      fragment.append(document.createTextNode(segment.text));
+      continue;
     }
     const span = document.createElement("span");
-    span.className = [...active].join(" ");
-    if (foreground) span.style.color = foreground;
-    span.textContent = value;
+    span.className = segment.classes.join(" ");
+    if (segment.color !== undefined) span.style.color = segment.color;
+    span.textContent = segment.text;
     fragment.append(span);
-  };
-
-  for (const match of content.matchAll(ansi)) {
-    appendText(content.slice(cursor, match.index));
-    const codes = match[1] === undefined ? [] : (match[1] ? match[1].split(";").map(Number) : [0]);
-    for (let index = 0; index < codes.length; index += 1) {
-      const code = codes[index] ?? 0;
-      if (code === 0) {
-        active.clear();
-        foreground = undefined;
-      } else if (code === 1) {
-        active.add("ansi-bold");
-      } else if (code === 2) {
-        active.add("ansi-dim");
-      } else if (code === 3) {
-        active.add("ansi-italic");
-      } else if (code === 4) {
-        active.add("ansi-underline");
-      } else if (code === 22) {
-        active.delete("ansi-bold");
-        active.delete("ansi-dim");
-      } else if (code === 23) {
-        active.delete("ansi-italic");
-      } else if (code === 24) {
-        active.delete("ansi-underline");
-      } else if (code === 39) {
-        for (const color of ANSI_COLOR_CLASSES) active.delete(color);
-        foreground = undefined;
-      } else if (code === 49) {
-        // Background colors are intentionally ignored to keep output readable.
-      } else {
-        const color = ANSI_COLORS.get(code);
-        if (color) {
-          for (const existing of ANSI_COLOR_CLASSES) active.delete(existing);
-          active.add(color);
-          foreground = undefined;
-          continue;
-        }
-        if (code >= 40 && code <= 47 || code >= 100 && code <= 107 || code === 7 || code === 27) {
-          // Do not reproduce terminal reverse/background blocks in the webview.
-          continue;
-        }
-        if ((code === 38 || code === 48) && codes[index + 1] === 5 && codes[index + 2] !== undefined) {
-          const value = ansi256Color(codes[index + 2]!);
-          if (code === 38) foreground = value;
-          // 48;5/48;2 background colors are deliberately ignored.
-          index += 2;
-          continue;
-        }
-        if ((code === 38 || code === 48) && codes[index + 1] === 2 && codes[index + 4] !== undefined) {
-          const [red, green, blue] = codes.slice(index + 2, index + 5);
-          const value = `rgb(${red}, ${green}, ${blue})`;
-          if (code === 38) foreground = value;
-          // 48;2 background colors are deliberately ignored.
-          index += 4;
-        }
-      }
-    }
-    cursor = match.index + match[0].length;
   }
-  appendText(content.slice(cursor));
   return fragment;
 }
 
-function terminalBlock(content: string, className = "terminal-output"): HTMLElement {
-  const wrapper = document.createElement("div");
-  wrapper.className = "output-copyable";
-  const pre = document.createElement("pre");
-  pre.className = className;
-  const code = document.createElement("code");
-  code.append(terminalText(content));
-  pre.append(code);
-  wrapper.append(pre, copyButton(content));
-  return wrapper;
-}
-
 function copyableText(content: string): HTMLElement {
-  const wrapper = document.createElement("div");
-  wrapper.className = "output-text-copyable";
   const body = document.createElement("div");
   body.className = "markdown-body";
   body.innerHTML = markdown.render(content);
-  wrapper.append(markdownCopyToolbar(content), body);
-  return wrapper;
+  renderMarkdownDiagrams(body);
+  colorizeCodeBlocks(body);
+  return renderTurnMarkdown(turnDomAdapter(document), body);
 }
 
 function disclosureSummary(label: string, detail: string): HTMLElement {
@@ -2130,142 +1662,6 @@ function disclosureSummary(label: string, detail: string): HTMLElement {
   return summary;
 }
 
-function outputTurnSection(label: string, open: boolean): { disclosure: HTMLDetailsElement; body: HTMLElement } {
-  const disclosure = document.createElement("details");
-  disclosure.className = "output-turn-section execution-disclosure";
-  disclosure.open = open;
-  disclosure.append(disclosureSummary(label, ""));
-  const body = document.createElement("div");
-  body.className = "output-turn-section-body execution-disclosure-body";
-  disclosure.append(body);
-  return { disclosure, body };
-}
-
-function referenceIcon(kind: "file" | "dir" | "symbol" | "selection" | "activeFile"): string {
-  if (kind === "dir") return "folder";
-  if (kind === "symbol") return "symbol-method";
-  return "file";
-}
-
-/** Renders readable @path tokens as the same chips used by the editor.
- * The source remains unchanged for copy and history replay. */
-function renderedInputSource(source: string): HTMLPreElement {
-  const pre = document.createElement("pre");
-  pre.className = "dext-source";
-  const parts = inputReferenceDisplayParts(source);
-  const references = parts.filter((part): part is Extract<typeof part, { kind: "ref" }> => part.kind === "ref");
-  if (!references.length) {
-    pre.append(highlightDextFragment(source));
-    return pre;
-  }
-
-  // Highlight the complete source with valid identifiers in place of @path
-  // tokens, then swap those identifiers for their interactive Chips. This
-  // keeps strings and multiline calls in one parse tree instead of attempting
-  // to highlight incomplete fragments around each reference.
-  const placeholders = references.map((_, index) => {
-    let value = `__dext_reference_${index}__`;
-    while (source.includes(value)) value = `_${value}_`;
-    return value;
-  });
-  const highlightedSource = parts.map((part) => part.kind === "ref"
-    ? placeholders[references.indexOf(part)]!
-    : part.value
-  ).join("");
-  const highlighted = highlightDextFragment(highlightedSource);
-  const walker = document.createTreeWalker(highlighted, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let node: Node | null;
-  while ((node = walker.nextNode())) textNodes.push(node as Text);
-  for (const textNode of textNodes) {
-    const value = textNode.nodeValue ?? "";
-    const marker = new RegExp(`(${placeholders.map(escapeRegExp).join("|")})`, "g");
-    if (!marker.test(value)) continue;
-    marker.lastIndex = 0;
-    const replacement = document.createDocumentFragment();
-    let cursor = 0;
-    for (const match of value.matchAll(marker)) {
-      const index = match.index ?? 0;
-      if (index > cursor) replacement.append(document.createTextNode(value.slice(cursor, index)));
-      const referenceIndex = placeholders.indexOf(match[0]);
-      if (referenceIndex >= 0) replacement.append(inputReferenceChipElement(references[referenceIndex]!.reference));
-      cursor = index + match[0].length;
-    }
-    if (cursor < value.length) replacement.append(document.createTextNode(value.slice(cursor)));
-    textNode.replaceWith(replacement);
-  }
-  pre.append(highlighted);
-  return pre;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function highlightDextFragment(source: string): DocumentFragment {
-  const fragment = document.createDocumentFragment();
-  let offset = 0;
-  const ranges = dextHighlightRanges(source);
-  highlightCode(
-    source,
-    pythonParser.parse(source),
-    classHighlighter,
-    (text, classes) => {
-      if (!text) return;
-      const highlighted = dextHighlightClass(classes, offset, text, ranges);
-      if (!highlighted) {
-        fragment.append(document.createTextNode(text));
-        offset += text.length;
-        return;
-      }
-      const span = document.createElement("span");
-      span.className = highlighted;
-      span.textContent = text;
-      fragment.append(span);
-      offset += text.length;
-    },
-    () => { fragment.append(document.createTextNode("\n")); offset += 1; }
-  );
-  return fragment;
-}
-
-function inputReferenceChipElement(reference: ContextReferenceOccurrence): HTMLElement {
-  const descriptor = fileReferenceChipDescriptor(
-    compactFileReferenceLabel(reference.payload),
-    reference.payload
-  );
-  return createFileReferenceChip({
-    document,
-    ...descriptor,
-    modifierClass: "output-file-reference",
-    icon: referenceIcon(reference.kind),
-    ...(reference.kind === "file"
-      ? { onOpen: () => openInputReference(reference) }
-      : {})
-  });
-}
-
-/** Turn actions live in the summary, which is a click target of its own, so
- * every one of them has to stop the click from folding the turn. */
-function turnActionButton(icon: string, label: string, onActivate: () => void, disableWhileRunning = false): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "output-turn-action icon-button compact";
-  button.title = label;
-  button.setAttribute("aria-label", label);
-  button.disabled = disableWhileRunning && executing;
-  if (disableWhileRunning) button.dataset.disableWhileRunning = "true";
-  const glyph = document.createElement("i");
-  glyph.className = `codicon codicon-${icon}`;
-  button.append(glyph);
-  button.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    onActivate();
-  });
-  return button;
-}
-
 function syncTurnActions(): void {
   for (const button of elements.result.querySelectorAll<HTMLButtonElement>(".output-turn-action[data-disable-while-running], .plan-action.primary")) {
     const turn = button.closest<HTMLElement>(".output-turn");
@@ -2273,530 +1669,48 @@ function syncTurnActions(): void {
   }
 }
 
-function createOutputTurn(
-  turnId: string,
-  source: string,
-  createdAt = Date.now(),
-  options: { executePlan?: boolean; planPath?: string; lazy?: boolean; open?: boolean; title?: string; sessionId?: string; mode?: DextHistoryRecord["mode"] } = {}
-): OutputTurnElements {
-  source = normalizeInputReferenceSource(source);
-  const lazy = options.lazy === true;
-  for (const turn of outputTurns.values()) turn.disclosure.open = false;
-  const disclosure = document.createElement("details");
-  disclosure.className = "output-turn";
-  disclosure.open = options.open ?? !lazy;
-  disclosure.dataset.turnId = turnId;
-  const summary = document.createElement("summary");
-  const chevron = document.createElement("i");
-  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-  const time = document.createElement("span");
-  time.className = "output-turn-time";
-  time.textContent = new Date(createdAt).toLocaleTimeString();
-  const title = document.createElement("span");
-  title.className = "output-turn-title";
-  const defaultTitle = options.executePlan && options.planPath
-    ? `Plan: ${options.planPath.split("/").pop() ?? options.planPath}`
-    : inputReferenceDisplayText(source).split(/\r?\n/, 1)[0]?.slice(0, 140) || "Dext turn";
-  const turnTitle = new TurnTitle(title, defaultTitle, options.title);
-  const sessionId = options.sessionId ?? activeConversationId;
-  // Scope native actions to this title only, leaving selection menus in the
-  // Input, Process and Output bodies intact. Refresh at invocation so cached
-  // rows and completed executions cannot retain stale running-state flags.
-  const updateContext = (): void => {
-    summary.dataset.vscodeContext = JSON.stringify({
-      webviewSection: "conversationTurn",
-      sessionId,
-      turnId,
-      dextTurnRunning: executing && activeExecutionSessionId === sessionId && activeTurnId === turnId,
-      dextConversationRunning: executing && activeExecutionSessionId === sessionId,
-      preventDefaultContextMenuItems: true
-    });
-  };
-  updateContext();
-  summary.addEventListener("contextmenu", updateContext);
-  const body = document.createElement("div");
-  body.className = "output-turn-body";
-  const actions = document.createElement("span");
-  actions.className = "output-turn-actions";
-  actions.append(
-    turnActionButton(TURN_EDIT_ACTION.icon, TURN_EDIT_ACTION.label, () => {
-      editor.setValue(source);
-      setSectionOpen(elements.inputHeading, elements.inputBody, true);
-    }),
-    turnActionButton(TURN_RETRY_ACTION.icon, TURN_RETRY_ACTION.label, () => {
-      if (sessionId) vscode.postMessage({ type: "retryTurn", sessionId, turnId });
-    }, true),
-    turnActionButton(TURN_RENAME_ACTION.icon, TURN_RENAME_ACTION.label, () => {
-      if (sessionId) vscode.postMessage({ type: "renameTurn", sessionId, turnId });
-    }, true),
-    turnActionButton(TURN_FORK_ACTION.icon, TURN_FORK_ACTION.label, () => {
-      if (sessionId) vscode.postMessage({ type: "forkFromTurn", sessionId, turnId });
-    }, true),
-    turnActionButton(TURN_COPY_ACTION.icon, TURN_COPY_ACTION.label, () => {
-      if (sessionId) vscode.postMessage({ type: "copyTurn", sessionId, turnId });
-    }, true),
-    turnActionButton(TURN_DELETE_ACTION.icon, TURN_DELETE_ACTION.label, () => {
-      if (sessionId) vscode.postMessage({ type: "deleteTurn", sessionId, turnId });
-    }, true)
-  );
-  // Keep the turn title as the primary row label, matching the history view;
-  // metadata belongs at the trailing edge of the row rather than before it.
-  const planExecutionStatus = document.createElement("span");
-  planExecutionStatus.className = "plan-status";
-  planExecutionStatus.hidden = !options.executePlan;
-  planExecutionStatus.textContent = "Running";
-  summary.append(chevron, title, planExecutionStatus, time, actions);
-  let inputBody: HTMLElement | undefined;
-  if (!options.executePlan) {
-    // Keep the shared disclosure construction recognizable; lazy history
-    // turns close it immediately after creating the lightweight shell.
-    const input = outputTurnSection("Input", true);
-    const modeLabel = document.createElement("span");
-    modeLabel.className = "turn-mode";
-    modeLabel.dataset.mode = options.mode ?? "unknown";
-    modeLabel.textContent = turnModeLabel(options.mode);
-    modeLabel.title = options.mode ? `Submitted in ${turnModeLabel(options.mode)} mode` : "Mode was not recorded for this turn";
-    input.disclosure.querySelector(".disclosure-meta")?.replaceWith(modeLabel);
-    input.disclosure.open = !lazy;
-    inputBody = input.body;
-    if (!lazy) {
-      const inputText = renderedInputSource(source);
-      const inputCopy = document.createElement("div");
-      inputCopy.className = "output-turn-input";
-      inputCopy.append(inputText, copyButton(source));
-      input.body.append(inputCopy);
-    }
-    body.append(input.disclosure);
-  }
-  const process = outputTurnSection("Process", !lazy);
-  const todos = new AgentTodoView();
-  const output = outputTurnSection("Output", !lazy);
-  body.append(todos.element, process.disclosure, output.disclosure);
-  disclosure.append(summary, body);
-  elements.result.append(disclosure);
-  const turn: OutputTurnElements = {
-    disclosure,
-    title: turnTitle,
-    planExecutionStatus,
-    ...(inputBody ? { input: inputBody } : {}),
-    process: process.body,
-    processDisclosure: process.disclosure,
-    todos,
-    output: output.body,
-    outputDisclosure: output.disclosure,
-    hydrated: !lazy
-  };
-  outputTurns.set(turnId, turn);
-  activeTurn = turn;
-  syncResultToggle();
-  return turn;
-}
 
-function selectOutputTurn(turnId: string): OutputTurnElements | undefined {
-  activeTurn = outputTurns.get(turnId);
-  return activeTurn;
-}
-
-type DiffMode = "inline" | "split";
-
-let defaultDiffMode: DiffMode = "inline";
-
-function setDiffMode(container: HTMLElement, mode: DiffMode): void {
-  const view = container.querySelector<HTMLElement>(".diff-view");
-  if (view) view.dataset.diffView = mode;
-  container.querySelectorAll<HTMLButtonElement>(".diff-mode-button").forEach((button) => {
-    const active = button.dataset.diffMode === mode;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-}
-
-function diffModeSwitch(container: HTMLElement): HTMLElement {
-  const control = document.createElement("span");
-  control.className = "diff-mode-switch";
-  control.setAttribute("role", "group");
-  control.setAttribute("aria-label", "Diff layout");
-  for (const [mode, label] of [["inline", "Inline"], ["split", "Split"]] as const) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `diff-mode-button${mode === defaultDiffMode ? " active" : ""}`;
-    button.dataset.diffMode = mode;
-    button.title = `${label} diff`;
-    button.textContent = label;
-    button.setAttribute("aria-pressed", String(mode === defaultDiffMode));
-    button.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      setDiffMode(container, mode);
-    });
-    control.append(button);
-  }
-  return control;
-}
-
-function diffSide(line: ReturnType<typeof presentDiff>["rows"][number]["before"], marker: string): HTMLElement {
-  const side = document.createElement("span");
-  side.className = `diff-side ${line?.kind ?? "empty"}`;
-  const lineNumber = document.createElement("span");
-  lineNumber.className = "diff-line-number";
-  lineNumber.textContent = line ? String(line.line) : "";
-  const sign = document.createElement("span");
-  sign.className = "diff-marker";
-  sign.textContent = line ? marker : "";
-  const code = document.createElement("span");
-  code.className = "diff-code";
-  code.textContent = line?.text ?? "";
-  side.append(lineNumber, sign, code);
-  return side;
-}
-
-function appendDiffView(container: HTMLElement, change: PatchChange): void {
-  const presentation = presentDiff(change);
-  const view = document.createElement("div");
-  view.className = "diff-view";
-  view.dataset.diffView = "inline";
-  const inline = document.createElement("div");
-  inline.className = "diff-inline";
-  const split = document.createElement("div");
-  split.className = "diff-split";
-  for (const row of presentation.rows) {
-    if (row.before?.kind === "context") inline.append(diffSide(row.before, " "));
-    else {
-      if (row.before) inline.append(diffSide(row.before, "-"));
-      if (row.after) inline.append(diffSide(row.after, "+"));
-    }
-    const splitRow = document.createElement("span");
-    splitRow.className = "diff-split-row";
-    splitRow.append(
-      diffSide(row.before, row.before?.kind === "removed" ? "-" : " "),
-      diffSide(row.after, row.after?.kind === "added" ? "+" : " ")
-    );
-    split.append(splitRow);
-  }
-  view.dataset.diffView = defaultDiffMode;
-  view.append(inline, split);
-  container.append(view);
-}
-
-function fileChangeDisclosure(
-  change: PatchChange,
-  className = "agent-file-change",
-  reviewTurnId?: string
-): HTMLDetailsElement {
-  const disclosure = document.createElement("details");
-  disclosure.className = className;
-  disclosure.dataset.diffContainer = "";
-  const summary = document.createElement("summary");
-  const chevron = document.createElement("i");
-  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-  const name = change.uri.replaceAll("\\", "/").split("/").pop() ?? change.uri;
-  const counts = presentDiff(change);
-  const label = document.createElement("span");
-  label.textContent = name;
-  const count = document.createElement("span");
-  count.className = "diff-count";
-  count.innerHTML = `<span class="diff-added">+${counts.added}</span> <span class="diff-removed">-${counts.removed}</span>`;
-  const path = document.createElement("div");
-  path.className = "agent-file-path";
-  path.textContent = change.uri;
-  summary.append(chevron, label, count, diffModeSwitch(disclosure));
-  if (reviewTurnId) {
-    disclosure.dataset.reviewUri = change.uri;
-    summary.append(patchReviewActions(reviewTurnId, [change.uri]));
-  }
-  disclosure.append(summary, path);
-  appendDiffView(disclosure, change);
-  return disclosure;
-}
-
-/** Nothing has been written yet at this point, so the buttons are the only way
- * the change reaches the workspace. */
-function patchReviewActions(turnId: string, uris: readonly string[], suffix = ""): HTMLElement {
-  const row = document.createElement("span");
-  row.className = "patch-review-actions";
-  const button = (
-    icon: string,
-    label: string,
-    accept: boolean,
-    variant: string
-  ): HTMLButtonElement => {
-    const element = document.createElement("button");
-    element.type = "button";
-    element.className = `patch-review-action ${variant}`;
-    element.title = label;
-    element.setAttribute("aria-label", label);
-    const glyph = document.createElement("i");
-    glyph.className = `codicon codicon-${icon}`;
-    const text = document.createElement("span");
-    text.textContent = label;
-    element.append(glyph, text);
-    element.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      for (const sibling of row.querySelectorAll("button")) sibling.disabled = true;
-      vscode.postMessage({ type: "resolvePatch", turnId, uris: [...uris], accept });
-    });
-    return element;
-  };
-  row.append(
-    button("check", `Accept${suffix}`, true, "accept"),
-    button("close", `Reject${suffix}`, false, "reject")
-  );
-  return row;
-}
-
-/** A resolved file stops being a proposal, so its entry either reports what
- * happened or steps aside. A conflict stays reviewable on purpose. */
-function applyPatchResolution(
-  turnId: string,
-  uris: readonly string[],
-  status: "applied" | "rejected" | "conflict" | "unchanged",
-  message: string
-): void {
-  for (const uri of uris) {
-    for (const entry of elements.result.querySelectorAll<HTMLDetailsElement>("details[data-review-uri]")) {
-      if (entry.dataset.reviewUri !== uri) continue;
-      const actions = entry.querySelector<HTMLElement>(".patch-review-actions");
-      if (status === "conflict") {
-        for (const button of actions?.querySelectorAll("button") ?? []) button.disabled = false;
-        entry.classList.add("patch-conflict");
-        continue;
-      }
-      entry.open = false;
-      delete entry.dataset.reviewUri;
-      entry.classList.remove("patch-conflict");
-      entry.classList.add(status === "rejected" ? "patch-rejected" : "patch-applied");
-      actions?.replaceWith(patchReviewOutcome(status));
-    }
-  }
-  const all = elements.result.querySelector<HTMLElement>(`[data-review-all="${turnId}"]`);
-  if (all) {
-    if (elements.result.querySelector("details[data-review-uri]")) {
-      for (const button of all.querySelectorAll("button")) button.disabled = false;
-    } else {
-      all.remove();
-    }
-  }
-  if (status === "conflict") appendPatchNotice(message);
-}
-
-/** A conflict is reported beside the changes rather than through the error
- * renderer, which clears the turn it is called on. */
-function appendPatchNotice(message: string): void {
-  const target = activeTurn?.output ?? elements.result;
-  const existing = target.querySelector(".patch-review-notice");
-  if (existing) existing.remove();
-  const notice = document.createElement("div");
-  notice.className = "patch-review-notice";
-  notice.textContent = message;
-  target.append(notice);
-}
-
-function patchReviewOutcome(status: "applied" | "rejected" | "unchanged"): HTMLElement {
-  const outcome = document.createElement("span");
-  outcome.className = `patch-review-outcome ${status}`;
-  const glyph = document.createElement("i");
-  glyph.className = `codicon codicon-${status === "rejected" ? "circle-slash" : "check-all"}`;
-  const label = document.createElement("span");
-  label.textContent = status === "rejected" ? "Rejected" : status === "unchanged" ? "No change" : "Accepted";
-  outcome.append(glyph, label);
-  return outcome;
-}
-
-function appendAgentPresentationExtras(container: HTMLElement, presentation: AgentMessagePresentation): void {
-  for (const detail of presentation.details) {
-    const element = document.createElement("div");
-    element.className = `agent-result-detail ${detail.tone}`;
-    if (detail.meta) {
-      const meta = document.createElement("span");
-      meta.className = "agent-result-detail-meta";
-      meta.textContent = detail.meta;
-      element.append(meta);
-    }
-    element.append(document.createTextNode(detail.text));
-    container.append(element);
-  }
-  for (const change of presentation.changes) {
-    container.append(fileChangeDisclosure(change, "agent-file-change agent-result-change"));
-  }
-  for (const reference of presentation.references) {
-    const disclosure = document.createElement("details");
-    disclosure.className = "agent-result-reference";
-    const name = reference.uri.replaceAll("\\", "/").split("/").pop() ?? reference.uri;
-    const meta = [reference.location, reference.symbol].filter(Boolean).join(" · ");
-    disclosure.append(disclosureSummary(name, meta));
-    const path = document.createElement("div");
-    path.className = "agent-file-path";
-    path.textContent = reference.uri;
-    disclosure.append(path);
-    if (reference.content) disclosure.append(codeBlock(reference.content));
-    container.append(disclosure);
-  }
-  for (const section of presentation.sections) {
-    const disclosure = document.createElement("details");
-    disclosure.className = `agent-result-section ${section.tone}`;
-    disclosure.append(disclosureSummary(section.title, ""));
-    const body = document.createElement("div");
-    body.className = "agent-result-section-body";
-    body.append(section.code ? codeBlock(section.text) : copyableText(section.text));
-    disclosure.append(body);
-    container.append(disclosure);
-  }
-}
-
-/** A plan result links back to its saved document for review or editing. */
-function planActions(planPath: string): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "plan-actions";
-  const open = document.createElement("button");
-  open.type = "button";
-  open.className = "plan-action";
-  const openGlyph = document.createElement("i");
-  openGlyph.className = "codicon codicon-checklist";
-  const openLabel = document.createElement("span");
-  openLabel.textContent = `Plan: ${planPath.split("/").pop() ?? planPath}`;
-  open.title = `Open ${planPath}`;
-  open.append(openGlyph, openLabel);
-  open.addEventListener("click", () => {
-    vscode.postMessage({ type: "openFileReference", reference: planPath });
-  });
-  row.append(open);
-  return row;
-}
-
-function renderExecution(response: RuntimeResponse, reviewTurnId?: string): DocumentFragment {
+function renderExecution(response: RuntimeResponse): DocumentFragment {
   const fragment = document.createDocumentFragment();
-  fragment.append(resultHeading(response));
-  const result = response.result;
-  if (result.kind === "chat" || result.kind === "text") {
-    fragment.append(copyableText(result.text));
-    if (result.kind === "chat" && result.planPath) fragment.append(planActions(result.planPath));
-  } else if (result.kind === "explain") {
-    fragment.append(copyableText(result.text));
-  } else if (result.kind === "edit" || result.kind === "agent") {
-    const summary = result.kind === "agent" ? result.text : result.summary;
-    if (summary) fragment.append(copyableText(summary));
-    const changes = result.kind === "agent" ? result.patch?.changes ?? [] : result.patch.changes;
-    for (const change of changes) {
-      fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change", reviewTurnId));
-    }
-  } else if (result.kind === "apply") {
-    fragment.append(copyableText(`${result.status}: ${result.summary}`));
-  } else if (result.kind === "print") {
-    if (result.label) {
-      const label = document.createElement("div");
-      label.className = "output-title";
-      label.textContent = result.label;
-      fragment.append(label);
-    }
-    // Structured print values are formatted and highlighted as JSON; non-JSON
-    // text continues through the normal Markdown renderer.
-    fragment.append(jsonOutput(result.text));
-  } else if (result.kind === "terminal") {
-    const disclosure = document.createElement("details");
-    disclosure.className = "execution-disclosure terminal-disclosure";
-    disclosure.append(disclosureSummary(
-      result.command,
-      `${result.status} | exit ${result.exit_code} | ${formatDuration(result.duration_ms)}`
-    ));
-    const body = document.createElement("div");
-    body.className = "execution-disclosure-body";
-    const cwd = document.createElement("div");
-    cwd.className = "result-meta";
-    cwd.textContent = result.cwd;
-    body.append(cwd);
-    if (result.stdout) body.append(terminalBlock(result.stdout));
-    if (result.stderr) body.append(terminalBlock(result.stderr, "terminal-output terminal-stderr"));
-    disclosure.append(body);
-    fragment.append(disclosure);
-  } else if (result.kind === "code") {
-    if (result.title) {
-      const title = document.createElement("div");
-      title.className = "output-title";
-      title.textContent = result.title;
-      fragment.append(title);
-    }
-    fragment.append(codeBlock(result.code));
-  } else if (result.kind === "review") {
-    fragment.append(copyableText(result.summary));
-    for (const finding of result.findings) {
-      const item = document.createElement("div");
-      item.className = `finding ${finding.severity} with-icon`;
-      const icon = document.createElement("i");
-      icon.className = `codicon codicon-${finding.severity}`;
-      const content = document.createElement("span");
-      content.textContent = finding.message;
-      item.append(icon, content);
-      fragment.append(item);
-    }
-  } else if (result.kind === "plan") {
-    const title = document.createElement("div");
-    title.className = "output-title";
-    title.textContent = result.title;
-    const list = document.createElement("ol");
-    list.className = "plan-list";
-    for (const step of result.steps) {
-      const item = document.createElement("li");
-      item.textContent = step.title;
-      if (step.detail) {
-        const detail = document.createElement("small");
-        detail.textContent = step.detail;
-        item.append(detail);
-      }
-      list.append(item);
-    }
-    fragment.append(title, list);
-  } else if (result.kind === "patch") {
-    const title = document.createElement("div");
-    title.className = "output-title";
-    title.textContent = result.title;
-    fragment.append(title);
-    for (const change of result.changes) fragment.append(fileChangeDisclosure(change, "agent-file-change execution-file-change"));
-  } else if (result.kind === "ui") {
-    fragment.append(copyableText(uiResultText(result)));
-  }
+  fragment.append(...renderTurnResult({
+    ...turnDomAdapter(document),
+    markdown: copyableText,
+    json: jsonOutput,
+    plan: (planPath) => planActions(document, planPath, (reference) => vscode.postMessage({ type: "openFileReference", reference }))
+  }, response.result, response.patchApplication));
   return fragment;
 }
 
-/** Reviewing file by file is the careful path, so a single row covers the common
- * case of taking or dropping the whole proposal. */
-function patchReviewHeader(turnId: string, entries: readonly WorkflowStepResponse[]): HTMLElement {
-  const files = new Set<string>();
-  for (const step of entries) {
-    const result = step.response?.result;
-    if (result?.kind !== "agent") continue;
-    for (const change of result.patch?.changes ?? []) files.add(change.uri);
-  }
-  const header = document.createElement("div");
-  header.className = "patch-review-header";
-  header.dataset.reviewAll = turnId;
-  const label = document.createElement("span");
-  label.className = "patch-review-label";
-  label.textContent = `${files.size} file${files.size === 1 ? "" : "s"} awaiting review`;
-  // An empty uri list is the host's signal to take every pending file, so the
-  // row keeps working after some files have already been resolved.
-  header.append(label, patchReviewActions(turnId, [], " all"));
-  return header;
-}
-
-function renderResult(response: InputExecutionResponse, reviewTurnId?: string): void {
-  const target = activeTurn?.output ?? elements.result;
+function renderResult(response: InputExecutionResponse): void {  const target = transcript.active?.output ?? elements.result;
   target.replaceChildren();
   const entries: WorkflowStepResponse[] = response.steps ?? response.executions.map((execution) => ({
     method: execution.method.id,
     state: "success" as const,
     response: execution
   }));
-  renderAgentFileChanges(entries);
-  if (reviewTurnId) target.append(patchReviewHeader(reviewTurnId, entries));
+  trace.renderFileChanges(entries);
   // Comprehension branches ran at the same time, so they are laid out beside one
   // another instead of pretending they were a sequence.
   let fanOut: HTMLElement | undefined;
   for (const [index, step] of entries.entries()) {
+    // No `echo: true` — the call keeps its own result out of Output.
+    if (step.quiet) {
+      if (step.branch === undefined) fanOut = undefined;
+      continue;
+    }
     const item = document.createElement("section");
     item.className = "execution-result";
-    if (step.response) item.append(renderExecution(step.response, reviewTurnId));
-    else {
+    if (step.response) item.append(renderExecution(step.response));
+    else if (step.stream) {
+      // Process output is not an API call, so it gets no card of its own.
+      const output = document.createElement("div");
+      output.className = `markdown-body process-output process-output-${step.stream.channel}`;
+      output.dataset.channel = step.stream.channel;
+      output.innerHTML = markdown.render(step.stream.text);
+      renderMarkdownDiagrams(output);
+      colorizeCodeBlocks(output);
+      item.append(output);
+    } else {
       const disclosure = document.createElement("details");
       disclosure.className = "execution-disclosure step-disclosure";
       disclosure.append(disclosureSummary(
@@ -2813,7 +1727,7 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
     }
     if (step.branch === undefined) {
       fanOut = undefined;
-      target.append(item);
+      if (item.childNodes.length > 0) target.append(item);
       if (index < entries.length - 1) item.classList.add("has-next");
       continue;
     }
@@ -2826,8 +1740,14 @@ function renderResult(response: InputExecutionResponse, reviewTurnId?: string): 
     item.dataset.branch = String(step.branch + 1);
     fanOut.append(item);
   }
+  const outputCopy = entries.flatMap((step) => {
+    if (step.quiet) return [];
+    if (step.response) return [resultCopyText(step.response.result)];
+    if (step.stream) return [step.stream.text];
+    return [];
+  }).filter(Boolean).join("\n\n");
+  transcript.active?.setOutputCopy?.(outputCopy);
   elements.resultSection.classList.remove("hidden");
-  syncResultToggle();
 }
 
 function clearInputError(): void {
@@ -2843,75 +1763,96 @@ function renderInputError(message: unknown): void {
 
 function renderOutputError(message: unknown): void {
   const text = message instanceof Error ? message.message : String(message);
-  const target = activeTurn?.output ?? elements.result;
+  const target = transcript.active?.output ?? elements.result;
   target.replaceChildren();
   const summary = document.createElement("pre");
   summary.className = "error-output";
   summary.textContent = text;
   target.append(summary);
+  transcript.active?.setOutputCopy?.("");
   elements.resultSection.classList.remove("hidden");
-  syncResultToggle();
 }
 
 function renderError(message: unknown): void {
   renderInputError(message);
 }
 
-/** Keep a live Agent trace in view only while the reader is already at its
- * end. Scrolling upward to inspect an earlier event must remain stable. */
-function resultIsNearBottom(): boolean {
-  const { scrollTop, scrollHeight, clientHeight } = elements.resultBody;
-  return scrollHeight - scrollTop - clientHeight <= 24;
+/** The turn the stepping controls start from: the turn the reader last expanded
+ * or navigated to, otherwise the active turn. */
+function navigationTurn(): HTMLElement | undefined {
+  const anchored = turnAnchorId ? transcript.get(turnAnchorId)?.disclosure : undefined;
+  return anchored ?? transcript.active?.disclosure;
+}
+
+/** The visible row before or after the current turn, in transcript order. */
+function neighboringTurn(offset: -1 | 1): HTMLElement | undefined {
+  const rows = [...elements.result.querySelectorAll<HTMLElement>("details.output-turn")];
+  const current = navigationTurn();
+  if (!current) return undefined;
+  const index = rows.indexOf(current);
+  return index < 0 ? undefined : rows[index + offset];
+}
+
+/** Make one exchange the current view: collapse every other turn, then reveal
+ * the target's Input and Output instead of its Process timeline. The navigation
+ * anchor moves here too, so repeated presses keep stepping in that direction. */
+function activateNavigationTurn(target: HTMLElement): void {
+  const turnId = target.dataset.turnId;
+  if (!turnId) return;
+  const turn = transcript.get(turnId);
+  if (!turn) return;
+  turnAnchorId = turnId;
+  for (const row of elements.result.querySelectorAll<HTMLDetailsElement>("details.output-turn")) {
+    if (row !== target) row.open = false;
+  }
+  turn.disclosure.open = true;
+}
+
+/** Expanding a row by hand is also a navigation choice; it becomes the turn the
+ * stepping controls move around. */
+function rememberNavigationTurn(event: Event): void {
+  const target = event.target;
+  if (target instanceof HTMLDetailsElement && target.open && target.classList.contains("output-turn")) {
+    turnAnchorId = target.dataset.turnId;
+  }
 }
 
 function syncJumpToLatest(): void {
-  // The control is useful for both a live stream and already-finished
-  // conversations.  Tying visibility to `executing` (or to an active stream
-  // panel) made it disappear as soon as a response finished, even when the
-  // reader had scrolled away from the newest output.
-  jumpToLatest.hidden = resultIsNearBottom();
+  scroll.syncJumpControls();
 }
 
-function followResultIfNeeded(shouldFollow: boolean): void {
-  if (!shouldFollow) {
-    cancelScheduledResultScroll();
-    return;
-  }
-  cancelScheduledResultScroll();
-  const generation = resultScrollGeneration;
-  resultScrollFrame = requestAnimationFrame(() => {
-    resultScrollFrame = undefined;
-    if (generation !== resultScrollGeneration) return;
-    elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
-    syncJumpToLatest();
-  });
+function reportStaleResultRange(): void {
+  scroll.reportStaleRange();
 }
 
-/** Selecting a conversation should open at its latest reply, like a chat
- * timeline. Defer until the freshly-rendered disclosures have been laid out
- * so scrollHeight reflects the complete session. */
+function syncResultScrollGutter(): void {
+  scroll.syncGutter();
+}
+
+/** A running turn follows its Process timeline only while that timeline is
+ * visible. Keeping the disclosure closed is an explicit reader choice; new
+ * events must not reopen it or pull the reader back to the live end. */
+function resultFollowAllowed(): boolean {
+  return !executing || !transcript.active?.processDisclosure || transcript.active.processDisclosure.open;
+}
+
+function pinResultToBottom(): void {
+  scroll.pin();
+}
+
 function scrollResultToBottom(): void {
-  cancelScheduledResultScroll();
-  const generation = resultScrollGeneration;
-  resultScrollFrame = requestAnimationFrame(() => {
-    resultScrollFrame = requestAnimationFrame(() => {
-      resultScrollFrame = undefined;
-      if (generation !== resultScrollGeneration || !activeConversationId || activeConversationId !== renderedConversationId) return;
-      elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
-      syncJumpToLatest();
-    });
-  });
+  scroll.scrollToBottom();
 }
 
 function agentStreamPanel(): HTMLElement {
   if (agentStream?.isConnected) return agentStream;
   const panel = document.createElement("section");
   panel.className = "agent-stream-panel";
-  (activeTurn?.process ?? elements.result).append(panel);
+  (transcript.active?.process ?? elements.result).append(panel);
   agentStream = panel;
   // Process already owns the first-level disclosure. Put live run metadata in
   // its title instead of nesting a second disclosure around the timeline.
-  agentProgress = activeTurn?.processDisclosure.querySelector<HTMLElement>(".disclosure-meta") ?? undefined;
+  agentProgress = transcript.active?.processMeta;
   updateAgentProgress(agentProgressState);
   return panel;
 }
@@ -2920,19 +1861,16 @@ function updateAgentProgress(label: string): void {
   if (!agentProgress) return;
   agentProgressState = label;
   const elapsed = agentRunStartedAt ? Math.max(0, Date.now() - agentRunStartedAt) : 0;
-  const totalTokens = agentTokenUsage?.totalTokens
-    ?? (agentTokenUsage?.inputTokens !== undefined && agentTokenUsage.outputTokens !== undefined
-      ? agentTokenUsage.inputTokens + agentTokenUsage.outputTokens
-      : undefined);
-  const tokenLabel = totalTokens === undefined
-    ? ""
-    : `${totalTokens >= 1_000 ? `${(totalTokens / 1_000).toFixed(totalTokens >= 10_000 ? 0 : 1)}k` : totalTokens} tokens`;
+  const tokenLabel = formatTurnTokenUsage(agentTokenUsage);
   const details = [
     tokenLabel,
-    agentEditedUris.size ? `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}` : "",
-    agentCommandIds.size ? `Ran ${agentCommandIds.size} command${agentCommandIds.size === 1 ? "" : "s"}` : ""
+    trace.editedFileCount() ? `Edited ${trace.editedFileCount()} file${trace.editedFileCount() === 1 ? "" : "s"}` : "",
+    trace.commandCount() ? `Ran ${trace.commandCount()} command${trace.commandCount() === 1 ? "" : "s"}` : ""
   ].filter(Boolean);
-  agentProgress.textContent = `${agentProgressState} for ${formatDuration(elapsed)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
+  const text = `${agentProgressState} for ${formatDuration(elapsed)}${details.length ? ` · ${details.join(" · ")}` : ""}`;
+  // The timer polls faster than the displayed duration changes. Keep the text
+  // node stable between changes instead of invalidating layout on every tick.
+  if (agentProgress.textContent !== text) agentProgress.textContent = text;
 }
 
 function startAgentProgress(startedAt = Date.now()): void {
@@ -2943,296 +1881,50 @@ function startAgentProgress(startedAt = Date.now()): void {
 }
 
 function finishAgentProgress(): void {
-  activeTurn?.todos.setRunning(false);
+  transcript.active?.todos.setRunning(false);
+  transcript.active?.questions?.setRunning(false);
   if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = undefined;
   updateAgentProgress("Worked");
 }
 
-function agentEventKind(event: AgentStreamEvent): "reasoning" | "work" | "tool" {
-  if (event.phase === "tool") return "tool";
-  return event.group === "work-log" ? "work" : "reasoning";
-}
-
-function createAgentEventItem(event: AgentStreamEvent): HTMLElement {
-  const kind = agentEventKind(event);
-  const message = document.createElement("section");
-  message.className = `agent-stream-item agent-trace-message agent-trace-${kind}`;
-  const body = document.createElement("div");
-  body.className = "agent-stream-text markdown-body";
-  message.append(body);
-  return message;
-}
-
-function agentToolLabel(event: AgentStreamEvent): string {
-  return (event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180);
-}
-
-function updateAgentToolGroupLabel(group: AgentToolGroup): void {
-  if (group.labelText) {
-    group.label.textContent = group.labelText;
-    return;
-  }
-  const count = group.commands.length;
-  group.label.textContent = `Ran ${count} command${count === 1 ? "" : "s"}`;
-}
-
-const TOOL_GLYPHS: Record<AgentToolKind, string> = {
-  command: "codicon-terminal",
-  file: "codicon-diff",
-  image: "codicon-file-media",
-  step: "codicon-circle-small-filled"
-};
-
-function toolGlyph(kind: AgentToolKind = "command"): HTMLElement {
-  const icon = document.createElement("i");
-  icon.className = `agent-trace-glyph codicon ${TOOL_GLYPHS[kind]}`;
-  return icon;
-}
-
-function createAgentToolGroup(): AgentToolGroup {
-  const disclosure = document.createElement("details");
-  disclosure.className = "agent-stream-item agent-trace-event agent-trace-tool";
-  disclosure.open = false;
-  const summary = document.createElement("summary");
-  const chevron = document.createElement("i");
-  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-  const label = document.createElement("span");
-  label.className = "agent-stream-summary-label";
-  const body = document.createElement("div");
-  body.className = "agent-trace-tool-body";
-  summary.append(toolGlyph(), label, chevron);
-  disclosure.append(summary, body);
-  agentStreamPanel().append(disclosure);
-  return { disclosure, label, body, commands: [] };
-}
-
-function createAgentToolCommand(
-  event: AgentStreamEvent,
-  container: HTMLElement,
-  group?: AgentToolGroup
-): AgentToolCommand {
-  const command = document.createElement("details");
-  command.className = "agent-trace-command";
-  command.open = false;
-  const summary = document.createElement("summary");
-  const chevron = document.createElement("i");
-  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-  const summaryLabel = document.createElement("span");
-  summaryLabel.className = "agent-trace-command-label";
-  summary.append(toolGlyph(event.toolKind), summaryLabel, chevron);
-  command.append(summary);
-  const body = document.createElement("pre");
-  body.className = "terminal-output agent-trace-command-body";
-  const code = document.createElement("code");
-  body.append(code);
-  const copy = copyButton(event.text);
-  command.append(body, copy);
-  container.append(command);
-  const item: AgentToolCommand = {
-    body,
-    copy,
-    label: agentToolLabel(event),
-    summaryLabel,
-    ...(group ? { group } : {})
-  };
-  summaryLabel.textContent = item.label;
-  if (group) {
-    group.commands.push(item);
-    updateAgentToolGroupLabel(group);
-  }
-  return item;
-}
-
-/**
- * Agents that report their own step grouping get reproduced exactly, including
- * steps they chose to show on their own row. Agents that only stream a flat list
- * of tool calls keep the older behaviour of folding consecutive calls together.
- */
-function agentToolGroupFor(
-  event: AgentStreamEvent,
-  trailingGroup: (group: AgentToolGroup | undefined) => AgentToolGroup | undefined
-): AgentToolGroup | undefined {
-  if (event.solo) {
-    agentToolGroup = undefined;
-    return undefined;
-  }
-  if (event.groupId) {
-    agentToolGroup = undefined;
-    const existing = agentToolGroups.get(event.groupId);
-    const group = existing?.disclosure.isConnected ? existing : createAgentToolGroup();
-    if (event.groupLabel) group.labelText = event.groupLabel;
-    agentToolGroups.set(event.groupId, group);
-    return group;
-  }
-  const group = trailingGroup(agentToolGroup) ?? createAgentToolGroup();
-  agentToolGroup = group;
-  return group;
-}
-
-function renderAgentMessageItem(item: HTMLElement, body: HTMLElement): void {
-  if (!body.isConnected) return;
-  const raw = body.dataset.raw ?? "";
-  const presentation = presentAgentMessage(raw);
-  const copyText = agentMessageCopyText(presentation);
-  body.classList.toggle("agent-stream-result", presentation.structured);
-  if (presentation.structured) {
-    const heading = document.createElement("div");
-    heading.className = "agent-result-heading";
-    const title = document.createElement("span");
-    title.className = "agent-result-title";
-    title.textContent = presentation.title;
-    heading.append(title);
-    if (presentation.meta.length) {
-      const meta = document.createElement("span");
-      meta.className = "agent-result-meta";
-      meta.textContent = presentation.meta.join(" · ");
-      heading.append(meta);
-    }
-    const content = document.createElement("div");
-    content.className = "agent-result-content markdown-body";
-    content.innerHTML = presentation.text ? markdown.render(presentation.text) : "";
-    body.replaceChildren(heading, ...(presentation.text ? [content] : []));
-    appendAgentPresentationExtras(body, presentation);
-  } else {
-    body.innerHTML = markdown.render(raw);
-  }
-  const outputCopy = item.querySelector<HTMLButtonElement>(".output-copy");
-  if (outputCopy) outputCopy.replaceWith(copyButton(copyText));
-}
-
-function scheduleAgentMessageRender(item: HTMLElement): void {
-  pendingAgentRenders.add(item);
-  if (agentRenderFrame !== undefined) return;
-  agentRenderFrame = requestAnimationFrame(() => {
-    agentRenderFrame = undefined;
-    flushAgentMessageRenders();
-  });
-}
-
-function flushAgentMessageRenders(): void {
-  if (agentRenderFrame !== undefined) cancelAnimationFrame(agentRenderFrame);
-  agentRenderFrame = undefined;
-  const items = [...pendingAgentRenders];
-  pendingAgentRenders.clear();
-  for (const queued of items) {
-    const queuedBody = queued.querySelector<HTMLElement>(".agent-stream-text");
-    if (queuedBody) renderAgentMessageItem(queued, queuedBody);
-  }
+function revealWaitingCard(kind: "agent" | "ui", requestId: string, blocking: boolean): void {
+  // A question the agent answers in parallel does not park the turn; leaving
+  // the reader where they were is the honest behaviour for it.
+  if (!blocking || !transcript.active?.questions.focusRequest(kind, requestId)) return;
+  scroll.setFollowing(false);
+  syncJumpToLatest();
 }
 
 function renderAgentEvent(event: AgentStreamEvent): void {
-  if (event.phase === "todo") {
-    if (event.todos) activeTurn?.todos.update(event.todos);
+  if (event.phase === "input") {
+    if (event.userInput && transcript.active?.questions?.update(event.userInput)) {
+      revealWaitingCard("agent", event.userInput.id, event.userInput.blocking);
+    }
+    if (event.uiInteraction && transcript.active?.questions?.updateUi(event.uiInteraction)) {
+      revealWaitingCard("ui", event.uiInteraction.requestId, true);
+    }
     return;
   }
-  if (event.usage) agentTokenUsage = event.usage;
+  if (event.phase === "todo") {
+    if (event.todos) transcript.active?.todos.update(event.todos);
+    return;
+  }
+  if (event.usage) agentTokenUsage = updateTurnTokenUsage(agentTokenUsage, event.usage);
   if (event.phase === "status") {
     updateAgentProgress(event.text || agentProgressState);
     return;
   }
-  if (event.phase === "reasoning" || event.phase === "message") updateAgentProgress("Thinking");
-  const panel = agentStreamPanel();
-  // An adjacency group may only keep collecting while it is the newest entry,
-  // otherwise a later command would be back-dated into an earlier point.
-  const trailingGroup = (group: AgentToolGroup | undefined): AgentToolGroup | undefined =>
-    group?.disclosure.isConnected && group.disclosure === panel.lastElementChild ? group : undefined;
-  if (event.phase === "tool") {
-    // The header counts commands, so steps the agent reported as file or image
-    // work must not inflate it.
-    if ((event.toolKind ?? "command") === "command") agentCommandIds.add(event.id ?? event.title ?? event.text);
-    updateAgentProgress(agentProgressState);
-    let command = event.id ? agentToolItems.get(event.id) : undefined;
-    if (command) {
-      agentToolGroup = event.groupId || event.solo ? undefined : trailingGroup(command.group);
-      if (command.group && event.groupLabel) command.group.labelText = event.groupLabel;
-    } else {
-      const group = agentToolGroupFor(event, trailingGroup);
-      command = createAgentToolCommand(event, group?.body ?? panel, group);
-      if (event.id) agentToolItems.set(event.id, command);
-    }
-    const raw = event.replace ? event.text : `${command.body.textContent ?? ""}${event.text}`;
-    const code = command.body.querySelector("code");
-    if (code) code.replaceChildren(terminalText(raw));
-    else command.body.textContent = raw;
-    command.label = event.title ?? command.label;
-    command.summaryLabel.textContent = command.label;
-    const copy = copyButton(raw);
-    command.copy.replaceWith(copy);
-    command.copy = copy;
-    if (command.group) updateAgentToolGroupLabel(command.group);
-    elements.resultSection.classList.remove("hidden");
-    return;
-  }
-  let item = event.id ? agentEventItems.get(event.id) : undefined;
-  if (!item) {
-    // Only a newly appended message breaks the run of commands; replacing the text
-    // of an earlier message leaves the trailing group open for more commands.
-    agentToolGroup = undefined;
-    item = createAgentEventItem(event);
-    if (event.id) agentEventItems.set(event.id, item);
-    item.append(copyButton(event.text));
-    panel.append(item);
-  }
-  const body = item.querySelector<HTMLElement>(".agent-stream-text");
-  const eventBody = event.text;
-  if (body) {
-    const raw = event.replace ? eventBody : `${body.dataset.raw ?? ""}${eventBody}`;
-    body.dataset.raw = raw;
-    scheduleAgentMessageRender(item);
-  }
-  elements.resultSection.classList.remove("hidden");
-  syncResultToggle();
-}
-
-function renderAgentFileChanges(entries: readonly WorkflowStepResponse[]): void {
-  const changes = entries.flatMap((step): PatchChange[] => {
-    const result = step.response?.result;
-    if (result?.kind === "edit") return result.patch.changes;
-    if (result?.kind === "patch") return result.changes;
-    return [];
-  }).filter((change) => change.before !== change.after);
-  for (const change of changes) {
-    if (agentEditedUris.has(change.uri)) continue;
-    agentEditedUris.add(change.uri);
-    if (!agentFileChanges?.disclosure.isConnected) {
-      const disclosure = document.createElement("details");
-      disclosure.className = "agent-stream-item agent-trace-event agent-trace-files";
-      const summary = document.createElement("summary");
-      const chevron = document.createElement("i");
-      chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-      const label = document.createElement("span");
-      label.className = "agent-stream-summary-label";
-      const body = document.createElement("div");
-      body.className = "agent-file-changes";
-      summary.append(chevron, label);
-      disclosure.append(summary, body);
-      agentStreamPanel().append(disclosure);
-      agentFileChanges = { disclosure, body, label };
-    }
-    agentFileChanges.body.append(fileChangeDisclosure(change));
-  }
-  if (changes.length) {
-    if (agentFileChanges) agentFileChanges.label.textContent = `Edited ${agentEditedUris.size} file${agentEditedUris.size === 1 ? "" : "s"}`;
-    updateAgentProgress(agentProgressState);
-  }
+  trace.renderEvent(event);
+  transcript.active?.setProcessCopy?.(trace.copyText());
 }
 
 function resetAgentTrace(): void {
-  pendingAgentRenders.clear();
-  if (agentRenderFrame !== undefined) cancelAnimationFrame(agentRenderFrame);
-  agentRenderFrame = undefined;
+  trace.reset();
   agentStream = undefined;
   agentProgress = undefined;
   agentProgressState = "Thinking";
   agentTokenUsage = undefined;
-  agentCommandIds = new Set<string>();
-  agentEditedUris = new Set<string>();
-  agentEventItems.clear();
-  agentToolItems.clear();
-  agentToolGroups.clear();
-  agentToolGroup = undefined;
-  agentFileChanges = undefined;
   pendingAgentEventBatches = [];
   if (agentEventBatchFrame !== undefined) cancelAnimationFrame(agentEventBatchFrame);
   agentEventBatchFrame = undefined;
@@ -3242,23 +1934,21 @@ function flushAgentEventBatches(): void {
   agentEventBatchFrame = undefined;
   const batches = pendingAgentEventBatches;
   pendingAgentEventBatches = [];
-  const shouldFollow = resultIsNearBottom();
   const events = batches
-    .filter((batch) => batch.sessionId === activeConversationId)
+    .filter((batch) => batch.sessionId === browser.activeId)
     .flatMap((batch) => batch.events);
   if (!events.length) return;
   for (const event of events) renderAgentEvent(event);
-  if (forceInitialConversationScroll) {
-    forceInitialConversationScroll = false;
+  if (scroll.consumeForcedInitialScroll()) {
     scrollResultToBottom();
   } else {
-    followResultIfNeeded(shouldFollow);
+    pinResultToBottom();
   }
   syncJumpToLatest();
 }
 
 function queueAgentEvents(sessionId: string, events: readonly AgentStreamEvent[]): void {
-  if (sessionId !== activeConversationId || !events.length) return;
+  if (sessionId !== browser.activeId || !events.length) return;
   pendingAgentEventBatches.push({ sessionId, events: [...events] });
   if (agentEventBatchFrame === undefined) {
     agentEventBatchFrame = requestAnimationFrame(flushAgentEventBatches);
@@ -3270,43 +1960,31 @@ function queueAgentEvents(sessionId: string, events: readonly AgentStreamEvent[]
  * resume with the original state after this scope returns. */
 function withIsolatedAgentTrace(turn: OutputTurnElements, render: () => void): void {
   const previous = {
-    activeTurn, agentStream, agentRunStartedAt, agentRunTimer,
-    agentProgress, agentProgressState, agentTokenUsage, agentCommandIds, agentEditedUris,
-    agentEventItems, agentToolItems, agentToolGroups, agentToolGroup, agentFileChanges,
-    pendingAgentRenders, agentRenderFrame, pendingAgentEventBatches, agentEventBatchFrame
+    activeTurn: transcript.active, agentStream, agentRunStartedAt, agentRunTimer,
+    agentProgress, agentProgressState, agentTokenUsage,
+    pendingAgentEventBatches, agentEventBatchFrame
   };
-  agentEventItems = new Map();
-  agentToolItems = new Map();
-  agentToolGroups = new Map();
-  pendingAgentRenders = new Set();
-  agentRenderFrame = undefined;
+  const traceState = trace.isolate();
   agentEventBatchFrame = undefined;
   agentRunTimer = undefined;
   resetAgentTrace();
-  activeTurn = turn;
+  transcript.active = turn;
   try {
     render();
     // Historical prose must be painted before restoring the live render queue.
-    flushAgentMessageRenders();
+    trace.flushMessageRenders();
   } finally {
-    resetAgentTrace();
+    trace.restore(traceState);
     ({
-      activeTurn, agentStream, agentRunStartedAt, agentRunTimer,
-      agentProgress, agentProgressState, agentTokenUsage, agentCommandIds, agentEditedUris,
-      agentEventItems, agentToolItems, agentToolGroups, agentToolGroup, agentFileChanges,
-      pendingAgentRenders, agentRenderFrame, pendingAgentEventBatches, agentEventBatchFrame
+      activeTurn: transcript.active, agentStream, agentRunStartedAt, agentRunTimer,
+      agentProgress, agentProgressState, agentTokenUsage,
+      pendingAgentEventBatches, agentEventBatchFrame
     } = previous);
   }
 }
 
 function storedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
-  if (record.response) return record.response;
-  try {
-    const parsed = JSON.parse(record.output) as InputExecutionResponse;
-    return parsed?.kind === "workflow" && Array.isArray(parsed.executions) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  return readHistoryResponse(record);
 }
 
 /** Populate a history turn only when its disclosure is opened.  The shell
@@ -3325,37 +2003,34 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): 
   // Plan turns use a more useful title once their response has been parsed.
   // Keep that JSON parse off the tab-switch path and update the lightweight
   // summary only after deferred hydration completes.
-  const planExecution = response?.executions.find((item) => item.result.kind === "chat" && item.result.executePlan);
-  const planResult = planExecution?.result.kind === "chat" ? planExecution.result : undefined;
+  const planExecution = response?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
+  const planResult = planExecution?.result.kind === "plan" ? planExecution.result : undefined;
   if (record.executePlan || planResult?.executePlan) {
     if (turn.planExecutionStatus) {
       turn.planExecutionStatus.hidden = false;
-      turn.planExecutionStatus.textContent = record.error ? "Failed" : "Completed";
+      turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome ?? planResult?.planOutcome);
     }
     const planPath = record.planPath ?? planResult?.planPath;
     if (planPath) turn.title.setPlanPath(planPath);
-    // Older records have no execution metadata until their response is parsed.
-    // Remove the generic shell before rendering the internal build prompt.
-    turn.input?.closest(".output-turn-section")?.remove();
-    delete turn.input;
   }
 
   agentRunStartedAt = Date.now();
-  if (turn.input && turn.input.childElementCount === 0) {
-    const inputCopy = document.createElement("div");
-    inputCopy.className = "output-turn-input";
-    inputCopy.append(renderedInputSource(record.input), copyButton(record.input));
-    turn.input.append(inputCopy);
-  }
-  for (const event of record.process) renderAgentEvent(event);
+  const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
+  for (const event of replay) renderAgentEvent(event);
+  turn.setProcessCopy?.(trace.copyText());
   if (agentStream) finishAgentProgress();
+  const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
+  if (turn.processMeta) turn.processMeta.textContent = presentTurn({
+    durationMs: duration, process: record.process
+  }).process.detail ?? "";
   turn.todos.setRunning(false);
   turn.processDisclosure.open = false;
   if (record.error) renderOutputError(record.error);
   else if (response) renderResult(response);
-  else if (record.output) turn.output.append(jsonOutput(record.output));
-  turn.outputDisclosure.open = true;
-  syncResultToggle();
+  else if (record.output) {
+    turn.output.append(jsonOutput(record.output));
+    turn.setOutputCopy?.(record.output);
+  }
 }
 
 function hydrateOutputTurnOnOpen(event: Event): void {
@@ -3363,9 +2038,12 @@ function hydrateOutputTurnOnOpen(event: Event): void {
   if (!(target instanceof HTMLDetailsElement) || !target.open || !target.classList.contains("output-turn")) return;
   const turnId = target.dataset.turnId;
   if (!turnId) return;
-  const turn = outputTurns.get(turnId);
+  const turn = transcript.get(turnId);
   if (!turn?.hydrate) return;
   turn.hydrate();
+  // A hydrated turn can be far taller than its collapsed row. Following the
+  // output has to survive that growth; a reader who scrolled away is unaffected.
+  pinResultToBottom();
 }
 
 function renderOutputSession(session: DextHistorySession): void {
@@ -3373,19 +2051,19 @@ function renderOutputSession(session: DextHistorySession): void {
   const sessionTurnIds = new Set(session.turns.map((turn) => turn.id));
   // A newly streamed row is newer than the last historical signature. Deleting
   // that row can return to the same signature while the DOM still contains it.
-  const visibleTurnsMatch = outputTurns.size === sessionTurnIds.size
-    && [...outputTurns.keys()].every((turnId) => sessionTurnIds.has(turnId));
-  if (renderedConversationId === session.id && renderedConversationSignature === signature && visibleTurnsMatch) {
+  const visibleTurnsMatch = transcript.size === sessionTurnIds.size
+    && [...transcript.keys()].every((turnId) => sessionTurnIds.has(turnId));
+  if (browser.renderedId === session.id && browser.renderedSignature === signature && visibleTurnsMatch) {
     return;
   }
-  if (renderedConversationId && renderedConversationId !== session.id) cacheRenderedConversation();
+  if (browser.renderedId && browser.renderedId !== session.id) cacheRenderedConversation();
 
   // Normally the host sends the historical session before replaying an active
   // execution. A cache-ref miss can invert those two deliveries, however. In
   // that case retain the already-created live row while rebuilding the stored
   // rows, otherwise accepting the late session would erase the stream.
-  const liveTurn = executing && activeExecutionSessionId === session.id && activeTurn && activeTurnId
-    ? activeTurn
+  const liveTurn = executing && activeExecutionSessionId === session.id && transcript.active && activeTurnId
+    ? transcript.active
     : undefined;
   const liveTurnId = liveTurn ? activeTurnId : undefined;
 
@@ -3398,17 +2076,19 @@ function renderOutputSession(session: DextHistorySession): void {
     && [...cached.turns.keys()].every((turnId) => sessionTurnIds.has(turnId));
   if (!liveTurn && cached && cached.signature === signature && cacheMatchesSession) {
     elements.result.replaceChildren(...cached.nodes);
+    for (const turn of cached.turns.values()) turn.questions?.resume();
     restoreCachedAgentRenders(cached);
-    outputTurns.clear();
-    for (const [turnId, turn] of cached.turns) outputTurns.set(turnId, turn);
-    activeTurn = cached.activeTurnId ? outputTurns.get(cached.activeTurnId) : [...outputTurns.values()].at(-1);
-    conversationViewCache.delete(session.id);
-    conversationViewCache.set(session.id, cached);
-    renderedConversationId = session.id;
-    renderedConversationSignature = signature;
+    transcript.clear();
+    for (const [turnId, turn] of cached.turns) transcript.set(turnId, turn);
+    transcript.active = cached.activeTurnId ? transcript.get(cached.activeTurnId) : [...transcript.values()].at(-1);
+    // The anchor is intentionally not cached: a restored conversation starts its
+    // stepping controls from the active turn, like a fresh render does.
+    turnAnchorId = undefined;
+    conversationViewCache.put(session.id, cached);
+    browser.renderedId = session.id;
+    browser.renderedSignature = signature;
     elements.resultSection.classList.remove("hidden");
     finishConversationLoading();
-    syncResultToggle();
     syncJumpToLatest();
     scrollResultToBottom();
     return;
@@ -3419,151 +2099,99 @@ function renderOutputSession(session: DextHistorySession): void {
     agentRunTimer = undefined;
   }
   clearInputError();
+  for (const turn of transcript.values()) turn.questions?.suspend();
   elements.result.replaceChildren();
-  outputTurns.clear();
-  activeTurn = undefined;
-  const renderGeneration = ++conversationRenderGeneration;
+  transcript.clear();
+  transcript.active = undefined;
+  turnAnchorId = undefined;
+  const renderGeneration = browser.beginRender();
   let latestTurn: OutputTurnElements | undefined;
   for (const [index, record] of session.turns.entries()) {
     // Keep all historical payload parsing lazy. The newest turn is hydrated
     // after the browser paints the loading viewport; older turns parse their
     // response only when the user expands them.
     const latest = index === session.turns.length - 1;
-    const turn = createOutputTurn(record.id, record.input, record.createdAt, {
+    const turn = transcript.create(record.id, record.input, record.createdAt, {
       lazy: true,
       open: latest,
       sessionId: session.id,
       mode: record.mode,
       ...(record.executePlan ? { executePlan: true, ...(record.planPath ? { planPath: record.planPath } : {}) } : {}),
-      ...(record.title ? { title: record.title } : {})
+      ...(record.title ? { title: record.title } : {}),
+      ...(record.spillPath ? { spill: true } : {})
     });
     // Closed history rows need their final status before deferred hydration.
-    if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = record.error ? "Failed" : "Completed";
+    if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome);
     turn.hydrate = () => hydrateStoredTurn(record, turn);
     if (latest) latestTurn = turn;
   }
   if (liveTurn && liveTurnId) {
     elements.result.append(liveTurn.disclosure);
-    outputTurns.set(liveTurnId, liveTurn);
-    activeTurn = liveTurn;
+    transcript.set(liveTurnId, liveTurn);
+    transcript.active = liveTurn;
   }
   // Set these before scheduling the correction: scrollResultToBottom rejects
   // callbacks that no longer belong to the visible conversation.
-  renderedConversationId = session.id;
-  renderedConversationSignature = signature;
+  browser.renderedId = session.id;
+  browser.renderedSignature = signature;
   elements.resultSection.classList.remove("hidden");
-  syncResultToggle();
   syncJumpToLatest();
   // Let the empty viewport paint first. This prevents a large restored turn
   // from blocking wheel/touch input for the duration of Markdown rendering.
   requestAnimationFrame(() => {
     setTimeout(() => {
-      if (renderGeneration !== conversationRenderGeneration
-        || activeConversationId !== session.id
-        || renderedConversationId !== session.id) return;
+      if (!browser.isCurrentRender(renderGeneration, session.id)) return;
       // The live row may have arrived during the deferred paint. Historical
       // hydration has its own trace state, so both can remain visible.
       latestTurn?.hydrate?.();
       finishConversationLoading();
-      syncResultToggle();
       syncJumpToLatest();
       scrollResultToBottom();
     }, 0);
   });
 }
 
-function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
-  if (!data) return undefined;
-  for (const item of data.items) {
-    if (item.kind === "file" && item.type.startsWith("image/")) return item;
-  }
-  return undefined;
-}
-
 function renderOutputSessionRef(sessionId: string, signature: string, switchId?: number, hostInitiated = false): void {
-  if (renderedConversationId === sessionId && renderedConversationSignature === signature) {
+  if (browser.renderedId === sessionId && browser.renderedSignature === signature) {
     return;
   }
-  if (renderedConversationId && renderedConversationId !== sessionId) cacheRenderedConversation();
+  if (browser.renderedId && browser.renderedId !== sessionId) cacheRenderedConversation();
   const cached = conversationViewCache.get(sessionId);
   if (!cached || cached.signature !== signature) {
     vscode.postMessage({ type: "outputSessionRefMiss", sessionId, signature, ...(switchId !== undefined ? { switchId } : {}), ...(hostInitiated ? { hostInitiated: true as const } : {}) });
     return;
   }
   elements.result.replaceChildren(...cached.nodes);
+  for (const turn of cached.turns.values()) turn.questions?.resume();
   restoreCachedAgentRenders(cached);
-  outputTurns.clear();
-  for (const [turnId, turn] of cached.turns) outputTurns.set(turnId, turn);
-  activeTurn = cached.activeTurnId ? outputTurns.get(cached.activeTurnId) : [...outputTurns.values()].at(-1);
-  conversationViewCache.delete(sessionId);
-  conversationViewCache.set(sessionId, cached);
-  renderedConversationId = sessionId;
-  renderedConversationSignature = signature;
+  transcript.clear();
+  for (const [turnId, turn] of cached.turns) transcript.set(turnId, turn);
+  transcript.active = cached.activeTurnId ? transcript.get(cached.activeTurnId) : [...transcript.values()].at(-1);
+  turnAnchorId = undefined;
+  conversationViewCache.put(sessionId, cached);
+  browser.renderedId = sessionId;
+  browser.renderedSignature = signature;
   elements.resultSection.classList.remove("hidden");
   finishConversationLoading();
-  syncResultToggle();
   syncJumpToLatest();
   scrollResultToBottom();
 }
 
-function addImageAttachment(relativePath: string, webviewUri: string, name: string): void {
-  if (imageAttachments.has(relativePath)) return;
-  const chip = document.createElement("div");
-  chip.className = "image-attachment";
-  const image = document.createElement("img");
-  image.src = webviewUri;
-  image.alt = name;
-  image.title = name;
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "image-attachment-remove";
-  remove.setAttribute("aria-label", "Remove image");
-  remove.textContent = "\u00d7";
-  remove.addEventListener("click", () => {
-    chip.remove();
-    imageAttachments.delete(relativePath);
-    activeImageAttachmentMetadata.delete(relativePath);
-    editor.removeFileReference(relativePath);
-    vscode.postMessage({ type: "deleteImageAttachment", relativePath });
-  });
-  chip.append(image, remove);
-  elements.attachmentBar.append(chip);
-  elements.attachmentBar.classList.remove("hidden");
-  imageAttachments.set(relativePath, chip);
-  activeImageAttachmentMetadata.set(relativePath, { relativePath, webviewUri, name });
-  persistComposerDraft();
-}
-
-const activeImageAttachmentMetadata = new Map<string, DraftAttachment>();
-
-function clearRenderedAttachments(): void {
-  for (const chip of imageAttachments.values()) chip.remove();
-  imageAttachments.clear();
-  activeImageAttachmentMetadata.clear();
-  elements.attachmentBar.classList.add("hidden");
-}
-
 function persistComposerDraft(): void {
-  if (!activeConversationId || restoringDraft) return;
-  const source = editor.source;
-  conversationDrafts.set(activeConversationId, {
-    source,
-    // If the user removes an image's @ reference directly in the editor, do
-    // not resurrect its chip when returning to this tab.
-    attachments: [...activeImageAttachmentMetadata.values()]
-      .filter((item) => source.includes(`@${item.relativePath}`))
-      .map((item) => ({ ...item }))
-  });
+  if (!browser.activeId || restoringDraft) return;
+  // The store drops attachments whose @ reference no longer appears in the
+  // editor, so removing one directly does not resurrect its chip later.
+  drafts.save(browser.activeId, editor.source, attachments.all());
 }
 
 function restoreComposerDraft(sessionId: string): void {
-  const draft = conversationDrafts.get(sessionId);
+  const draft = drafts.draft(sessionId);
   restoringDraft = true;
   try {
-    clearRenderedAttachments();
+    attachments.clear();
     editor.setValue(draft?.source ?? "");
     for (const attachment of draft?.attachments ?? []) {
-      addImageAttachment(attachment.relativePath, attachment.webviewUri, attachment.name);
+      attachments.add(attachment.relativePath, attachment.webviewUri, attachment.name);
     }
   } finally {
     restoringDraft = false;
@@ -3573,8 +2201,8 @@ function restoreComposerDraft(sessionId: string): void {
 
 function scheduleComposerDraftRestore(sessionId: string, switchId?: number): void {
   requestAnimationFrame(() => {
-    if (activeConversationId !== sessionId) return;
-    if (switchId !== undefined && switchId !== conversationSwitchId) return;
+    if (browser.activeId !== sessionId) return;
+    if (switchId !== undefined && switchId !== browser.switchId) return;
     restoreComposerDraft(sessionId);
   });
 }
@@ -3584,10 +2212,7 @@ function clearSubmittedInput(): void {
   // The chips stand for references that just left the composer with the turn,
   // so they go with it. The files stay on disk because the recorded turn and
   // its history entry still point at them.
-  for (const chip of imageAttachments.values()) chip.remove();
-  imageAttachments.clear();
-  activeImageAttachmentMetadata.clear();
-  elements.attachmentBar.classList.add("hidden");
+  attachments.clear();
   persistComposerDraft();
 }
 
@@ -3611,8 +2236,11 @@ elements.planBuild.addEventListener("click", () => {
     return;
   }
   if (!activePlanPath || executing) return;
-  elements.planBuild.disabled = true;
+  // The host answers with a planContext message (and an error when it refuses),
+  // so the toolbar reports the wait from the click onwards.
+  if (browser.activeId) pendingBuilds.set(browser.activeId, activePlanPath);
   vscode.postMessage({ type: "buildPlan", planPath: activePlanPath });
+  updateRunState();
 });
 elements.result.addEventListener("click", openOutputLink);
 document.addEventListener("click", (event) => {
@@ -3627,65 +2255,144 @@ document.addEventListener("click", (event) => {
     window.setTimeout(() => button.classList.replace("codicon-check", "codicon-copy"), 900);
   });
 });
-elements.resultToggle.addEventListener("click", (event) => {
-  event.stopPropagation();
-  toggleResultDetails();
-});
 elements.result.addEventListener("toggle", hydrateOutputTurnOnOpen, true);
-elements.result.addEventListener("toggle", syncResultToggle, true);
+elements.result.addEventListener("toggle", rememberNavigationTurn, true);
+// Opening or closing a turn can move the navigation anchor or change which
+// exchange is adjacent, so the stepping controls are refreshed with it.
+elements.result.addEventListener("toggle", syncJumpToLatest, true);
+// Expanding a command's output or a stored turn changes the height under the
+// reader. A following reader keeps the newest output in view; one who scrolled
+// away is left where they are.
+elements.result.addEventListener("toggle", () => scroll.pin(), true);
+// The block the reader just unfolded is what they want to read, so the view
+// holds the header they clicked instead of being pulled to the live end.
+// Following resumes from the jump control or by scrolling back to the end.
+elements.result.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target : undefined;
+  if (target?.closest("summary") && !target.closest("button")) scroll.holdPosition();
+}, true);
 elements.resultBody.addEventListener("scroll", () => {
-  // A manual wheel/touch scroll takes precedence over any deferred follow
-  // request left by a stream update or a previous tab switch.
-  cancelScheduledResultScroll();
-  syncJumpToLatest();
+  scroll.onScroll();
 }, { passive: true });
+elements.resultBody.addEventListener("pointerdown", (event) => {
+  // Overlay scrollbars report no width through offsetWidth/clientWidth, even
+  // though their thumb still receives pointer input. The controller keeps a
+  // narrow fallback hit strip so releasing that thumb at the track end snaps.
+  scroll.beginPointerGesture(event);
+}, { passive: true });
+const endResultScrollGesture = (event: PointerEvent): void => {
+  // A drag whose height was measured before the last batch can stop short of
+  // the real end. Releasing against the track's end still means "newest
+  // output", so the controller snaps with the height of this frame.
+  scroll.endPointerGesture(event);
+};
+// On the window: a drag that ends outside the panel must still end the gesture.
+window.addEventListener("pointerup", endResultScrollGesture, { passive: true });
+window.addEventListener("pointercancel", endResultScrollGesture, { passive: true });
+elements.resultBody.addEventListener("wheel", (event) => {
+  // Wheeling up is a deliberate move into earlier output. Wheeling down is
+  // handled by the scroll handler, so returning to the end resumes following.
+  scroll.onWheel(event.deltaY);
+}, { passive: true });
+elements.resultBody.addEventListener("touchstart", () => {
+  scroll.beginTouchGesture();
+}, { passive: true });
+elements.resultBody.addEventListener("touchend", () => {
+  scroll.endTouchGesture();
+}, { passive: true });
+// #result-body is focusable so the jump control can hand the reader a keyboard
+// scroller; these are the keys that move it.
+elements.resultBody.addEventListener("keydown", (event) => {
+  scroll.onKeydown(event);
+});
 jumpToLatest.addEventListener("click", () => {
-  elements.resultBody.scrollTop = elements.resultBody.scrollHeight;
-  syncJumpToLatest();
+  scroll.followToBottom();
   elements.resultBody.focus({ preventScroll: true });
 });
+jumpToTop.addEventListener("click", () => {
+  scroll.jumpToTop();
+});
+jumpToPrevTurn.addEventListener("click", () => {
+  scroll.jumpToPreviousTurn();
+});
+jumpToNextTurn.addEventListener("click", () => {
+  scroll.jumpToNextTurn();
+});
 elements.problems.addEventListener("click", () => editor.goToFirstDiagnostic());
-elements.methodsToggle.addEventListener("click", toggleMethodGroups);
-elements.reloadMethods.addEventListener("click", () => {
-  // Reloading an unchanged API set would otherwise look like nothing happened.
-  setMethodsReloading(true);
-  vscode.postMessage({ type: "reload" });
+elements.mcpAssistantClose.addEventListener("click", () => mcp.requestClose());
+elements.mcpAssistantGenerate.addEventListener("click", () => mcp.generate());
+elements.mcpAssistantSave.addEventListener("click", () => mcp.save());
+elements.resourceTarget.addEventListener("click", () => sendResourceAction(activeResource()?.draft || activeResource()?.target ? "previewResource" : "chooseResource"));
+elements.resourceChoose.addEventListener("click", () => {
+  const choose = (): void => sendResourceAction("chooseResource");
+  if (activeResource()?.draft) openConfirmationDialog("Discard the current resource draft and select another resource?", choose);
+  else choose();
 });
-elements.closeMethods.addEventListener("click", closeMethodsDialog);
-elements.methodsDialog.addEventListener("click", (event) => {
-  if (event.target === elements.methodsDialog) closeMethodsDialog();
-});
-elements.closeMcp.addEventListener("click", closeMcpDialog);
-elements.mcpToggle.addEventListener("click", toggleResourceCategories);
-elements.mcpSearch.addEventListener("input", () => {
-  if (lastSidebarState) renderMcp(lastSidebarState);
-});
-elements.mcpDialog.addEventListener("click", (event) => {
-  if (event.target === elements.mcpDialog) closeMcpDialog();
-});
-function requestCloseMcpAssistant(): void {
-  if (mcpAssistantRunningRequestId) {
-    // Closing while generation is active must go through the same cancellation
-    // path as the visible Stop button. The dialog stays open until the host
-    // confirms the abort with an `executing: false` message.
-    generateMcpAssistant();
-    return;
-  }
-  if (elements.mcpAssistantDialog.open) elements.mcpAssistantDialog.close();
-}
+elements.resourcePreview.addEventListener("click", () => sendResourceAction("previewResource"));
+elements.resourceSave.addEventListener("click", () => sendResourceAction("saveResource"));
 
-elements.mcpAssistantClose.addEventListener("click", requestCloseMcpAssistant);
-elements.mcpAssistantGenerate.addEventListener("click", generateMcpAssistant);
-elements.mcpAssistantSave.addEventListener("click", saveMcpAssistant);
+// Target selection owns drops only on the Plan/Resource target controls.
+// The editor itself keeps handling file drops as references in the input.
+const planTargetGroup = elements.planTarget.closest<HTMLElement>(".plan-target-group");
+const resourceTargetGroup = elements.resourceTarget.closest<HTMLElement>(".plan-target-group");
+function targetSelectionLocked(): boolean {
+  return composerSelectionLocked() || (!activeResource() && planStatus === "running");
+}
+function bindTargetFileSelection(target: HTMLElement | null, kind: "plan" | "resource"): (() => void) | undefined {
+  if (!target) return undefined;
+  const canSelect = (): boolean => kind === "resource" ? !!activeResource() : !activeResource() && inputMode === "plan";
+  return bindFileDropTarget(target, {
+    dragover: (event) => {
+      if (!canSelect() || !isFileDrag(event)) return false;
+      event.preventDefault();
+      const effect = targetSelectionLocked() ? "none" : fileSelectionDropEffect(event.dataTransfer!.effectAllowed);
+      event.dataTransfer!.dropEffect = effect;
+      target.classList.toggle("file-drop-shift", event.shiftKey && effect !== "none");
+      return true;
+    },
+    drop: (event) => {
+      target.classList.remove("file-drop-shift");
+      if (!canSelect() || !isFileDrag(event)) return false;
+      event.preventDefault();
+      // Dropping without Shift on the target control is intentionally a no-op.
+      if (!event.shiftKey || targetSelectionLocked()) return true;
+      const paths = droppedFilePaths(event.dataTransfer);
+      if (paths.length !== 1) {
+        renderError(new Error(paths.length ? "Drop one target file at a time." : "The dropped file did not include a path. Drag a file from the VS Code Explorer."));
+        return true;
+      }
+      const resource = activeResource();
+      const sessionId = browser.activeId;
+      if (kind === "resource" && !sessionId) return true;
+      const submit = (): void => {
+        if (kind === "resource" && (browser.activeId !== sessionId || activeResource() !== resource)) return;
+        if (targetSelectionLocked()) return;
+        clearInputError();
+        if (kind === "resource" && sessionId) {
+          resourceErrors.delete(sessionId);
+          resourcePending.add(sessionId);
+        }
+        vscode.postMessage({ type: "selectDroppedFile", target: kind, path: paths[0]!, ...(sessionId ? { sessionId } : {}) });
+        updateRunState();
+      };
+      if (resource?.draft) openConfirmationDialog("Discard the current resource draft and select another resource?", submit);
+      else submit();
+      return true;
+    },
+    leave: () => target.classList.remove("file-drop-shift")
+  });
+}
+const removePlanTargetFileDrop = bindTargetFileSelection(planTargetGroup, "plan");
+const removeResourceTargetFileDrop = bindTargetFileSelection(resourceTargetGroup, "resource");
 elements.mcpAssistantDialog.addEventListener("click", (event) => {
-  if (event.target === elements.mcpAssistantDialog) requestCloseMcpAssistant();
+  if (event.target === elements.mcpAssistantDialog) mcp.requestClose();
 });
 elements.mcpAssistantDialog.addEventListener("cancel", (event) => {
   // Native dialog Esc dispatches `cancel` before closing. Intercept it while
   // active so Esc behaves exactly like the close button and backdrop click.
-  if (!mcpAssistantRunningRequestId) return;
+  if (!mcp.busy) return;
   event.preventDefault();
-  requestCloseMcpAssistant();
+  mcp.requestClose();
 });
 elements.uiDialogClose.addEventListener("click", cancelUi);
 elements.uiDialog.addEventListener("cancel", (event) => {
@@ -3693,35 +2400,18 @@ elements.uiDialog.addEventListener("cancel", (event) => {
   cancelUi();
 });
 elements.uiDialogForm.addEventListener("submit", (event) => event.preventDefault());
-elements.inputHeading.addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  toggleSection(elements.inputHeading, elements.inputBody);
-});
-elements.inputHeading.addEventListener("keydown", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    toggleSection(elements.inputHeading, elements.inputBody);
-  }
-});
-for (const [name, panel] of Object.entries(panels) as [PanelName, typeof panels[PanelName]][]) {
-  panel.button.addEventListener("click", (event) => {
-    event.stopPropagation();
-    toggleFullscreen(name);
+elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
+for (const button of [elements.resourceSourceDescribe, elements.resourceSourceImport]) {
+  button.addEventListener("click", () => {
+    if (composerSelectionLocked()) return;
+    const next = button.dataset.resourceSource;
+    if (next !== "describe" && next !== "import") return;
+    resourceSource = next;
+    renderResourceControls();
+    updateRunState();
+    editor.focus();
   });
 }
-elements.resultHeading.addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  toggleSection(elements.resultHeading, elements.resultBody);
-});
-elements.resultHeading.addEventListener("keydown", (event) => {
-  if (event.target instanceof Element && event.target.closest("button")) return;
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    toggleSection(elements.resultHeading, elements.resultBody);
-  }
-});
-elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
 elements.composerMore.addEventListener("click", (event) => {
   event.stopPropagation();
   closeComposerMenus();
@@ -3748,56 +2438,32 @@ document.addEventListener("keydown", (event) => {
   closeComposerMenus();
 });
 elements.inputShell.addEventListener("paste", (event) => {
-  const imageItem = findImageItem(event.clipboardData);
-  if (!imageItem) return;
-  const file = imageItem.getAsFile();
+  const file = findImageItem(event.clipboardData)?.getAsFile();
   if (!file) return;
   event.preventDefault();
   event.stopPropagation();
-  const reader = new FileReader();
-  reader.onload = () => {
-    if (typeof reader.result !== "string") return;
-    const dataUrl = reader.result;
-    const comma = dataUrl.indexOf(",");
-    const header = dataUrl.slice(0, comma);
-    const mimeType = header.slice(5, header.indexOf(";"));
-    const base64 = dataUrl.slice(comma + 1);
-    vscode.postMessage({ type: "pasteImage", data: base64, mimeType });
-  };
-  reader.readAsDataURL(file);
+  void readImageData(file)
+    .then((image) => vscode.postMessage({ type: "pasteImage", ...image }))
+    .catch(renderError);
 }, true);
 
 window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   const message = event.data;
-  if (broker.accept(message) || clipboard.accept(message) || fileSearch.accept(message)) return;
+  if (clipboard.accept(message) || fileSearch.accept(message) || fileDrop.accept(message)) return;
   if (message.type === "turnRenamed") {
-    if (renderedConversationId === message.sessionId) {
-      outputTurns.get(message.turnId)?.title.rename(message.title, message.displayTitle);
+    if (browser.renderedId === message.sessionId) {
+      transcript.get(message.turnId)?.title.rename(message.title, message.displayTitle);
     }
     conversationViewCache.get(message.sessionId)?.turns.get(message.turnId)?.title.rename(message.title, message.displayTitle);
   }
   if (message.type === "state") {
     lastSidebarState = message.state;
-    setMethodsReloading(false);
-    const methodsKey = JSON.stringify([
-      message.state.theme,
-      message.state.methods,
-      message.state.diagnostics
-    ]);
-    if (methodsKey !== renderedMethodsKey) {
-      renderedMethodsKey = methodsKey;
-      renderMethods(message.state);
+    const themeKey = JSON.stringify([message.state.theme, message.state.diagnostics]);
+    if (themeKey !== renderedThemeKey) {
+      renderedThemeKey = themeKey;
+      applySidebarTheme(message.state);
     }
-    const mcpKey = JSON.stringify([
-      message.state.mcpServers,
-      message.state.globalDiagnostics,
-      message.state.globalResources
-    ]);
-    if (mcpKey !== renderedMcpKey) {
-      renderedMcpKey = mcpKey;
-      renderMcp(message.state);
-    }
-    // Controls are conversation-scoped, unlike the API/resource trees above.
+    // Controls are conversation-scoped, unlike the theme above.
     renderAgentControls(message.state);
   }
   if (message.type === "inputKind") {
@@ -3807,49 +2473,66 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "insertFileReferences") {
     editor.insertFileReferences(message.expressions);
   }
+  if (message.type === "insertAnnotations") {
+    // The annotation tab composed this block; keep the caret in Input so the
+    // next keystroke continues the message the user is writing.
+    if (message.previous) editor.replaceText(message.previous, message.text);
+    else editor.insertText(message.text);
+    persistComposerDraft();
+    editor.focus();
+  }
   if (message.type === "imageAttachment") {
-    addImageAttachment(message.relativePath, message.webviewUri, message.name);
-    editor.insertFileReferences([`@${message.relativePath}`]);
+    const waiting = message.requestId === undefined ? undefined : pendingFormImages.get(message.requestId);
+    if (message.requestId !== undefined) pendingFormImages.delete(message.requestId);
+    if (waiting) waiting(message.relativePath);
+    else {
+      attachments.add(message.relativePath, message.webviewUri, message.name);
+      editor.insertFileReferences([`@${message.relativePath}`]);
+    }
   }
   if (message.type === "outputSession") {
-    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
+    if (message.switchId !== undefined && message.switchId !== browser.switchId) return;
     // History can delete a turn in another tab. Do not keep that tab's stale
     // DOM just because its snapshot must not replace the visible conversation.
-    if (message.session.id !== activeConversationId) conversationViewCache.delete(message.session.id);
+    if (message.session.id !== browser.activeId) conversationViewCache.delete(message.session.id);
     // A pre-click payload can arrive after the local tab selection.  It has
     // no switch id to reject, so also require it to match the visible tab.
-    if (!message.hostInitiated && activeConversationId && message.session.id !== activeConversationId) return;
+    if (!message.hostInitiated && browser.activeId && message.session.id !== browser.activeId) return;
     // A live row may have been restored before a delayed historical payload.
     // Rebuilding the session in that case would silently remove the running
     // turn from the pane.
-    if (executing && activeTurn && activeTurnId && message.session.id === activeConversationId
+    if (executing && transcript.active && activeTurnId && message.session.id === browser.activeId
       && elements.resultBody.dataset.loading !== "true") return;
     renderOutputSession(message.session);
   }
   if (message.type === "outputSessionRef") {
-    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
-    if (!message.hostInitiated && activeConversationId && message.sessionId !== activeConversationId) return;
-    if (executing && activeTurn && activeTurnId && message.sessionId === activeConversationId) return;
+    if (message.switchId !== undefined && message.switchId !== browser.switchId) return;
+    if (!message.hostInitiated && browser.activeId && message.sessionId !== browser.activeId) return;
+    if (executing && transcript.active && activeTurnId && message.sessionId === browser.activeId) return;
     renderOutputSessionRef(message.sessionId, message.signature, message.switchId, message.hostInitiated === true);
   }
   if (message.type === "activeConversation") {
-    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
+    if (message.switchId !== undefined && message.switchId !== browser.switchId) return;
     // Messages emitted by refreshes before a click have no switch id.  Once
     // the tab press has committed locally, an older active-id must not undo
     // that selection (and trigger another layout/scroll pass).
-    if (!message.hostInitiated && message.switchId === undefined && activeConversationId && message.activeId !== activeConversationId) return;
+    if (!message.hostInitiated && message.switchId === undefined && browser.activeId && message.activeId !== browser.activeId) return;
     // History actions (Continue/Fork) activate a conversation from the host,
     // without going through selectConversation(). Clear the previous tab's
     // execution state before its historical DOM is restored; otherwise the
     // old live row can be appended to the newly selected conversation.
-    if (activeConversationId !== message.activeId) {
+    const activeChanged = browser.activeId !== message.activeId;
+    if (activeChanged) {
       executing = false;
       stopping = false;
       activeTurnId = undefined;
       activeExecutionSessionId = undefined;
       clearVisibleConversation();
     }
-    activeConversationId = message.activeId;
+    browser.activeId = message.activeId;
+    if (activeChanged) scheduleComposerDraftRestore(message.activeId, message.switchId);
+    if (message.resource) resourceSessions.set(message.activeId, message.resource);
+    else resourceSessions.delete(message.activeId);
     for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
       const active = tab.dataset.sessionId === message.activeId;
       tab.classList.toggle("active", active);
@@ -3861,8 +2544,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     renderPlanToolbar();
   }
   if (message.type === "conversations") {
-    if (message.switchId !== undefined && message.switchId !== conversationSwitchId) return;
-    if (!message.hostInitiated && message.switchId === undefined && activeConversationId && message.activeId !== activeConversationId) return;
+    if (message.switchId !== undefined && message.switchId !== browser.switchId) return;
+    if (!message.hostInitiated && message.switchId === undefined && browser.activeId && message.activeId !== browser.activeId) return;
+    if (message.resource) resourceSessions.set(message.activeId, message.resource);
+    else resourceSessions.delete(message.activeId);
     renderConversations(message.sessions, message.activeId);
     if (message.selection && lastSidebarState) {
       renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
@@ -3870,122 +2555,102 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     if (message.planStatus) {
       activePlanPath = message.planPath;
       planStatus = message.planStatus;
-      renderPlanToolbar();
+        renderPlanToolbar();
     }
   }
   if (message.type === "planContext") {
+    // The host answers a Build with planContext: "running" once it accepts the
+    // plan, or the unchanged status when it refuses it. Either way the wait that
+    // Build was reporting is over and the host's own state takes over.
+    for (const [sessionId, path] of pendingBuilds) {
+      if (path === message.path) pendingBuilds.delete(sessionId);
+    }
     activePlanPath = message.path;
     planStatus = message.status;
     renderPlanToolbar();
   }
-  if (message.type === "openMethods") openMethodsDialog();
-  if (message.type === "openMcp") openMcpDialog();
-  if (message.type === "mcpAssistant") openMcpAssistantDialog();
-  if (message.type === "mcpProgress" && message.requestId === mcpAssistantRequestId) {
-    renderMcpAssistantEvent(message.event);
+  if (message.type === "resourceContext") {
+    resourceSessions.set(message.sessionId, message.resource);
+    if (message.busy) resourcePending.add(message.sessionId);
+    else resourcePending.delete(message.sessionId);
+    if (message.sessionId === browser.activeId && sidebarState) renderAgentControls(sidebarState);
   }
-  if (message.type === "mcpToolsDiscovered" && message.requestId === mcpAssistantRequestId) {
-    renderMcpToolChoices(message.tools);
-  }
-  if (message.type === "mcpGenerated" && message.requestId === mcpAssistantRequestId) {
-    mcpAssistantServer = message.server;
-    elements.mcpAssistantPreview.value = JSON.stringify(message.server, null, 2);
-    elements.mcpAssistantPreview.hidden = false;
-    elements.mcpAssistantScope.hidden = false;
-    elements.mcpAssistantScopeLabel.hidden = false;
-    elements.mcpAssistantGenerate.hidden = true;
-    elements.mcpAssistantSave.hidden = false;
-    // Tool discovery follows generation; keep Save disabled until the
-    // allowlist view has been populated.
-    elements.mcpAssistantSave.disabled = true;
-    // Completed Conversation Process sections are collapsed by default; keep
-    // the MCP trace available on demand as well.
-    elements.mcpAssistantProcess.open = false;
-    const elapsed = mcpAssistantProcessStartedAt ? Math.max(0, Date.now() - mcpAssistantProcessStartedAt) : 0;
-    const tokenLabel = mcpAssistantProcessTokens === undefined ? "" : ` · ${mcpAssistantProcessTokens} tokens`;
-    elements.mcpAssistantProcessMeta.textContent = `Worked for ${formatDuration(elapsed)} · ${mcpAssistantProcessCount} events${tokenLabel}`;
-    elements.mcpAssistantStatus.textContent = "Review the draft, choose where to save it, then confirm.";
-  }
-  if (message.type === "mcpCreated") {
-    elements.mcpAssistantStatus.textContent = `MCP '${message.name}' was added and its tools are ready.`;
-    elements.mcpAssistantDialog.close();
-    openMcpDialog();
-  }
-  if (message.type === "uiRequest") openUiDialog(message);
+  if (message.type === "mcpAssistant") mcp.open();
+  if (message.type === "mcpProgress") mcp.progress(message.requestId, message.event);
+  if (message.type === "mcpToolsDiscovered") mcp.toolsDiscovered(message.requestId, message.tools);
+  if (message.type === "mcpGenerated") mcp.generated(message.requestId, message.server);
+  if (message.type === "mcpCreated") mcp.created(message.name);
   if (message.type === "execution") {
     // A background turn changes the session while its DOM may be cached.
     // Drop that snapshot so returning to the tab renders the new turn once.
     conversationViewCache.delete(message.sessionId);
+    // The turn this build was waiting for has run; the toolbar shows its result.
+    pendingBuilds.delete(message.sessionId);
   }
-  if (message.type === "execution" && message.sessionId === activeConversationId) {
-    selectOutputTurn(message.turnId);
-    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = "Completed";
-    renderResult(message.response, message.reviewPatch ? message.turnId : undefined);
-  }
-  if (message.type === "patchResolved" && message.sessionId === activeConversationId) {
-    applyPatchResolution(message.turnId, message.uris, message.status, message.message);
+  if (message.type === "execution" && message.sessionId === browser.activeId) {
+    transcript.select(message.turnId);
+    const planResult = message.response.executions.find((execution) => execution.result.kind === "plan" && execution.result.executePlan)?.result;
+    if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) transcript.active.planExecutionStatus.textContent = planExecutionLabel([], undefined, planResult?.kind === "plan" ? planResult.planOutcome : undefined);
+    renderResult(message.response);
   }
   if (message.type === "executionFailed") {
     conversationViewCache.delete(message.sessionId);
+    pendingBuilds.delete(message.sessionId);
   }
-  if (message.type === "executionFailed" && message.sessionId === activeConversationId) {
-    selectOutputTurn(message.turnId);
-    if (activeTurn?.planExecutionStatus && !activeTurn.planExecutionStatus.hidden) activeTurn.planExecutionStatus.textContent = "Failed";
+  if (message.type === "executionFailed" && message.sessionId === browser.activeId) {
+    transcript.select(message.turnId);
+    if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) transcript.active.planExecutionStatus.textContent = planExecutionLabel([], message.message, message.planOutcome);
     renderOutputError(message.message);
   }
-  if (message.type === "agentEvent" && message.sessionId === activeConversationId) {
-    const shouldFollow = resultIsNearBottom();
+  if (message.type === "agentEvent" && message.sessionId === browser.activeId) {
     renderAgentEvent(message.event);
-    if (forceInitialConversationScroll) {
-      forceInitialConversationScroll = false;
+    if (scroll.consumeForcedInitialScroll()) {
       scrollResultToBottom();
     } else {
-      followResultIfNeeded(shouldFollow);
+      pinResultToBottom();
     }
     syncJumpToLatest();
   }
   if (message.type === "agentEvents"
-    && (message.switchId === undefined || message.switchId === conversationSwitchId)
-    && message.sessionId === activeConversationId) {
+    && (message.switchId === undefined || message.switchId === browser.switchId)
+    && message.sessionId === browser.activeId) {
     queueAgentEvents(message.sessionId, message.events);
   }
-  if (message.type === "executing"
-    && (message.switchId === undefined || message.switchId === conversationSwitchId)
-    && (
-    message.sessionId === activeConversationId
-    || message.turnId === mcpAssistantRunningRequestId
-    || (message.value && message.turnId === mcpAssistantRequestId)
-  )) {
-    // MCP manifest generation has its own action in the MCP dialog. It is not
-    // a conversation turn and must not change the composer run control or
-    // create a phantom output entry in conversation history.
-    if (message.turnId === mcpAssistantRunningRequestId || (!mcpAssistantRunningRequestId && message.turnId === mcpAssistantRequestId && message.value)) {
-      if (message.value) {
-        mcpAssistantRunningRequestId = message.turnId;
-        mcpAssistantStopping = false;
-      } else {
-        mcpAssistantRunningRequestId = undefined;
-        elements.mcpAssistantProcess.open = false;
-      }
-      updateMcpAssistantAction();
-      return;
+  if (message.type === "focusAgentInput" && message.sessionId === browser.activeId) {
+    if (agentEventBatchFrame !== undefined) cancelAnimationFrame(agentEventBatchFrame);
+    flushAgentEventBatches();
+    const turn = transcript.get(message.turnId);
+    if (turn) {
+      turn.hydrate?.();
+      turn.disclosure.open = true;
+      // The host is asking the reader to answer a card, and focusRequest brings
+      // that card to the middle of the viewport. Following the stream would
+      // pull the view straight back to the end, away from the question.
+      if (turn.questions.focusRequest(message.kind, message.requestId)) scroll.setFollowing(false);
     }
+  }
+  if (message.type === "executing"
+    && (message.switchId === undefined || message.switchId === browser.switchId)
+    && (message.sessionId === browser.activeId || mcp.owns(message.turnId, message.value))
+  ) {
+    // MCP manifest generation belongs to the dialog, not to a conversation turn.
+    if (mcp.updateExecution(message.turnId, message.value)) return;
     executing = message.value;
     if (message.value) {
       if (message.switchId !== undefined) {
         // The row is appended after the restored conversation's initial
         // scroll correction. Keep the replay pinned to the newest event.
-        forceInitialConversationScroll = true;
+        scroll.forceInitialBottom();
         scrollResultToBottom();
       }
       activeTurnId = message.turnId;
       activeExecutionSessionId = message.sessionId;
       stopping = false;
-      const existingTurn = outputTurns.get(message.turnId);
+      const existingTurn = transcript.get(message.turnId);
       if (existingTurn) {
-        activeTurn = existingTurn;
+        transcript.active = existingTurn;
       } else {
-        createOutputTurn(message.turnId, message.source ?? "Dext turn", Date.now(), {
+        transcript.create(message.turnId, message.source ?? "Dext turn", Date.now(), {
           mode: message.mode,
           ...(message.executePlan ? { executePlan: true } : {}),
           ...(message.planPath ? { planPath: message.planPath } : {})
@@ -3993,40 +2658,49 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
         resetAgentTrace();
         startAgentProgress(message.startedAt);
       }
-      activeTurn?.todos.setRunning(true);
+      // A new or resumed live turn becomes the turn the stepping controls move
+      // around; transcript.create already collapsed the exchange before it.
+      turnAnchorId = message.turnId;
+      transcript.active?.todos.setRunning(true);
+      transcript.active?.questions?.setRunning(true);
       elements.resultSection.classList.remove("hidden");
-      if (!fullscreenPanel || fullscreenPanel === "result") {
-        setSectionOpen(elements.resultHeading, elements.resultBody, true);
-      }
       syncJumpToLatest();
     } else {
-      forceInitialConversationScroll = false;
-      const shouldFollow = resultIsNearBottom();
+      scroll.consumeForcedInitialScroll();
       if (activeTurnId === message.turnId) activeTurnId = undefined;
       if (activeExecutionSessionId === message.sessionId) activeExecutionSessionId = undefined;
       stopping = false;
-      selectOutputTurn(message.turnId);
+      transcript.select(message.turnId);
       finishAgentProgress();
-      if (activeTurn) {
-        activeTurn.processDisclosure.open = false;
-        activeTurn.outputDisclosure.open = true;
-        followResultIfNeeded(shouldFollow);
+      if (transcript.active) {
+        transcript.active.processDisclosure.open = false;
+        // Collapsing the process timeline changes the height around the reader;
+        // a following reader keeps the reply end.
+        pinResultToBottom();
       }
       syncJumpToLatest();
     }
     updateRunState();
   }
   if (message.type === "error") {
-    renderInputError(message.message);
-    if (elements.mcpAssistantDialog.open) {
-      elements.mcpAssistantStatus.textContent = message.message;
-      updateMcpAssistantAction();
-      elements.mcpAssistantSave.disabled = false;
+    // A refused request will never send the state message its control was
+    // waiting for, so the pending wait ends here.
+    if (message.sessionId) pendingBuilds.delete(message.sessionId);
+    else pendingBuilds.clear();
+    pendingFormImages.clear();
+    if (message.sessionId && resourceSessions.has(message.sessionId)) {
+      resourcePending.delete(message.sessionId);
+      resourceErrors.set(message.sessionId, message.message);
+      if (message.sessionId !== browser.activeId) return;
     }
+    renderInputError(message.message);
+    // A rejected request still owns whatever it disabled when it was sent, such
+    // as Plan's Build button, so re-render instead of waiting for a state message.
+    updateRunState();
+    mcp.fail(message.message);
   }
   if (message.type === "setInput") {
     editor.setValue(message.source);
-    setSectionOpen(elements.inputHeading, elements.inputBody, true);
     editor.focus();
   }
   if (message.type === "focusEditor" || message.type === "focusInput") editor.focus();
@@ -4035,12 +2709,13 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
 });
 
 window.addEventListener("unload", () => {
-  broker.dispose();
+  removePlanTargetFileDrop?.();
+  removeResourceTargetFileDrop?.();
+  scroll.dispose();
   clipboard.dispose();
+  fileDrop.dispose();
   editor.destroy();
 });
 
 updateRunState();
-syncFullscreenButtons();
-syncResultToggle();
 vscode.postMessage({ type: "ready" });

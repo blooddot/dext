@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "../src/core/planTodoProgress.js";
-import { latestAgentTodos } from "../src/agentTodoPresentation.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
+import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "../src/features/conversations/domain/planTodoProgress.js";
+import { latestAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
 const document = "# Existing plan\n\n## Tasks\n\n1. [ ] Inspect implementation\n2. [x] Confirm dependencies\n3. [ ] Run tests\n\n## Verification\n- [ ] npm run check";
 const marker = (id: string, status: string) => `<!-- dext-todo: ${JSON.stringify({ updates: [{ id, status }] })} -->`;
@@ -17,6 +17,9 @@ describe("plan task progress without native task tools", () => {
     expect(new PlanTodoProgress(items).initial().todos).toEqual(items);
     expect(planTodoInstruction(items)).toContain('"id":"plan-1"');
     expect(planTodoInstruction(items)).toContain("even if a native plan/task tool is unavailable");
+    // The panel only moves from these comments, so the cadence is the feature:
+    // one report per finished task, never a single batch at the end.
+    expect(planTodoInstruction(items)).toContain("Never batch several finished tasks into one comment at the end");
   });
 
   it("ignores code examples and non-task sections and supports Chinese headings", () => {
@@ -25,6 +28,33 @@ describe("plan task progress without native task tools", () => {
     expect(planTodoItems("## Goal\n- [ ] A goal\n## Tasks\n1. Implement\n2. Verify").map((item) => item.text))
       .toEqual(["Implement", "Verify"]);
     expect(planTodoItems("No task section")).toEqual([]);
+  });
+
+  it("ignores phase headings and Mermaid diagrams inside Tasks and keeps flat task IDs stable", () => {
+    const plan = [
+      "## Tasks",
+      "",
+      "### Phase 1",
+      "",
+      "```mermaid",
+      "flowchart TD",
+      '  A["Inspect"] --> B["Apply"]',
+      "1. [ ] Phantom task inside a diagram",
+      "```",
+      "",
+      "1. [ ] Inspect implementation",
+      "2. [ ] Run targeted tests",
+      "",
+      "### Phase 2",
+      "",
+      "```mermaid",
+      '  C["Verify"] --> D["Report"]',
+      "```"
+    ].join("\n");
+    expect(planTodoItems(plan)).toEqual([
+      { id: "plan-1", text: "Inspect implementation", status: "pending" },
+      { id: "plan-2", text: "Run targeted tests", status: "pending" }
+    ]);
   });
 
   it("updates explicit status from arbitrarily fragmented progress comments while keeping them out of Process", () => {
@@ -63,6 +93,19 @@ describe("plan task progress without native task tools", () => {
     expect(tracker.initial().todos).toHaveLength(3);
     expect(initial.todos?.[0]?.status).toBe("pending");
     expect(new PlanTodoProgress(planTodoItems(document)).initial().todos?.[0]?.status).toBe("pending");
+  });
+
+  it("produces the same visible text incrementally as stripping the whole message at once", () => {
+    const whole = ["Start.", marker("plan-1", "in_progress"), "Reading files <!-- keep -->", marker("plan-2", "completed"), "Nearly done.", "<!-- dext-todo: {"].join("\n");
+    // Chunk boundaries fall inside the marker opener, its payload and the closer.
+    const chunks = [...whole.matchAll(/[\s\S]{1,7}/g)].map((match) => match[0]);
+    const tracker = new PlanTodoProgress(planTodoItems(document));
+    const output: AgentStreamEvent[] = [];
+    chunks.forEach((text, index) => output.push(...tracker.consume({ id: "message", phase: "message", text, ...(index === chunks.length - 1 ? { done: true } : {}) })));
+    const messages = output.filter((event) => event.phase === "message");
+    expect(messages.at(-1)?.text).toBe(stripPlanTodoProgress(whole));
+    expect(messages.at(-1)?.text).toContain("<!-- keep -->");
+    expect(tracker.initial().todos?.map((item) => item.status)).toEqual(["in_progress", "completed", "pending"]);
   });
 
   it("strips progress comments from the final output while retaining unrelated HTML comments", () => {

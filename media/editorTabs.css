@@ -1,0 +1,198 @@
+:root {
+  color-scheme: light dark;
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: 14px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  --resource-api-accent: #79b8ff;
+  --resource-mcp-accent: #c2a3ff;
+  --resource-rule-accent: #dfb45c;
+  --resource-skill-accent: #63c9b6;
+  --resource-syntax-keyword: #c586c0;
+  --resource-syntax-string: #ce9178;
+  --resource-syntax-number: #b5cea8;
+  --resource-syntax-function: #dcdcaa;
+  --resource-syntax-type: #4ec9b0;
+  --resource-syntax-parameter: #9cdcfe;
+  --resource-syntax-boolean: #569cd6;
+}
+body.vscode-light, body.vscode-high-contrast-light {
+  --resource-api-accent: #1769b5;
+  --resource-mcp-accent: #7546b6;
+  --resource-rule-accent: #886000;
+  --resource-skill-accent: #08796d;
+  --resource-syntax-keyword: #af00db;
+  --resource-syntax-string: #a31515;
+  --resource-syntax-number: #098658;
+  --resource-syntax-function: #795e26;
+  --resource-syntax-type: #267f99;
+  --resource-syntax-parameter: #001080;
+  --resource-syntax-boolean: #0000ff;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; padding: 24px; line-height: 1.5; }
+button, input { font: inherit; }
+button {
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  padding: 4px 10px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--vscode-editor-inactiveSelectionBackground));
+  cursor: pointer;
+}
+button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground)); }
+button:disabled { opacity: 0.4; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+h1 { margin: 0 0 16px; font-size: 20px; font-weight: 600; }
+h2 { font-size: 16px; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; }
+p { overflow-wrap: anywhere; }
+.resource-panel, .resource-definition { max-width: 1040px; margin: 0 auto; min-width: 0; }
+/* Keep navigation geometry independent of the selected page and its content height. */
+
+.resource-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; padding: 10px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+.resource-toolbar input {
+  flex: 1 1 240px;
+  min-width: 100px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+}
+.resource-toolbar input::placeholder { color: var(--vscode-input-placeholderForeground); }
+.resource-toolbar h2 { flex: 1 1 100%; margin: 0; overflow-wrap: anywhere; }
+.resource-group { margin: 0 0 8px; border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent); }
+.resource-group > summary { display: flex; align-items: center; gap: 8px; padding: 8px 4px; cursor: pointer; list-style: none; color: var(--resource-accent, var(--vscode-foreground)); font-weight: 600; }
+.resource-group > summary:hover { background: var(--vscode-list-hoverBackground); }
+.resource-group > summary::-webkit-details-marker { display: none; }
+.resource-group-toggle { flex: 1; }
+.resource-group-actions { display: inline-flex; margin-left: auto; }
+.resource-pack-version { color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 400; }
+/* Flex centering + a fixed width keeps the icon on the count badge's line and the
+   pack checkbox column aligned with the entry checkboxes. */
+.resource-group-chevron { display: inline-flex; align-items: center; justify-content: center; width: 16px; transition: transform 120ms ease; }
+.resource-group:not([open]) .resource-group-chevron { transform: rotate(-90deg); }
+.resource-tree-actions { display: inline-flex; gap: 4px; margin-left: auto; }
+.resource-icon-button { width: 26px; height: 26px; padding: 0; border: 0; background: transparent; display: inline-flex; align-items: center; justify-content: center; color: var(--vscode-foreground); flex-shrink: 0; }
+.resource-icon-button:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); }
+.resource-scope-switch { display: inline-flex; gap: 2px; margin-left: auto; padding: 2px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.resource-scope-switch button { border: 0; padding: 3px 9px; background: transparent; }
+.resource-scope-switch button.is-active { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: var(--vscode-list-activeSelectionBackground); }
+[data-resource-type="api"] { --resource-accent: var(--resource-api-accent); }
+[data-resource-type="mcp"] { --resource-accent: var(--resource-mcp-accent); }
+[data-resource-type="rule"] { --resource-accent: var(--resource-rule-accent); }
+[data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
+.resource-group[data-resource-type] h2 { color: var(--resource-accent); }
+.resource-group[data-resource-type] h2::before { content: ""; width: 3px; height: 14px; border-radius: 4px; background: var(--resource-accent); }
+.resource-create { color: var(--resource-accent); border-color: var(--resource-accent); background: transparent; }
+.resource-create:hover { background: color-mix(in srgb, var(--resource-accent) 12%, var(--vscode-editor-background)); }
+body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .resource-create { border-color: var(--vscode-contrastBorder, var(--resource-accent)); }
+.resource-navigation { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--vscode-panel-border); }
+.resource-navigation > button { flex-shrink: 0; }
+.resource-navigation-current { min-width: 0; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family, monospace); }
+.resource-navigation-home { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: transparent; }
+.resource-group h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; }
+.resource-count, .resource-source { color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 400; }
+.resource-count { border-radius: 6px; padding: 0 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.resource-group ul { list-style: none; padding: 0; margin: 0; }
+.resource-api-node > ul { padding-left: 16px; }
+.resource-api-node > summary { font-size: 14px; }
+.resource-entry > button { display: block; width: 100%; padding: 8px 10px; text-align: left; border-color: transparent; color: inherit; background: transparent; }
+.resource-entry > button:hover { background: var(--vscode-list-hoverBackground); }
+.resource-entry > button:focus-visible { outline-offset: -1px; }
+.resource-entry { position: relative; }
+/* Rows without a checkbox or toolbar keep the label at the edge instead of reserving an empty column. */
+.resource-entry:has(.resource-entry-actions) > button, .resource-entry:has(.resource-entry-visibility) > button { padding-right: 52px; }
+.resource-entry-actions { position: absolute; top: 4px; right: 48px; display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 4px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); opacity: 0; pointer-events: none; }
+.resource-entry:hover > .resource-entry-actions, .resource-entry:focus-within > .resource-entry-actions { opacity: 1; pointer-events: auto; }
+.resource-entry-actions .resource-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 3px; border: 0; background: transparent; color: var(--vscode-icon-foreground, var(--vscode-foreground)); }
+.resource-entry-actions .resource-icon-button:hover { background: var(--vscode-toolbar-hoverBackground); }
+.resource-entry-actions .resource-delete:hover { color: var(--vscode-errorForeground); }
+.resource-entry-visibility { position: absolute; top: 50%; right: 28px; transform: translateY(-50%); margin: 0; accent-color: var(--resource-accent, var(--vscode-focusBorder)); }
+.resource-pack-visibility { margin: 0; accent-color: var(--resource-accent, var(--vscode-focusBorder)); }
+@media (hover: none) { .resource-entry-actions { opacity: 1; pointer-events: auto; } }
+.resource-entry-heading { display: flex; align-items: baseline; gap: 12px; }
+.resource-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family, monospace); }
+.resource-source { flex-shrink: 0; }
+.resource-description { display: block; color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+.resource-entry-signature { display: block; margin-top: 3px; color: var(--vscode-descriptionForeground); font-size: 12px; font-family: var(--vscode-editor-font-family, monospace); font-weight: 400; overflow-wrap: anywhere; }
+.resource-result-type { cursor: help; border-bottom: 1px dotted var(--vscode-descriptionForeground); }
+.resource-empty { color: var(--vscode-descriptionForeground); padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 4px; }
+.resource-content { padding: 16px; overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: 4px; font-family: var(--vscode-editor-font-family, monospace); font-size: var(--vscode-editor-font-size, 13px); }
+.resource-content code { white-space: pre; }
+:is(.resource-panel, .resource-definition) code { background: transparent; border: 0; padding: 0; border-radius: 0; color: var(--vscode-editor-foreground, var(--vscode-foreground)); font-family: var(--vscode-editor-font-family, monospace); }
+/* Syntax colour comes from the editor's token palette, not from the symbol icons:
+   --vscode-symbolIcon-* paints the outline's icons, where a class is orange, while the
+   editor paints that same type teal. VS Code exposes no CSS variable for token colours,
+   so the palette below is the closest a script-less page gets.
+   shortcut: the palette is Dark+/Light+ only, so a custom theme's token colours do not
+   reach this page; inject the theme's own tokenColors if that ever matters. */
+:is(.resource-panel, .resource-definition) .tok-keyword { color: var(--resource-syntax-keyword); }
+:is(.resource-panel, .resource-definition) .tok-string { color: var(--resource-syntax-string); }
+:is(.resource-panel, .resource-definition) .tok-number { color: var(--resource-syntax-number); }
+:is(.resource-panel, .resource-definition) .tok-bool { color: var(--resource-syntax-boolean); }
+:is(.resource-panel, .resource-definition) .tok-comment { color: var(--vscode-descriptionForeground); }
+:is(.resource-panel, .resource-definition) .tok-function { color: var(--resource-syntax-function); }
+:is(.resource-panel, .resource-definition) .tok-typeName { color: var(--resource-syntax-type); }
+:is(.resource-panel, .resource-definition) .tok-propertyName { color: var(--resource-syntax-parameter); }
+:is(.resource-panel, .resource-definition) .tok-variableName,
+:is(.resource-panel, .resource-definition) .tok-operator,
+:is(.resource-panel, .resource-definition) .tok-punctuation { color: var(--vscode-editor-foreground, var(--vscode-foreground)); }
+.resource-api-docs { margin: 0 0 24px; padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.resource-api-signature { margin-top: 0; font-size: 1.05em; }
+.resource-api-docs dl { margin: 0; }
+.resource-api-docs dt { margin-top: 10px; font-weight: 600; }
+.resource-api-docs dd { margin: 4px 0 0 18px; color: var(--vscode-descriptionForeground); }
+.resource-api-type, .resource-api-default { color: var(--vscode-descriptionForeground); font-weight: normal; }
+.resource-source-heading { margin-top: 20px; }
+.resource-api-reference { margin: 0 0 24px; padding: 16px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.resource-api-reference h3 { margin: 20px 0 8px; font-size: 14px; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
+.resource-api-specifier { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.resource-api-specifier code { font-size: 1.05em; }
+.resource-api-copy { padding: 2px 8px; font-size: 12px; }
+.resource-api-members { list-style: none; margin: 0; padding: 0; }
+.resource-api-members .resource-api-members { margin: 8px 0 0 16px; padding-left: 12px; border-left: 1px solid var(--vscode-panel-border); }
+.resource-api-member { padding: 8px 0; border-top: 1px solid var(--vscode-panel-border); }
+.resource-api-members > .resource-api-member:first-child { border-top: 0; }
+.resource-api-member-signature { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+.resource-api-documentation { margin-top: 6px; white-space: pre-wrap; color: var(--vscode-descriptionForeground); }
+.resource-api-params { margin: 6px 0 0; }
+.resource-api-params dt { font-weight: 600; }
+.resource-api-params dd { margin: 2px 0 0 16px; color: var(--vscode-descriptionForeground); white-space: pre-wrap; }
+.resource-api-returns, .resource-api-deprecated { margin: 6px 0 0; color: var(--vscode-descriptionForeground); white-space: pre-wrap; }
+.resource-api-tag { display: inline-block; min-width: 68px; color: var(--vscode-foreground); font-weight: 600; }
+.resource-api-example { margin: 8px 0 0; padding: 10px; overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
+.resource-api-example code { white-space: pre; }
+
+@media (max-width: 480px) {
+  body { padding: 16px; }
+}
+
+.markdown-diagram { margin: 12px 0; padding: 12px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; }
+.markdown-diagram-preview { overflow: auto; text-align: center; }
+.markdown-diagram-preview > svg { display: block; height: auto; margin: 0 auto; max-width: 100%; }
+.markdown-diagram > details { margin-top: 8px; }
+.markdown-diagram > details > summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+.markdown-diagram-status { color: var(--vscode-descriptionForeground); }
+.markdown-diagram-staging { position: absolute; left: -100000px; top: 0; width: 1000px; visibility: hidden; pointer-events: none; }
+
+/* API detail: the host ships Mermaid source, the apiFlow.js entry renders the SVG. */
+.resource-api-flow { margin: 20px 0; padding: 14px; min-width: 0; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-editor-background); }
+.resource-api-flow figcaption { margin-bottom: 8px; color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.resource-api-flow-status { margin: 0 0 8px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.resource-api-flow-preview { min-width: 0; padding: 6px 0; overflow-x: auto; }
+.resource-api-flow-preview svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.resource-api-flow[data-api-flow-state="error"] .resource-api-flow-status { color: var(--vscode-editorError-foreground, #d13438); }
+.resource-api-flow-issues { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--vscode-editorError-foreground, #d13438); background: var(--vscode-textBlockQuote-background); }
+.resource-api-flow-issues h3 { margin: 0 0 6px; font-size: 14px; }
+.resource-api-flow-issues ul { margin: 0; padding-left: 20px; }
+.resource-api-flow-issues li { overflow-wrap: anywhere; }
+.resource-api-flow-source, .resource-api-flow-functions { margin-top: 10px; border-top: 1px solid var(--vscode-panel-border); }
+.resource-api-flow-source summary, .resource-api-flow-functions summary { padding: 8px 0; cursor: pointer; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.resource-api-flow-source pre { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.resource-api-flow-list { margin: 0 0 8px; padding: 0; list-style: none; }
+.resource-api-flow-list li { padding: 6px 0; border-top: 1px solid var(--vscode-panel-border); overflow-wrap: anywhere; }
+.resource-api-flow-role { color: var(--vscode-descriptionForeground); }

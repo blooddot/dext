@@ -1,8 +1,10 @@
+import { checkBrowserMetafile } from "./checkModuleBoundaries.mjs";
 import assert from "node:assert/strict";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { listFiles } from "@vscode/vsce";
-
+import { structureIndexAssets } from "./buildStructureIndexAssets.mjs";
+import { checkStructureIndexRuntime } from "./checkStructureIndexRuntime.mjs";
 const output = resolve("dist", "webview");
 const entries = await readdir(output, { recursive: true });
 const files = await Promise.all(
@@ -10,21 +12,40 @@ const files = await Promise.all(
 );
 const fileNames = files.filter((file) => file.size > 0).map((file) => file.entry);
 
-for (const required of ["main.js", "main.css"]) {
+// `ts.worker.js` is what gives the composer its TypeScript completion, hover and
+// diagnostics; without it the editor silently loses every language feature.
+for (const required of ["main.js", "apiFlow.js", "mermaid.js", "diagrams.js", "appearance.js", "main.css", "editor.worker.js", "ts.worker.js"]) {
   assert.ok(fileNames.includes(required), `Missing Webview build asset '${required}'.`);
 }
-assert.deepEqual(fileNames.filter((file) => file.endsWith(".worker.js")), []);
 assert.ok((await stat(resolve("dist", "codicons", "codicon.ttf"))).size > 0, "Missing VS Code codicon font.");
 const mainBundle = await readFile(resolve(output, "main.js"), "utf8");
+const apiFlowBundle = await readFile(resolve(output, "apiFlow.js"), "utf8");
+const mermaidBundle = await readFile(resolve(output, "mermaid.js"), "utf8");
 const extensionBundle = await readFile(resolve("dist", "extension.js"), "utf8");
 const mainStyles = await readFile(resolve(output, "main.css"), "utf8");
 // Files on disk can pass build checks while .vscodeignore removes them from the VSIX.
 // Keep the History stylesheet's existing URL valid for pages open during an update.
 const packagedFiles = new Set((await listFiles()).map((file) => file.replaceAll("\\", "/")));
+for (const [pkg, file] of structureIndexAssets) {
+  for (const name of [file, `${pkg}.LICENSE`]) {
+    assert.ok(packagedFiles.has(`dist/structure-index/${name}`), `Missing structure index asset '${name}'.`);
+    assert.ok((await stat(resolve('dist/structure-index', name))).size > 0);
+  }
+}
+await checkStructureIndexRuntime();
 for (const required of [
+  "media/pi-extension.mjs",
   "media/styles.css",
+  "media/editorTabs.css",
+  "media/appearance.css",
   "dist/webview/main.css",
   "dist/webview/main.js",
+  "dist/webview/apiFlow.js",
+  "dist/webview/mermaid.js",
+  "dist/webview/diagrams.js",
+  "dist/webview/appearance.js",
+  "dist/webview/editor.worker.js",
+  "dist/webview/ts.worker.js",
   "dist/codicons/codicon.css",
   "dist/codicons/codicon.ttf",
   "dist/markdown/github-markdown.css",
@@ -32,6 +53,11 @@ for (const required of [
 ]) {
   assert.ok(packagedFiles.has(required), `Missing packaged Webview asset '${required}'.`);
 }
+assert.ok((await stat(resolve("media/pi-extension.mjs"))).size > 0, "Missing the managed Pi extension.");
+assert.ok(extensionBundle.includes("pi-extension.mjs"), "Pi must resolve its managed extension from the installed package.");
+assert.ok(packagedFiles.has("dist/api-reference.json.br"), "Missing the packaged brotli API reference.");
+assert.ok(!packagedFiles.has("dist/api-reference.json"), "The uncompressed API reference must not be packaged; only the brotli copy ships.");
+assert.ok((await stat(resolve("dist", "api-reference.json.br"))).size > 0, "Missing the brotli API reference.");
 const historyStyles = await readFile(resolve("media", "styles.css"), "utf8");
 const markdownStyles = await readFile(resolve("dist", "markdown", "github-markdown.css"), "utf8");
 for (const theme of ["vscode-light", "vscode-dark", "vscode-high-contrast-light", "vscode-high-contrast"]) {
@@ -47,41 +73,102 @@ assert.ok(
   "The extension bundle contains jsonc-parser's UMD entry. Import jsonc-parser/lib/esm/main.js explicitly; the UMD wrapper leaves unresolved relative requires in the VS Code extension host."
 );
 for (const action of [
-  "code-file-reference",
-  "dext-signature-tooltip",
+  "dext-ref-chip",
+  "editor.action.triggerParameterHints",
   "Dext input",
   "insertFileReferences",
   "executeInput",
-  "chooseFiles"
+  "chooseFiles",
 ]) {
   assert.ok(mainBundle.includes(action), `Missing required Webview behavior '${action}' from the bundle.`);
 }
-for (const diagnosticStyle of [
-  "dext-diagnostic-error",
-  "dext-diagnostic-warning",
-  "dext-diagnostic-info",
-  "cm-tooltip-lint",
-  "--vscode-editorError-foreground"
-]) {
+// Mermaid must live only in the shared bundle. If esbuild inlines its ~3 MB into
+// main.js or apiFlow.js again, the VSIX silently pays for a second copy.
+assert.ok(mermaidBundle.includes("cytoscape"), "The shared Mermaid bundle does not contain a Mermaid renderer.");
+assert.ok(mermaidBundle.includes("markdown-diagram-staging"), "The shared Mermaid bundle does not contain Dext's renderer.");
+assert.ok(!mainBundle.includes("cytoscape"), "main.js contains an inlined Mermaid renderer; lazy-load dist/webview/mermaid.js instead.");
+assert.ok(!apiFlowBundle.includes("cytoscape"), "apiFlow.js contains an inlined Mermaid renderer; lazy-load dist/webview/mermaid.js instead.");
+// The host must publish the bundle URI and a nonce that matches the CSP; without
+// either, the lazy <script> is blocked and every diagram silently falls back.
+for (const marker of ["dext-mermaid", "dext-script-nonce"]) {
+  assert.ok(extensionBundle.includes(marker), `The host does not publish the '${marker}' meta tag.`);
+  assert.ok(mainBundle.includes(marker), `main.js does not read the '${marker}' meta tag.`);
+}
+assert.ok(apiFlowBundle.includes("dext-mermaid"), "apiFlow.js does not read the shared Mermaid meta tag.");
+for (const marker of ["data-turn-review", "data-plan-review", "data-adopt-suggestion", "adoptKnowledgeSuggestion"]) {
+  assert.ok(!mainBundle.includes(marker), `Retired Review behavior '${marker}' remains in the bundle.`);
+}
+// The migrated editor-tab pages are rendered by the host, so they live in the extension bundle.
+for (const action of ["data-resource-open", "data-resource-search"]) {
+  assert.ok(extensionBundle.includes(action), `Missing migrated editor-tab behavior '${action}' from the extension bundle.`);
+}
+for (const style of [".turn-review", ".plan-review"]) {
+  assert.ok(!mainStyles.includes(style), `Retired Review style '${style}' remains.`);
+}
+
+for (const style of ['.monaco-editor', '.squiggly-error', '.squiggly-warning', '.parameter-hints-widget', '.dext-ref-chip']) {
+  assert.ok(mainStyles.includes(style), 'Missing Monaco style '+style);
+}
+for (const font of fileNames.filter(name=>name.endsWith('.ttf'))) assert.ok(packagedFiles.has('dist/webview/'+font), 'Missing Monaco font '+font);
+assert.ok(!mainBundle.includes('@codemirror/'), 'Old editor code must not be bundled');
+assert.ok(!mainStyles.includes('.cm-editor'), 'Old editor styles must not be bundled');
+
+const buildMeta = JSON.parse(await readFile(resolve("dist", "build-meta.json"), "utf8"));
+// The kernel is started with `--import dist/dextLoader.mjs`, so its ESM files must
+// exist on disk, be listed in the manifest and survive packaging.
+// The kernel is started with `--import dist/dextLoader.mjs`, so its ESM files must
+// exist on disk, be listed in the manifest and survive packaging. `dist/dext.d.ts`
+// is the generated `dext` declaration the extension ships and points workspaces at.
+assert.ok((await stat(resolve("dist", "dext.d.ts"))).size > 0, "Missing the shipped dext declaration ('dist/dext.d.ts').");
+assert.ok(packagedFiles.has("dist/dext.d.ts"), "The shipped dext declaration is excluded from the VSIX.");
+const shippedDeclaration = await readFile(resolve("dist", "dext.d.ts"), "utf8");
+assert.ok(shippedDeclaration.includes('declare module "dext"'), "The shipped declaration must declare the dext module.");
+assert.ok(!shippedDeclaration.includes("PrintResult"), "The shipped declaration must not describe the removed print result.");
+for (const kernelFile of ["dextLoader.mjs", "dextKernel.mjs", "dextRuntime.mjs", "dextSerialization.mjs"]) {
+  const relative = `dist/${kernelFile}`;
+  assert.ok((await stat(resolve("dist", kernelFile))).size > 0, `Missing kernel build asset '${relative}'.`);
+  assert.ok(packagedFiles.has(relative), `The kernel asset '${relative}' is excluded from the VSIX.`);
+  const kernelOutputs = buildMeta.metafiles?.kernel?.outputs ?? {};
   assert.ok(
-    mainStyles.includes(diagnosticStyle),
-    `Missing required diagnostic style '${diagnosticStyle}' from the Webview CSS.`
+    Object.keys(kernelOutputs).some((output) => output.replaceAll("\\", "/") === relative),
+    `The kernel build manifest does not list '${relative}'; rerun \`npm run build\`.`
   );
 }
-assert.match(
-  mainStyles,
-  /\.cm-lint-marker-error[^{}]*\{[^}]*content:\s*none\s*!important[^}]*position:\s*relative/i,
-  "Diagnostic markers must clear CodeMirror's data-image replacement content."
+const kernelInputs = buildMeta.entryInputs?.kernel;
+assert.ok(Array.isArray(kernelInputs) && kernelInputs.some((input) => input.endsWith("src/runner/dextKernel.mjs")), "The build manifest does not describe the kernel entry.");
+assert.ok(!(await readFile(resolve("dist", "dextLoader.mjs"), "utf8")).includes("@lezer/"), "The kernel must not bundle the removed language parser.");
+// The kernel resolves `dext` through its own loader, which maps it to the runtime
+// file user code imports. A copy bundled into the kernel would be a second instance
+// with its own in-flight registry, so a run that called an API without `await` would
+// be reported finished while the call — and the agent behind it — was still running.
+const kernelBundle = await readFile(resolve("dist", "dextKernel.mjs"), "utf8");
+assert.ok(kernelBundle.includes('import("dext")'), "The kernel must obtain the runtime through its loader, not by a file path.");
+assert.ok(
+  !kernelBundle.includes("Dext APIs are only available inside a Dext run."),
+  "The kernel bundle contains its own copy of dextRuntime.mjs; mark 'dext' external so kernel and user code share one runtime instance."
 );
-assert.match(
-  mainStyles,
-  /\.cm-lint-marker-error::before[^{}]*\.cm-lint-marker-error::after\s*\{[^}]*content:\s*["']{2}/i,
-  "The error marker must render as CSS lines instead of a font glyph."
+
+// Guard the manifest shape first: an empty or renamed input list would make every assertion below
+// pass without checking anything.
+assert.equal(buildMeta.schemaVersion, 1, "dist/build-meta.json was written by an unknown esbuild manifest schema.");
+const extensionInputs = buildMeta.entryInputs?.extension;
+assert.ok(Array.isArray(extensionInputs) && extensionInputs.length > 0, "The build manifest lists no extension inputs; rerun `npm run build`.");
+for (const known of ["src/extension.ts"]) {
+  assert.ok(
+    extensionInputs.some((input) => input === known || input.endsWith(`/${known}`)),
+    `The build manifest does not list '${known}', so it does not describe this bundle.`
+  );
+}
+for (const forbidden of [".tmp-tb", "dist/build-meta.json", "dist/extensionHostTest.js"]) {
+  assert.ok(
+    ![...packagedFiles].some((file) => file === forbidden || file.startsWith(`${forbidden}/`)),
+    `'${forbidden}' must not be distributed in the VSIX.`
+  );
+}
+assert.ok(
+  ![...packagedFiles].some((file) => file.split("/").some((segment) => segment.startsWith(".tmp-"))),
+  "Temporary '.tmp-*' files or directories must not be distributed in the VSIX; exclude them in .vscodeignore."
 );
-assert.match(mainStyles, /\.cm-lint-marker-error::before\s*\{[^}]*rotate\(45deg\)/i);
-assert.match(mainStyles, /\.cm-lint-marker-error::after\s*\{[^}]*rotate\(-45deg\)/i);
-assert.match(mainStyles, /\.cm-lint-marker-warning::before\s*\{[^}]*content:\s*["']!["']/i);
-assert.match(mainStyles, /\.cm-lint-marker-info::before\s*\{[^}]*content:\s*["']i["']/i);
-assert.match(mainStyles, /\.finding\s*\{[^}]*display:\s*block/);
-assert.match(mainStyles, /\.finding\.with-icon\s*\{[^}]*display:\s*grid/);
-assert.ok(mainBundle.includes("with-icon"), "Review findings must opt into the icon grid layout.");
+
+const boundaryErrors = checkBrowserMetafile(buildMeta.metafiles.webview);
+if (boundaryErrors.length) throw new Error(boundaryErrors.join("\n"));

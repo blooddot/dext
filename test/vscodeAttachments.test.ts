@@ -12,7 +12,7 @@ const vscode = vi.hoisted(() => ({
 
 vi.mock("vscode", () => vscode);
 
-import { fileAttachment } from "../src/vscodeAttachments.js";
+import { fileAttachment } from "../src/platform/vscode/attachments.js";
 
 describe("file attachments", () => {
   it("creates a workspace file reference without reading or size-limiting the file", async () => {

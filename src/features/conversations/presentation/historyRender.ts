@@ -1,0 +1,426 @@
+import { answerChoices, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerFieldPresentation } from "./uiInteractionPresentation.js";
+import { readHistoryResponse } from "../domain/historyResponse.js";
+import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
+import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
+import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
+import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
+import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession } from "../contracts/history.js";
+import {
+  TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_COPY_INPUT_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn,
+  presentTurnMode, resultCopyText, type TurnRenderModel
+} from "./turnPresentation.js";
+import { agentMessageCopyText, presentAgentMessage } from "./agentMessagePresentation.js";
+import { prepareHistoryTrace } from "../domain/agentTraceReplay.js";
+import {
+  contextReferenceLabel,
+  inputReferenceDisplayParts,
+  inputReferenceDisplayText,
+  normalizeInputReferenceSource,
+  type ContextReferenceOccurrence
+} from "../../workspace/domain/fileReference.js";
+import { terminalSegments } from "./terminalText.js";
+import { escapeHtml } from "../../../shared/lib/html.js";
+import { dextMarkdown } from "../../../shared/lib/markdown.js";
+
+// Process events are also shown in the live conversation, where Markdown owns
+// paragraph and soft-break layout. History must use the same interpretation:
+// rendering the stored source with pre-wrap turns Markdown's blank lines into
+// unusually large gaps after a conversation is reopened.
+const processMarkdown = dextMarkdown();
+processMarkdown.use(markdownCodeCopy);
+
+function renderProcessMarkdown(source: string): string {
+  return processMarkdown.render(source);
+}
+
+function chevron(): string {
+  return `<i class="disclosure-chevron codicon codicon-chevron-right"></i>`;
+}
+
+// VS Code reads this attribute to build the native context menu and passes the
+// merged object to the invoked command.
+function contextAttribute(context: Record<string, string | boolean>): string {
+  return `data-vscode-context='${escapeHtml(JSON.stringify(context))}'`;
+}
+
+function copyButton(value: string): string {
+  // Character references survive HTML's CRLF normalization on history reload.
+  const payload = escapeHtml(value).replaceAll("\r", "&#13;").replaceAll("\n", "&#10;");
+  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${payload}" title="Copy" aria-label="Copy"></button>`;
+}
+
+/** Thin host adapter; shared components own section structure and result dispatch. */
+function historyTurnSection(
+  section: TurnRenderModel["process"], body: string,
+  options: { open?: boolean; action?: string } = {}
+): string {
+  const action = options.action === undefined ? undefined : { html: options.action };
+  return renderTurnSection(turnHtmlAdapter, section, [{ html: body }], options.open, action).disclosure.html;
+}
+
+function markdownOutput(text: string): string {
+  return renderTurnMarkdown(turnHtmlAdapter,
+    { html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` }
+  ).html;
+}
+
+function jsonOutput(text: string): string {
+  return renderTurnJson(turnHtmlAdapter, text, { html: copyButton(text) })?.html ?? markdownOutput(text);
+}
+
+/** High-frequency conversation actions stay visible on hover; the complete
+ * action set remains available from the native context menu. */
+function historyActionButton(icon: string, command: string, label: string, sessionId: string, turnId?: string): string {
+  const target = turnId ? ` data-turn-id="${escapeHtml(turnId)}"` : "";
+  return `<button class="history-session-action icon-button compact" type="button" data-history-command="${escapeHtml(command)}" data-session-id="${escapeHtml(sessionId)}"${target} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><i class="codicon codicon-${icon}"></i></button>`;
+}
+
+function historyTurnActions(sessionId: string, turnId: string, spill: boolean): string {
+  return `<span class="history-turn-actions">${[
+    historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameTurn", TURN_RENAME_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkFromTurn", TURN_FORK_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_COPY_INPUT_ACTION.icon, "dext.history.copyTurnInput", TURN_COPY_INPUT_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyTurn", TURN_COPY_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_ADD_TO_INPUT_ACTION.icon, "dext.history.addTurnToDext", TURN_ADD_TO_INPUT_ACTION.label, sessionId, turnId),
+    historyActionButton(TURN_DELETE_ACTION.icon, "dext.history.deleteTurn", TURN_DELETE_ACTION.label, sessionId, turnId),
+    // Last, like the live turn toolbar, so the common actions keep their positions.
+    ...(spill ? [historyActionButton("go-to-file", "dext.history.openSpill", "Open truncated output", sessionId, turnId)] : [])
+  ].join("")}</span>`;
+}
+
+function historySessionActions(session: DextHistorySession, favorite: boolean): string {
+  const favoriteCommand = favorite ? "dext.history.removeFavorite" : "dext.history.addFavorite";
+  const favoriteLabel = favorite ? "Remove from favorites" : "Add to favorites";
+  const favoriteIcon = favorite ? "star-full" : "star-empty";
+  const archiveCommand = session.archivedAt ? "dext.history.unarchiveConversation" : "dext.history.archiveConversation";
+  const archiveLabel = session.archivedAt ? "Restore conversation" : "Archive conversation";
+  const archiveIcon = session.archivedAt ? "inbox" : "archive";
+  return [
+    historyActionButton("debug-continue", "dext.history.continueConversation", "Continue in Dext", session.id),
+    historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameConversation", "Rename conversation", session.id),
+    historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkConversation", "Fork conversation", session.id),
+    historyActionButton(TURN_COPY_ACTION.icon, "dext.history.copyConversation", "Copy conversation as Markdown", session.id),
+    historyActionButton(TURN_ADD_TO_INPUT_ACTION.icon, "dext.history.addConversationToDext", TURN_ADD_TO_INPUT_ACTION.label, session.id),
+    historyActionButton(favoriteIcon, favoriteCommand, favoriteLabel, session.id),
+    historyActionButton(archiveIcon, archiveCommand, archiveLabel, session.id),
+    historyActionButton("trash", "dext.history.deleteConversation", "Delete conversation", session.id)
+  ].join("");
+}
+
+/** Render terminal ANSI SGR sequences as safe, theme-aware HTML. */
+export function highlightTerminal(source: string): string {
+  return terminalSegments(source).map((segment) => {
+    const text = escapeHtml(segment.text);
+    if (!segment.classes.length && segment.color === undefined) return text;
+    const style = segment.color === undefined ? "" : ` style="color:${segment.color}"`;
+    return `<span class="${segment.classes.join(" ")}"${style}>${text}</span>`;
+  }).join("");
+}
+
+function referenceIcon(reference: ContextReferenceOccurrence): string {
+  if (reference.kind === "dir") return "folder";
+  if (reference.kind === "symbol") return "symbol-method";
+  return "file";
+}
+
+/** The prompt keeps readable @path tokens as chips; everything around them is
+ * escaped text. The raw source is preserved for copy and history replay. */
+function renderedInputSource(source: string): string {
+  return inputReferenceDisplayParts(source).map((part) => {
+    if (part.kind === "text") return escapeHtml(part.value);
+    const reference = part.reference;
+    const label = contextReferenceLabel(reference);
+    const title = escapeHtml(reference.payload);
+    const open = reference.kind === "file" ? ` data-open-file-reference="${title}"` : "";
+    return `<span class="attachment-chip turn-prompt-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${escapeHtml(label)}" aria-label="Open ${escapeHtml(label)}"${open}><i class="codicon codicon-${referenceIcon(reference)}"></i><span class="attachment-label">${escapeHtml(label)}</span></button></span>`;
+  }).join("");
+}
+
+function resultBody(result: DextResult, patchApplication?: RuntimeResponse["patchApplication"]): string {
+  return renderTurnResult({
+    ...turnHtmlAdapter,
+    markdown: (text) => ({ html: markdownOutput(text) }),
+    json: (text) => ({ html: jsonOutput(text) }),
+    plan: (path) => ({ html: planLink(path) })
+  }, result, patchApplication).map((node) => node.html).join("");
+}
+
+// History opens the plan document; building it belongs to the live composer.
+function planLink(planPath: string): string {
+  const title = escapeHtml(planPath);
+  const label = escapeHtml(`Plan: ${planPath.split("/").pop() ?? planPath}`);
+  return `<div class="plan-actions"><span class="attachment-chip history-file-reference" title="${title}"><button class="attachment-open" type="button" title="Open ${label}" aria-label="Open ${label}" data-open-file-reference="${title}"><i class="codicon codicon-checklist"></i><span class="attachment-label">${label}</span></button></span></div>`;
+}
+
+function execution(response: RuntimeResponse): string {
+  const body = resultBody(response.result, response.patchApplication);
+  return body === "" ? "" : `<section class="history-execution execution-result">${body}</section>`;
+}
+
+function steps(response: InputExecutionResponse): WorkflowStepResponse[] {
+  return response.steps ?? response.executions.map((item) => ({ method: item.method.id, state: "success", response: item }));
+}
+
+function output(response: InputExecutionResponse): string {
+  return steps(response).map((step) => {
+    if (step.quiet) return "";
+    if (step.stream) {
+      return `<div class="markdown-body history-process-output process-output-${step.stream.channel}">${renderProcessMarkdown(step.stream.text)}</div>`;
+    }
+    return step.response
+      ? execution(step.response)
+      : `<details class="history-disclosure step-result"><summary>${chevron()}<span>${escapeHtml(step.method)}</span><span class="history-meta">${escapeHtml(step.state)}</span></summary>${step.error ? `<pre class="error">${escapeHtml(step.error)}</pre>` : ""}</details>`;
+  }).join("");
+}
+
+function outputText(response: InputExecutionResponse): string {
+  return steps(response)
+    .filter((step) => !step.quiet && step.response)
+    .map((step) => resultCopyText(step.response!.result))
+    .filter(Boolean).join("\n\n");
+}
+
+function processMessage(text: string): string {
+  return renderTurnMessage({
+    ...turnHtmlAdapter,
+    prose: (text) => ({ html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` }),
+    code: (text) => ({ html: `<pre>${escapeHtml(text)}</pre>` }),
+  }, presentAgentMessage(text)).map((node) => node.html).join("");
+}
+
+function commandLabel(event: AgentStreamEvent): string {
+  return (event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180);
+}
+
+function commandRow(event: AgentStreamEvent, className = "process-command"): string {
+  return `<details class="history-disclosure ${className}"><summary>${chevron()}<i class="codicon codicon-check agent-trace-glyph"></i><span class="agent-trace-command-label">${escapeHtml(commandLabel(event))}</span></summary><pre class="terminal-text">${highlightTerminal(event.text)}</pre></details>`;
+}
+
+function process(events: readonly AgentStreamEvent[]): { html: string; copyText: string } {
+  const html: string[] = [];
+  // Use the same stable-id replay that Conversation history restoration uses.
+  const replayEvents = prepareHistoryTrace(events);
+  let tools: AgentStreamEvent[] = [];
+  let groupId: string | undefined;
+  const flushTools = (): void => {
+    const firstTool = tools[0];
+    if (!firstTool) return;
+    // A lone unnamed command already names itself in the group summary, so only
+    // real groups need a nested row per command.
+    const lone = !firstTool.groupLabel && tools.length === 1;
+    const label = firstTool.groupLabel ?? (lone ? commandLabel(firstTool) : `Ran ${tools.length} commands`);
+    const body = lone ? `<pre class="terminal-text">${highlightTerminal(firstTool.text)}</pre>` : tools.map((event) => commandRow(event)).join("");
+    html.push(`<details class="history-disclosure process-event process-command-group"><summary>${chevron()}<span>${escapeHtml(label)}</span></summary><div class="disclosure-body">${body}</div></details>`);
+    tools = [];
+    groupId = undefined;
+  };
+  for (const event of replayEvents) {
+    if (event.phase === "status" || event.phase === "todo" || event.phase === "input") continue;
+    if (event.phase === "tool") {
+      if (event.solo) {
+        flushTools();
+        html.push(commandRow(event, "process-event process-command-solo"));
+        continue;
+      }
+      if (tools.length && event.groupId !== groupId) flushTools();
+      groupId = event.groupId;
+      tools.push(event);
+      continue;
+    }
+    flushTools();
+    html.push(`<section class="process-message agent-stream-item agent-trace-message"><div class="agent-stream-text">${processMessage(event.text)}</div></section>`);
+  }
+  flushTools();
+  const content = html.join("");
+  if (!content) return { html: "", copyText: "" };
+  const copyText = replayEvents
+    .filter((event) => event.phase !== "status" && event.phase !== "todo" && event.phase !== "input")
+    .map((event) => event.phase === "tool"
+      ? event.text
+      : agentMessageCopyText(presentAgentMessage(event.text)))
+    .filter(Boolean)
+    .join("\n\n");
+  return { html: `<div class="process-content">${content}</div>`, copyText };
+}
+
+/** A restored card keeps every choice the question offered, with the picked ones
+ * marked, so an answer still reads in the context of its alternatives once the
+ * form itself is gone. A field without options keeps its answer as plain text. */
+function answerField(field: AnswerFieldPresentation): string {
+  const head = `<strong>${escapeHtml(field.label)}</strong>`;
+  if (!field.choices.length) return `${head}<p class="agent-input-answer">${escapeHtml(field.answer)}</p>`;
+  const options = field.choices.map((choice) => {
+    const row = presentAnswerChoice(choice);
+    return `<li class="agent-input-choice${choice.selected ? " selected" : ""}${choice.custom ? " custom" : ""}">`
+      + `<i class="codicon codicon-${row.icon}" aria-hidden="true"></i><span>`
+      + `${row.source ? `<small class="agent-input-choice-source">${row.source}</small>` : ""}${escapeHtml(row.label)}`
+      + `${row.description ? `<small>${escapeHtml(row.description)}</small>` : ""}</span></li>`;
+  }).join("");
+  return `${head}<ul class="agent-input-choices">${options}</ul>`;
+}
+
+function inputHistory(events: readonly AgentStreamEvent[]): string {
+  const interactions = new Map(events.flatMap((event) => event.uiInteraction ? [[event.uiInteraction.requestId, event.uiInteraction] as const] : []));
+  const forms = [...interactions.values()].map((state) => {
+    const action = state.form.actions?.find((action) => action.id === state.action);
+    const fields = state.form.fields.map((field) =>
+      `<div class="agent-input-field">${answerField(presentAnswerField(field, state.answers?.[field.id]))}</div>`).join("");
+    const description = state.form.description ? `<div class="interaction-description markdown-body">${renderProcessMarkdown(state.form.description)}</div>` : "";
+    const title = answeredCardTitle(state.form.title, state.status === "submitted", action?.label);
+    return `<section class="agent-input-card"><details class="agent-input-disclosure"><summary>${chevron()}<strong>${escapeHtml(title)}</strong></summary><div class="agent-input-disclosure-body">${description}${fields}</div></details></section>`;
+  }).join("");
+  const requests = new Map(events.flatMap((event) => event.userInput ? [[event.userInput.id, event.userInput] as const] : []));
+  return forms + [...requests.values()].map((request) => {
+    const status = request.status === "answered" ? "Answered" : "Closed";
+    const questions = request.questions.map((question) => {
+      const answers = request.status === "answered" ? request.answers?.[question.id]?.answers ?? [] : [];
+      const answer = question.isSecret ? "Answer submitted" : answers.join(", ") || (request.status === "answered" ? "Answer submitted" : "No answer submitted");
+      const choices = question.isSecret ? [] : answerChoices(question.options, answers);
+      return `<div class="agent-input-question">${answerField({ label: question.question, answer, choices })}</div>`;
+    }).join("");
+    return `<section class="agent-input-card"><div class="agent-input-header"><strong>Question</strong><span class="agent-input-status">${status}</span></div>${questions}</section>`;
+  }).join("");
+}
+
+function parsedResponse(record: DextHistoryRecord): InputExecutionResponse | undefined {
+  return readHistoryResponse(record);
+}
+
+function dateLabel(timestamp: number): string {
+  return new Date(timestamp).toLocaleString();
+}
+
+const TURN_ACTION_HINT = "Right-click for turn actions";
+const SESSION_ACTION_HINT = "Right-click for conversation actions";
+
+/** The prompt a turn is read by: the Plan it ran, or its whole input. */
+export function historyTurnLabel(record: DextHistoryRecord): string {
+  const planExecution = parsedResponse(record)?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
+  const planPath = (record.executePlan ? record.planPath : undefined)
+    ?? (planExecution?.result.kind === "plan" ? planExecution.result.planPath : undefined);
+  if (planPath) return `Plan: ${planPath.split("/").pop() ?? planPath}`;
+  return inputReferenceDisplayText(normalizeInputReferenceSource(record.input));
+}
+
+/** The name a renamed turn shows; without one the rendered prompt is the label. */
+export function historyTurnTitle(record: DextHistoryRecord): string {
+  return record.title || historyTurnLabel(record).split(/\r?\n/, 1)[0]!.slice(0, 140);
+}
+
+export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
+  const response = parsedResponse(record);
+  const planExecution = response?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
+  const executePlan = record.executePlan || !!planExecution;
+  // An executed Plan keeps its own label and hides the instruction it was given.
+  const promptHtml = executePlan ? "" : `<span class="output-turn-prompt">${renderedInputSource(record.input)}</span>`;
+  const modeHtml = executePlan ? "" : renderTurnMode(turnHtmlAdapter, presentTurnMode(record.mode)).html;
+  const titleClass = `output-turn-title${record.mode === "code" ? " code-prompt" : ""}`;
+  const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
+  const turn = presentTurn({ durationMs: duration, process: record.process });
+  const processView = process(record.process);
+  const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
+  const outputHtml = record.error
+    ? `<pre class="error">${escapeHtml(record.error)}</pre>`
+    : response ? output(response) : (renderTurnJson(turnHtmlAdapter, record.output, { html: copyButton(record.output) })?.html
+      ?? `<pre>${escapeHtml(record.output)}</pre>`);
+  const outputCopy = record.error ? "" : response ? outputText(response) : record.output;
+  const context = sessionId
+    ? ` ${contextAttribute({
+      webviewSection: "turn",
+      sessionId,
+      turnId: record.id,
+      preventDefaultContextMenuItems: true
+    })}`
+    : "";
+  const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
+  const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
+  const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
+  const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
+  const processSummary = historyTurnSection(turn.process, processView.html, {
+    ...(processView.copyText ? { action: copyButton(processView.copyText) } : {})
+  });
+  const outputSection = renderTurnOutput(turnHtmlAdapter, [{ html: outputHtml }],
+    outputCopy ? { html: copyButton(outputCopy) } : undefined).section.html;
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="${titleClass}"><span class="output-turn-title-name"${record.title ? "" : " hidden"}>${escapeHtml(historyTurnTitle(record))}</span>${promptHtml}</span>${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath)) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${outputSection}</div></details>`;
+}
+
+/** The name a conversation carries until the user renames it: the opening line
+ * of its first message, with @ references spelled out. */
+export function conversationTitle(session: DextHistorySession): string {
+  if (session.resource) return session.resource.draft?.name ?? session.resource.target?.name ?? "New resource";
+  const first = session.turns[0];
+  if (!first) return "New conversation";
+  const line = inputReferenceDisplayText(normalizeInputReferenceSource(first.input))
+    .split(/\r?\n/, 1)[0]!
+    .trim()
+    .slice(0, 140);
+  return line || "New conversation";
+}
+
+export interface HistorySessionView {
+  favorite?: boolean;
+  name?: string;
+  /** Render only the session row; the turn body can be requested on demand. */
+  lazy?: boolean;
+}
+
+export function renderHistorySessionBody(session: DextHistorySession): string {
+  return session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("\n");
+}
+
+export function renderHistorySession(session: DextHistorySession, view: HistorySessionView = {}): string {
+  const favorite = view.favorite === true;
+  const count = `${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}`;
+  const context = contextAttribute({
+    webviewSection: "session",
+    sessionId: session.id,
+    dextFavorite: favorite,
+    ...(session.archivedAt ? { dextArchived: true } : {}),
+    preventDefaultContextMenuItems: true
+  });
+  const star = favorite
+    ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
+    : "";
+  const label = view.name ?? conversationTitle(session);
+  const body = view.lazy
+    ? `<div class="history-lazy-placeholder">Expand to load conversation turns.</div>`
+    : renderHistorySessionBody(session);
+  const lazyAttributes = view.lazy ? ` data-history-lazy="true" data-history-session-id="${escapeHtml(session.id)}"` : "";
+  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
+}
+
+export function historyTurnMarkdown(record: DextHistoryRecord, index = 0): string {
+  const response = parsedResponse(record);
+  const answer = record.error || (response ? outputText(response) : record.output);
+  return [
+    `## Turn ${index + 1}${record.title ? ` — ${record.title}` : ""} — ${dateLabel(record.createdAt)}`,
+    "### Input",
+    inputReferenceDisplayText(normalizeInputReferenceSource(record.input)),
+    record.error ? "### Error" : "### Output",
+    answer
+  ].join("\n\n");
+}
+
+export function conversationMarkdown(session: DextHistorySession): string {
+  const turns = session.turns.map(historyTurnMarkdown);
+  return [`# Dext conversation — ${dateLabel(session.createdAt)}`, ...turns].join("\n\n");
+}
+
+/** The transcript a History row saves as a read-only attachment and references
+ * with `@`, so the input keeps a chip instead of the whole text. `turn`
+ * narrows it to that one turn. */
+export function historyTranscript(session: DextHistorySession, turn?: DextHistoryRecord): string {
+  const single = turn && session.turns.includes(turn) ? turn : undefined;
+  const text = single
+    ? `# Dext conversation — ${dateLabel(session.createdAt)}\n\n${historyTurnMarkdown(single, session.turns.indexOf(single))}`
+    : conversationMarkdown(session);
+  // shortcut: one turn's output budget for the saved transcript; upgrade to a
+  // multi-file split when longer reviews are needed.
+  return text.length <= DEFAULT_HISTORY_LIMITS.maxOutputLength
+    ? text
+    : `${text.slice(0, DEFAULT_HISTORY_LIMITS.maxOutputLength)}\n\n… truncated`;
+}
+
+export function historyTokenStyles(): string {
+  return "";
+}

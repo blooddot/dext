@@ -7,8 +7,8 @@ import {
   MAX_ATTACHMENT_BYTES,
   MIN_ATTACHMENT_BYTES,
   writeExactClipboardText
-} from "../src/attachmentStore.js";
-import type { DextFileReference } from "../src/core/fileReference.js";
+} from "../src/shared/lib/attachmentStore.js";
+import type { DextFileReference } from "../src/features/workspace/domain/fileReference.js";
 
 function codeRef(content = "const value = 1;"): DextFileReference {
   return {
@@ -47,13 +47,65 @@ describe("AttachmentStore", () => {
     expect(store.clipboardReference("selected text")).toBeUndefined();
   });
 
-  it("rejects oversized staged context", () => {
+  it("rejects oversized staged context and names the limit it was given", () => {
     const store = new AttachmentStore();
     const text = "a".repeat(MAX_ATTACHMENT_BYTES + 1);
     expect(() => store.stageClipboard(
       text,
       codeRef(text)
     )).toThrow("bytes or smaller");
+    // The caller's configured limit decides, not the constant.
+    const small = "a".repeat(1025);
+    expect(() => store.stageClipboard(small, codeRef(small), 1024)).toThrow("Attachments must be 1024 bytes or smaller.");
+    expect(() => store.stageFileCopy(small, "", 1024)).toThrow("Attachments must be 1024 bytes or smaller.");
+  });
+
+  it("accepts text past the default ceiling when the caller raises the limit", () => {
+    const store = new AttachmentStore();
+    const text = "a".repeat(MAX_ATTACHMENT_BYTES + 1);
+    store.stageClipboard(text, codeRef(text), MAX_CONFIGURED_ATTACHMENT_BYTES);
+    expect(store.clipboardReference(text)).toEqual(codeRef(text));
+  });
+
+  it("keeps Copy Path text while VS Code's own copy holds the clipboard", () => {
+    const store = new AttachmentStore();
+    const paths = "C:\\repo\\a.ts\nC:\\repo\\b.ts";
+    // The file list an Explorer paste reads carries no text of its own.
+    store.stageFileCopy(paths);
+    expect(store.stagedFilePath("")).toBe(paths);
+    expect(store.stagedFilePath("")).toBe(paths);
+    // A copy-line leaves the line behind, and that line is the same copy.
+    store.stageFileCopy("C:\\repo\\a.ts", "const value = 1;");
+    expect(store.stagedFilePath("const value = 1;")).toBe("C:\\repo\\a.ts");
+  });
+
+  it("retires staged Copy Path text once the clipboard carries a different copy", () => {
+    const store = new AttachmentStore();
+    store.stageFileCopy("/repo/a.ts", "const value = 1;");
+    expect(store.stagedFilePath("copied text")).toBeUndefined();
+    expect(store.stagedFilePath("const value = 1;")).toBeUndefined();
+  });
+
+  it("expires staged Copy Path text, drops it when nothing was copied, and clears it for a selection copy", () => {
+    let now = 1_000;
+    const store = new AttachmentStore(() => now);
+    store.stageFileCopy("/repo/a.ts");
+    now += CLIPBOARD_TTL_MS + 1;
+    expect(store.stagedFilePath("")).toBeUndefined();
+
+    store.stageFileCopy("");
+    expect(store.stagedFilePath("")).toBeUndefined();
+
+    store.stageFileCopy("/repo/a.ts");
+    store.stageClipboard("selected text", codeRef("selected text"));
+    expect(store.stagedFilePath("")).toBeUndefined();
+    expect(store.clipboardReference("selected text")).toEqual(codeRef("selected text"));
+  });
+
+  it("rejects oversized Copy Path text", () => {
+    const store = new AttachmentStore();
+    expect(() => store.stageFileCopy("a".repeat(MAX_ATTACHMENT_BYTES + 1)))
+      .toThrow("bytes or smaller");
   });
 
   it("uses the configured attachment limit only inside its safe range", () => {

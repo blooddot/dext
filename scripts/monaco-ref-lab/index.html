@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dext · Monaco ref 验证</title><link rel="stylesheet" href="/assets/main.css"></head>
+<body>
+<main>
+  <header><span class="eyebrow">DEXT / EDITOR LAB · MONACO 0.56.0</span><h1>文件引用，放进 Monaco 会怎样？</h1><p>使用正式 Input 编辑器的独立验证页面。下方显示完整源码，可核对引用编辑、复制与撤销的结果。</p></header>
+  <section class="controls" aria-label="实验控制">
+    <span>文件引用 · 原子短标签</span>
+    <label><input id="wrap" type="checkbox" checked>自动换行</label>
+    <label>宽度 <select id="width"><option value="760">760 px</option><option value="480">480 px</option><option value="320">320 px</option></select></label>
+    <label>主题 <select id="theme"><option value="vs-dark">深色</option><option value="vs">浅色</option><option value="hc-black">高对比深色</option><option value="hc-light">高对比浅色</option></select></label>
+    <button id="reset">恢复样例</button>
+  </section>
+  <div class="grid">
+    <section class="input-panel"><div class="panel-heading"><strong>Input</strong><span id="ref-count"></span></div><div id="editor"></div><footer><span class="pill">Code</span><span>方向键 · Shift 选择 · Backspace/Delete · Ctrl+Z / Ctrl+Y</span></footer></section>
+    <aside><h2>试一试</h2><ol><li>点击标签名称，再点 ×。</li><li>用左右方向键跨过引用。</li><li>按住 Shift 或拖动鼠标跨过引用。</li><li>在引用两侧输入中文，再撤销。</li><li>切到 320 px，检查标签和文字换行。</li></ol><p>“打开文件”仅记录目标路径，不访问真实文件。</p><p>引用可整体选择与删除。光标放在标签旁按 Alt+Enter 可打开引用；复制时得到完整路径。</p></aside>
+  </div>
+  <section class="inspection"><div><h2>真实源码</h2><pre id="source"></pre></div><div><h2>光标 / 选区</h2><pre id="selection"></pre><h2>操作记录</h2><pre id="events" aria-live="polite">等待操作…</pre></div></section>
+  <section><h2>剪贴板验证区</h2><p>在 Input 复制引用或整段代码，再粘贴到这里。应得到完整 @路径，而不是短标签。</p><textarea id="paste-target" aria-label="剪贴板验证区" placeholder="在此粘贴"></textarea></section>
+</main><script type="module" src="/assets/main.js"></script>
+</body></html>

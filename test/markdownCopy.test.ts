@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import MarkdownIt from "markdown-it";
-import { markdownCodeCopy } from "../src/markdownCopy.js";
+import { markdownCodeCopy } from "../src/shared/lib/markdownCopy.js";
 
 describe("Markdown code copy", () => {
   it("copies individual fenced and indented blocks without surrounding prose", () => {
@@ -8,7 +8,7 @@ describe("Markdown code copy", () => {
     const html = markdown.render("before\n\n```ts\nconst x = 1;\n```\n\nbetween\n\n    indented\n\nafter");
     expect(html).toContain('data-copy="const x = 1;\n"');
     expect(html).toContain('data-copy="indented\n"');
-    expect(html.match(/title="Copy code block"/g)).toHaveLength(2);
+    expect(html.match(/title="Copy"/g)).toHaveLength(2);
     expect(html).toContain('<pre><code class="language-ts">const x = 1;\n</code></pre>');
     expect(html).not.toContain('data-copy="before');
   });

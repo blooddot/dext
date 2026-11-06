@@ -1,18 +1,139 @@
 import { describe, expect, it } from "vitest";
-import {
-  conversationMarkdown,
-  conversationTitle,
-  highlightDext,
-  highlightTerminal,
-  historyTokenStyles,
-  historyTurnMarkdown,
-  historyTurnTitle,
-  renderHistoryRecord,
-  renderHistorySession
-} from "../src/historyRender.js";
-import type { DextHistoryRecord } from "../src/historyStore.js";
+import { conversationMarkdown, conversationTitle, highlightTerminal, historyTranscript, historyTurnMarkdown, historyTurnTitle, renderHistoryRecord, renderHistorySession } from "../src/features/conversations/presentation/historyRender.js";
+import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
+import type { RuntimeResponse } from "../src/shared/contracts/types.js";
+import { parseUiForm, type UiFormDefinition } from "../src/shared/contracts/uiForm.js";
+import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../src/features/conversations/domain/planResponse.js";
+
+/** Choice rows a submitted question card rendered, as [extra classes, icon]. */
+function choiceRows(html: string): [string, string][] {
+  return [...html.matchAll(/<li class="agent-input-choice([^"]*)"><i class="codicon codicon-([a-z]+)"/g)]
+    .map((match) => [match[1]!.trim(), match[2]!]);
+}
+
+/** The rendered Process body. Its title bar also carries the copy payload, which
+ * repeats the timeline text and would confuse source-order assertions. */
+function processBody(html: string): string {
+  const start = html.indexOf('data-turn-section="process"');
+  const end = html.indexOf('data-turn-section="output"', start);
+  return html.slice(html.indexOf("</summary>", start), end);
+}
 
 describe("Dext history rendering", () => {
+  it("restores JSON from old raw output and serialized workflows without changing copied source", () => {
+    const text = ' \r\n' + JSON.stringify({ 中文: '换行\n"引号" C:\\path **bold** <script>bad</script>' }) + '\r\n ';
+    const execution: RuntimeResponse = {
+      invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+      method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+      result: { kind: "ask", text }, durationMs: 1
+    };
+    const response = { kind: "workflow" as const, executions: [execution] };
+    const base = { id: "json", createdAt: 1, input: "ask", process: [] };
+    for (const record of [{ ...base, output: text }, { ...base, output: JSON.stringify(response) }, { ...base, output: "", response }]) {
+      const saved = JSON.stringify(record);
+      const html = renderHistoryRecord(record);
+      expect(html).toContain('json-disclosure" open');
+      expect(html).toContain('data-copy=" &#13;&#10;');
+      expect(html).toContain('\\n');
+      expect(html).not.toContain('<strong>');
+      expect(html).not.toContain('<script>');
+      expect(JSON.stringify(record)).toBe(saved);
+      expect(renderHistoryRecord(JSON.parse(saved) as DextHistoryRecord)).toBe(html);
+    }
+  });
+  it("shows the selected form action in restored history", () => {
+    const form = parseUiForm({ title: "Review", fields: [], actions: [{ id: "revise", label: "Revise <analysis>" }, { id: "approve", label: "Approve" }] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Review", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "revise", answers: {} } }
+    ] });
+    expect(html).toContain("Submitted (Revise &lt;analysis&gt;)");
+    expect(html).not.toContain("Submitted (Approve)");
+  });
+  it("keeps submitted form details behind a disclosure", () => {
+    const form = parseUiForm({ title: "Review", description: "Detailed **context**", fields: [
+      { id: "notes", type: "input", label: "Notes", required: false }
+    ] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Review", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit", answers: {} } }
+    ] });
+    expect(html).toContain('<details class="agent-input-disclosure">');
+    expect(html).toContain("Detailed <strong>context</strong>");
+    expect(html).toContain("Notes");
+  });
+  it("renders the latest answer above Process without replaying editable forms or secret answers", () => {
+    const question = { id: "question-1", blocking: true, questions: [{ id: "q", header: "", question: "Which <option>?", options: [] },
+      { id: "secret", header: "", question: "Secret?", options: [], isSecret: true }] };
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Input", output: "Done", process: [
+      { phase: "input", text: "", userInput: { ...question, status: "waiting" } },
+      { phase: "input", text: "", userInput: { ...question, status: "answered", answers: { q: { answers: ["Custom <answer>"] }, secret: { answers: ["private-value"] } } } },
+      { phase: "tool", text: "Tests passed" }
+    ] });
+    expect(html.match(/agent-input-card/g)).toHaveLength(1);
+    expect(html).toContain("Which &lt;option&gt;?");
+    expect(html).toContain("Custom &lt;answer&gt;");
+    expect(html).not.toContain("private-value");
+    expect(html).not.toContain("<form");
+    expect(html.indexOf("agent-input-card")).toBeLessThan(html.indexOf('data-turn-section="process"'));
+  });
+  it("keeps every choice a submitted form offered, marking what was picked", () => {
+    const form = parseUiForm({ title: "Question", fields: [{
+      id: "where", type: "checkbox", label: "Where should the body land?",
+      options: [
+        { value: "index", label: "Index only", description: "Cheapest to keep in sync." },
+        { value: "files", label: "Files" },
+        { value: "both", label: "Both" }
+      ]
+    }] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Ask", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit",
+        answers: { where: { type: "checkbox", selected: ["index", "both"] } } } }
+    ] });
+    expect(html).toContain("Index only");
+    expect(html).toContain("Cheapest to keep in sync.");
+    expect(html).toContain("Files");
+    expect(choiceRows(html)).toEqual([["selected", "check"], ["", "blank"], ["selected", "check"]]);
+  });
+  it("keeps a typed answer as its own selected choice beside the options it ignored", () => {
+    const form = parseUiForm({ title: "Question", fields: [{
+      id: "where", type: "radio", label: "Where?", allow_custom: true,
+      options: [{ value: "index", label: "Index only" }, { value: "files", label: "Files" }]
+    }] });
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Ask", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit",
+        answers: { where: { type: "radio", selected: [], custom: "Derive it instead" } } } }
+    ] });
+    expect(html).toContain("Index only");
+    expect(html).toContain("Files");
+    expect(html).toContain("Derive it instead");
+    expect(choiceRows(html)).toEqual([["", "blank"], ["", "blank"], ["selected custom", "check"]]);
+  });
+  it("lists the options an Agent question offered next to the answer", () => {
+    const question = { id: "question-1", blocking: true, questions: [{
+      id: "q", header: "", question: "Which?", options: [{ label: "First", description: "The first one." }, { label: "Second", description: "The other one." }]
+    }] };
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Input", output: "Done", process: [
+      { phase: "input", text: "", userInput: { ...question, status: "answered", answers: { q: { answers: ["Second"] } } } }
+    ] });
+    expect(html).toContain("The first one.");
+    expect(html).toContain("The other one.");
+    expect(html).not.toContain("Second, ");
+    expect(choiceRows(html)).toEqual([["", "blank"], ["selected", "check"]]);
+  });
+  it("keeps an input answer as text and a secret answer hidden", () => {
+    const form: UiFormDefinition = { title: "Question", description: "", submit_label: "Submit", cancel_label: "Skip", show_cancel: true, presentation: "inline",
+      actions: [{ id: "submit", label: "Submit", primary: true, requires: [] }], fields: [
+        { id: "notes", type: "input", label: "Notes", required: false },
+        { id: "token", type: "input", label: "Token", required: false, secret: true }
+      ] };
+    const html = renderHistoryRecord({ id: "turn", createdAt: 1, input: "Ask", output: "Done", process: [
+      { phase: "input", text: "", uiInteraction: { sessionId: "s", turnId: "turn", requestId: "r", form, status: "submitted", action: "submit",
+        answers: { notes: { type: "input", value: "Straight text" }, token: { type: "input", value: "hidden-value" } } } }
+    ] });
+    expect(html).toContain("Straight text");
+    expect(html).toContain("Answer hidden");
+    expect(html).not.toContain("hidden-value");
+    expect(html).not.toContain("<ul");
+  });
   it.each([undefined, "Cancelled", "Agent failed"])("hides internal Plan input with execution metadata (%s)", (error) => {
     const record: DextHistoryRecord = {
       id: "build", createdAt: 1, input: "INTERNAL_PLAN_PROMPT", process: [], output: "Finished",
@@ -22,18 +143,22 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("INTERNAL_PLAN_PROMPT");
     expect(html).not.toContain("<span>Input</span>");
     expect(html).toContain("Plan: build.plan.md");
-    expect(html).toContain(`<span class="plan-status">${error ? "Failed" : "Completed"}</span>`);
+    expect(html).toContain(`<span class="plan-status">${error ? "Failed" : "Incomplete"}</span>`);
     expect(html).toContain(error ?? "Finished");
   });
 
   it.each([
     ["agent", "Agent"], ["ask", "Ask"], ["plan", "Plan"], ["code", "Code"], [undefined, "Unknown"]
-  ] as const)("shows the recorded input mode %s without changing the copied prompt", (mode, label) => {
+  ] as const)("shows the recorded input mode %s without repeating the prompt", (mode, label) => {
     const turn: DextHistoryRecord = { id: "turn", createdAt: 1, input: "prompt", output: "answer", process: [], ...(mode ? { mode } : {}) };
     const html = renderHistoryRecord(turn, "session");
-    expect(html).toContain(`<span>Input</span><span class="turn-mode" data-mode="${mode ?? "unknown"}"`);
-    expect(html).toContain(`>${label}</span>`);
-    if (!mode) expect(html).toContain("Mode was not recorded for this turn");
+    const summary = html.slice(0, html.indexOf("</summary>"));
+    // The prompt is the row label itself, so it is rendered once inside it.
+    expect(summary).toContain(`<span class="output-turn-title${mode === "code" ? " code-prompt" : ""}"><span class="output-turn-title-name" hidden>prompt</span><span class="output-turn-prompt">prompt</span></span><span class="turn-mode" data-mode="${mode ?? "unknown"}"`);
+    expect(summary).toContain(`>${label}</span>`);
+    if (!mode) expect(summary).toContain("Mode was not recorded for this turn");
+    const body = html.slice(html.indexOf("</summary>"));
+    expect(body).not.toContain("prompt");
     expect(historyTurnMarkdown(turn)).toContain("### Input\n\nprompt");
   });
 
@@ -44,39 +169,38 @@ describe("Dext history rendering", () => {
     const actions = [...summary.matchAll(/<button[^>]*data-history-command="([^"]+)"[^>]*>/g)];
     expect(actions.map((match) => match[1])).toEqual([
       "dext.history.renameTurn",
-      "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.deleteTurn"
+      "dext.history.forkFromTurn", "dext.history.copyTurnInput", "dext.history.copyTurn", "dext.history.addTurnToDext", "dext.history.deleteTurn"
     ]);
     for (const [button] of actions) {
       expect(button).toContain('data-session-id="session-1"');
       expect(button).toContain('data-turn-id="turn-2"');
     }
-    expect(summary).toMatch(/data-history-command="dext.history.renameTurn"[^>]*title="Rename turn"[^>]*><i class="codicon codicon-rename"/);
+    expect(summary).toMatch(/data-history-command="dext.history.renameTurn"[^>]*title="Rename turn"[^>]*><i class="codicon codicon-edit"/);
     expect(renderHistoryRecord(turn)).not.toContain("data-history-command");
+    const spilled = renderHistoryRecord({ ...turn, spillPath: "/tmp/overflow.txt" }, "session-1");
+    const spilledActions = [...spilled.slice(0, spilled.indexOf("</summary>")).matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1]);
+    // The spill button trails the row, matching the live turn toolbar.
+    expect(spilledActions.at(-1)).toBe("dext.history.openSpill");
     const sessionHtml = renderHistorySession({ id: "session-1", createdAt: 2, updatedAt: 2, turns: [turn] });
     const sessionSummary = sessionHtml.slice(0, sessionHtml.indexOf("</summary>"));
+    // Both copy-as-Markdown actions share one glyph.
+    expect(sessionSummary).toMatch(/data-history-command="dext.history.copyConversation"[^>]*><i class="codicon codicon-markdown"/);
     expect([...sessionSummary.matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1])).toEqual([
       "dext.history.continueConversation", "dext.history.renameConversation", "dext.history.forkConversation",
-      "dext.history.copyConversation", "dext.history.addFavorite", "dext.history.archiveConversation", "dext.history.deleteConversation"
+      "dext.history.copyConversation", "dext.history.addConversationToDext", "dext.history.addFavorite", "dext.history.archiveConversation", "dext.history.deleteConversation"
     ]);
   });
 
   it("renders an escaped custom turn title without renaming the parent or changing the copied input", () => {
     const turn: DextHistoryRecord = { id: "turn-1", title: '<New & "name">', createdAt: 1, input: "original question", output: "answer", process: [] };
     const html = renderHistorySession({ id: "session-1", createdAt: 1, updatedAt: 1, turns: [turn] });
-    expect(html).toContain('class="history-summary-input named">&lt;New &amp; &quot;name&quot;&gt;</span>');
-    expect(html.slice(0, html.indexOf("</summary>"))).toContain("original question");
+    expect(html).toContain('class="output-turn-title"><span class="output-turn-title-name">&lt;New &amp; &quot;name&quot;&gt;</span><span class="output-turn-prompt">original question</span>');
+    expect(html.slice(html.lastIndexOf("</summary>"))).not.toContain("original question");
     expect(historyTurnTitle(turn)).toBe(turn.title);
     expect(historyTurnTitle({ ...turn, title: "" })).toBe("original question");
     expect(historyTurnMarkdown(turn, 2)).toContain("## Turn 3");
     expect(historyTurnMarkdown(turn)).toContain("### Input\n\noriginal question");
     expect(historyTurnMarkdown(turn)).toContain("### Output\n\nanswer");
-  });
-
-  it("uses Python token classes for Dext input", () => {
-    const html = highlightDext('result = code.edit(target=ref.selection, instruction="fix")');
-    expect(html).toContain("tok-variableName");
-    expect(html).toContain("tok-string");
-    expect(historyTokenStyles({ string: "#123456" })).toContain("#123456");
   });
 
   it("renders ANSI terminal colors and strips cursor control sequences", () => {
@@ -97,7 +221,7 @@ describe("Dext history rendering", () => {
     expect(html).toContain('<span class="ansi-red">error: failed</span>');
   });
 
-  it("keeps terminal stderr separate and highlighted in history output", () => {
+  it("keeps a terminal result's streams out of history Output", () => {
     const record: DextHistoryRecord = {
       id: "terminal-ansi",
       createdAt: 1,
@@ -115,8 +239,42 @@ describe("Dext history rendering", () => {
       }
     };
     const html = renderHistoryRecord(record);
-    expect(html).toContain('<span class="ansi-green">ok</span>');
-    expect(html).toContain('class="terminal-text terminal-stderr"');
+    expect(html).not.toContain('<section class="history-execution execution-result"></section>');
+    expect(html).not.toContain('class="ansi-green"');
+    expect(html).not.toContain('terminal-stderr');
+  });
+
+  it("keeps a quiet step out of history Output", () => {
+    const record: DextHistoryRecord = {
+      id: "quiet-step",
+      createdAt: 1,
+      input: "ask(\"judge\")",
+      process: [],
+      output: "",
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "judged" },
+          durationMs: 1
+        }],
+        steps: [{
+          method: "ask",
+          state: "success",
+          quiet: true,
+          response: {
+            invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+            method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+            result: { kind: "ask", text: "judged" },
+            durationMs: 1
+          }
+        }]
+      }
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).not.toContain("judged");
+    expect(html).not.toContain('<section class="history-execution execution-result">');
   });
 
   it("renders structured output instead of a raw workflow JSON block", () => {
@@ -129,9 +287,9 @@ describe("Dext history rendering", () => {
       response: {
         kind: "workflow",
         executions: [{
-          invocation: { kind: "invocation", method: "chat", source: "code", arguments: [] },
-          method: { id: "chat", title: "Chat", kind: "command", source: "builtin" },
-          result: { kind: "chat", text: "hello" },
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "hello" },
           durationMs: 10
         }]
       }
@@ -141,6 +299,30 @@ describe("Dext history rendering", () => {
     expect(html).toContain("Consider context");
     expect(html).toContain("hello");
     expect(html).not.toContain('&quot;kind&quot;: &quot;workflow&quot;');
+  });
+
+  it("keeps elapsed time in Process and leaves Output to its result body", () => {
+    const record: DextHistoryRecord = {
+      id: "timing", createdAt: 1, input: "ask(input=\"hello\")",
+      process: [{ phase: "status", text: "", usage: { totalTokens: 1_234 } }], output: "",
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "hello" }, durationMs: 1_234
+        }]
+      }
+    };
+    const html = renderHistoryRecord(record);
+    expect(html).toContain('Worked 1s234ms · 1.2k tokens');
+    const output = html.slice(html.indexOf('data-turn-section="output"'));
+    expect(output).not.toContain("1s234ms");
+    expect(output).not.toContain("tokens");
+    // Output has no head of its own; the copy control floats over the answer.
+    expect(output).not.toContain("<summary");
+    expect(output).toContain('data-copy="hello"');
+    expect(output.match(/data-copy="hello"/g)).toHaveLength(1);
   });
 
   it("recovers structured data from legacy JSON history records", () => {
@@ -180,16 +362,16 @@ describe("Dext history rendering", () => {
     const record: DextHistoryRecord = {
       id: "ui-result",
       createdAt: 1,
-      input: 'choice = ui.choose(label="Pick", options=["one", "two"])',
+      input: 'choice = ui.radio(label="Pick", options=["one", "two"])',
       process: [],
       output: "",
       response: {
         kind: "workflow",
         executions: [
           {
-            invocation: { kind: "invocation", method: "ui.choose", source: "code", arguments: [] },
-            method: { id: "ui.choose", title: "Choose", kind: "command", source: "builtin" },
-            result: { kind: "ui", type: "choice", selected: ["two"] },
+            invocation: { kind: "invocation", method: "ui.radio", source: "code", arguments: [] },
+            method: { id: "ui.radio", title: "Radio", kind: "command", source: "builtin" },
+            result: { kind: "ui", type: "radio", selected: ["two"] },
             durationMs: 1
           },
           {
@@ -216,8 +398,24 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain('class="process-message"');
+    expect(html).toContain('class="process-message agent-stream-item agent-trace-message"');
     expect(html).toContain("I will inspect the selected implementation first.");
+  });
+
+  it("keeps a persisted Plan document out of restored history Process", () => {
+    const record: DextHistoryRecord = {
+      id: "plan-trace",
+      createdAt: 1,
+      mode: "plan",
+      input: "plan a migration",
+      process: [{ phase: "message", id: "plan-1", replace: true, text: `Brief.\n${PLAN_DOCUMENT_START}\n# Full plan\n${PLAN_DOCUMENT_END}` }],
+      output: "Brief."
+    };
+
+    const html = renderHistoryRecord(record);
+    expect(html).toContain("Brief.");
+    expect(html).not.toContain("dext-plan");
+    expect(html).not.toContain("Full plan");
   });
 
   it("uses Markdown paragraph and line-break rules for history Process messages", () => {
@@ -230,7 +428,7 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain('class="process-text markdown-body"');
+    expect(html).toContain('class="agent-stream-text"><div class="markdown-body"');
     expect(html).toContain("<p>First line<br>");
     expect(html).toContain("<ul>");
     expect(html).toContain("<li>one</li>");
@@ -252,7 +450,7 @@ describe("Dext history rendering", () => {
     expect(html).toContain("Inspecting the workspace");
     expect(html).toContain("git status");
     expect(html).not.toContain("Ran 1 command");
-    expect(html).toContain('class="process-message"');
+    expect(html).toContain('class="process-message agent-stream-item agent-trace-message"');
     expect(html).toMatch(/class="history-disclosure process-event(?: process-command-group)?"/);
   });
 
@@ -272,11 +470,12 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
+    const body = processBody(html);
     expect(html).toContain("Ran 2 commands");
     expect(html).toContain('class="history-disclosure process-event process-command-group"');
-    expect(html.indexOf("Inspect the current implementation")).toBeLessThan(html.indexOf("Ran 2 commands"));
-    expect(html.indexOf("Ran 2 commands")).toBeLessThan(html.indexOf("Apply the smallest change"));
-    expect(html.indexOf("Apply the smallest change")).toBeLessThan(html.indexOf("npm test"));
+    expect(body.indexOf("Inspect the current implementation")).toBeLessThan(body.indexOf("Ran 2 commands"));
+    expect(body.indexOf("Ran 2 commands")).toBeLessThan(body.indexOf("Apply the smallest change"));
+    expect(body.indexOf("Apply the smallest change")).toBeLessThan(body.indexOf("npm test"));
   });
 
   it("reproduces the step grouping an agent reported instead of regrouping by arrival", () => {
@@ -305,14 +504,15 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
+    const body = processBody(html);
     expect(html).toContain("运行了 2 条命令");
     expect(html).toContain("已编辑 1 个文件 · 运行了 1 条命令");
     expect(html).not.toContain("Ran 2 commands");
     // The standalone step keeps its own row rather than joining a group.
     expect(html).toContain('class="history-disclosure process-event process-command-solo"');
-    expect(html.indexOf("运行了 2 条命令")).toBeLessThan(html.indexOf("已查看 shot.png"));
-    expect(html.indexOf("已查看 shot.png")).toBeLessThan(html.indexOf("Applying the fix"));
-    expect(html.indexOf("Applying the fix")).toBeLessThan(html.indexOf("npm test"));
+    expect(body.indexOf("运行了 2 条命令")).toBeLessThan(body.indexOf("已查看 shot.png"));
+    expect(body.indexOf("已查看 shot.png")).toBeLessThan(body.indexOf("Applying the fix"));
+    expect(body.indexOf("Applying the fix")).toBeLessThan(body.indexOf("npm test"));
   });
 
   it("preserves the arrival order of thoughts and commands", () => {
@@ -333,49 +533,20 @@ describe("Dext history rendering", () => {
     expect(html.indexOf("rg greeting")).toBeLessThan(html.indexOf("Apply the smallest change"));
   });
 
-  it("renders structured agent results as readable thought summaries instead of JSON", () => {
+  it("keeps legacy patch copy data without rendering diff layouts", () => {
     const structured = JSON.stringify({
-      kind: "review",
-      status: "pass",
-      summary: "The change correctly returns hello world.",
-      findings: []
-    });
-    const record: DextHistoryRecord = {
-      id: "structured-thought",
-      createdAt: 1,
-      input: "code.review(target=edit_result)",
-      process: [{ phase: "message", text: structured }],
-      output: ""
-    };
-
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("process-result-review");
-    expect(html).toContain("Review");
-    expect(html).toContain("Passed");
-    expect(html).toContain("The change correctly returns hello world.");
-    expect(html).not.toContain("&quot;kind&quot;");
-    expect(html).not.toContain("findings");
-  });
-
-  it("keeps patch details and both diff layouts in structured thoughts", () => {
-    const structured = JSON.stringify({
-      kind: "edit",
-      summary: "Complete hello_world.",
-      patch: {
-        kind: "patch",
-        title: "Complete hello_world",
-        changes: [{
-          uri: "target-1/temp.py",
-          before: "def hello_world():\n    pass",
-          after: 'def hello_world():\n    return "hello world"'
-        }]
-      },
-      files: []
+      kind: "patch",
+      title: "Complete hello_world",
+      changes: [{
+        uri: "target-1/temp.py",
+        before: "def hello_world():\n    pass",
+        after: 'def hello_world():\n    return "hello world"'
+      }]
     });
     const record: DextHistoryRecord = {
       id: "structured-patch",
       createdAt: 1,
-      input: "code.edit(target=ref.selection, instruction=\"complete it\")",
+      input: "agent(input=\"complete it\", apply=False)",
       process: [{ phase: "message", text: structured }],
       output: ""
     };
@@ -384,13 +555,13 @@ describe("Dext history rendering", () => {
     expect(html).toContain("target-1/temp.py");
     expect(html).toContain("def hello_world():");
     expect(html).toContain('return &quot;hello world&quot;');
-    expect(html).toContain('data-diff-mode="inline"');
-    expect(html).toContain('data-diff-mode="split"');
-    expect(html).toContain("diff-inline");
-    expect(html).toContain("diff-split");
+    expect(html).not.toContain('data-diff-mode="inline"');
+    expect(html).not.toContain('data-diff-mode="split"');
+    expect(html).not.toContain("diff-inline");
+    expect(html).not.toContain("diff-split");
   });
 
-  it("renders an agent result patch as an expandable diff in history", () => {
+  it("marks a legacy agent result patch ignored in history", () => {
     const record: DextHistoryRecord = {
       id: "agent-patch",
       createdAt: 1,
@@ -417,9 +588,9 @@ describe("Dext history rendering", () => {
     };
 
     const html = renderHistoryRecord(record);
-    expect(html).toContain("greeting.ts");
-    expect(html).toContain("data-diff-mode=\"split\"");
-    expect(html).toContain("export const greeting");
+    expect(html).toContain("Legacy patch ignored");
+    expect(html).not.toContain("data-diff-mode=\"split\"");
+    expect(html).not.toContain("export const greeting");
   });
 
   it("uses compact durations in history summaries and executions", () => {
@@ -432,9 +603,9 @@ describe("Dext history rendering", () => {
       response: {
         kind: "workflow",
         executions: [{
-          invocation: { kind: "invocation", method: "chat", source: "code", arguments: [] },
-          method: { id: "chat", title: "Chat", kind: "command", source: "builtin" },
-          result: { kind: "chat", text: "hello" },
+          invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+          method: { id: "ask", title: "Ask", kind: "command", source: "builtin" },
+          result: { kind: "ask", text: "hello" },
           durationMs: 40_499
         }]
       }
@@ -445,105 +616,39 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("40499 ms");
   });
 
-  it("renders readable @ reference tokens as Chips while retaining raw copy source", () => {
-    const token = "@src/pathx.py#L55,1-L66,32";
+  it("renders reference tokens as their readable labels in the row title", () => {
     const record: DextHistoryRecord = {
-      id: "reference",
-      createdAt: 1,
-      input: 'agent(input="Explain ' + token + '")',
-      process: [],
-      output: ""
+      id: "reference", createdAt: 1, input: 'agent(input="Explain @src/pathx.py#L55,1-L66,32")', process: [], output: ""
     };
-
     const html = renderHistoryRecord(record);
-    expect(html).toContain("history-file-reference");
-    expect(html).toContain("pathx.py 55-66");
-    expect(html).toContain(token);
+    expect(html).toContain("agent(input=&quot;Explain pathx.py 55-66&quot;)");
+    // The prompt itself keeps a clickable chip with the same readable label.
+    expect(html).toContain('class="attachment-chip turn-prompt-reference"');
+    expect(html).toContain('data-open-file-reference="src/pathx.py#L55,1-L66,32"');
   });
 
-  it("does not syntax-highlight conversational prose in history input", () => {
-    const attachment = "@.dext-global/attachments/0123456789abcdef01234567.png";
+  it("keeps ordinary prose and attachment references readable without syntax highlighting", () => {
     const record: DextHistoryRecord = {
-      id: "plain-prose",
-      createdAt: 1,
-      input: `${attachment} 还有Build按钮要不要改成plan的主题色（深金色）?`,
-      process: [],
-      output: ""
+      id: "plain-prose", createdAt: 1,
+      input: "@.dext-global/attachments/0123456789abcdef01234567.png 还有Build按钮要不要改成plan的主题色（深金色）?",
+      process: [], output: ""
     };
-
     const html = renderHistoryRecord(record);
-    expect(html).toContain("还有Build按钮要不要改成plan的主题色");
-    expect(html).toContain("history-file-reference");
+    expect(html).toContain("0123456789abcdef01234567.png 还有Build按钮要不要改成plan的主题色");
     expect(html).not.toContain("tok-variableName");
     expect(html).not.toContain("tok-keyword");
   });
 
-  it("syntax-highlights code-mode Input in rendered history", () => {
+  it("renders trailing-slash directory references as their folder name", () => {
     const record: DextHistoryRecord = {
-      id: "highlighted-input",
-      createdAt: 1,
-      input: 'ui.choose(label="Pick", options=["one", "two"], multiple=True)',
-      process: [],
-      output: ""
+      id: "directory-reference", createdAt: 1, input: 'ask(input="Inspect @src/components/")', process: [], output: ""
     };
-
     const html = renderHistoryRecord(record);
-    expect(html).toContain('class="tok-propertyName"');
-    expect(html).toContain('class="tok-string"');
-    expect(html).toContain('class="tok-bool"');
-  });
-
-  it("highlights Dext call names and keyword arguments distinctly", () => {
-    const html = highlightDext('create(type="mcp", input="https://example.test", scope="project")');
-    expect(html).toContain('<span class="tok-function">create</span>');
-    expect(html).toContain('<span class="tok-propertyName">type</span>');
-    expect(html).toContain('<span class="tok-propertyName">input</span>');
-    expect(html).toContain('<span class="tok-propertyName">scope</span>');
-  });
-
-  it("renders image attachments as ordinary file reference Chips", () => {
-    const path = ".dext/attachments/0123456789abcdef01234567.png";
-    const record: DextHistoryRecord = {
-      id: "image-reference",
-      createdAt: 1,
-      input: `ask(input="Inspect @${path}")`,
-      process: [],
-      output: ""
-    };
-
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("data-open-file-reference");
-    expect(html).toContain("0123456789abcdef01234567.png");
-    expect(html).not.toContain("data-open-image-attachment");
-  });
-
-  it("renders trailing-slash directory references as folder Chips", () => {
-    const record: DextHistoryRecord = {
-      id: "directory-reference",
-      createdAt: 1,
-      input: 'ask(input="Inspect @src/components/")',
-      process: [],
-      output: ""
-    };
-
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("history-file-reference");
+    // The prompt renders the directory as a read-only chip, not plain text.
+    expect(html).toContain('class="attachment-chip turn-prompt-reference"');
     expect(html).toContain("codicon-folder");
     expect(html).toContain("components");
     expect(html).not.toContain("data-open-file-reference");
-  });
-
-  it("renders source separators around file reference Chips", () => {
-    const record: DextHistoryRecord = {
-      id: "inline-reference",
-      createdAt: 1,
-      input: 'ask(input="before @src/a.ts after")',
-      process: [],
-      output: ""
-    };
-    const html = renderHistoryRecord(record);
-    expect(html).toContain("before <span class=\"attachment-chip");
-    expect(html).toContain("</span> after");
   });
 
   it("groups continuous turns under one collapsible conversation", () => {
@@ -647,4 +752,65 @@ describe("Dext history rendering", () => {
     expect(markdown).toContain("### Error");
     expect(markdown).toContain("cancelled");
   });
+
+  it("hands one turn or the whole conversation to the composer, capped", () => {
+    const turns: DextHistoryRecord[] = [
+      { id: "turn-0", createdAt: 1, input: "first", process: [], output: "one" },
+      { id: "turn-1", createdAt: 2, input: "second", process: [], output: "two" }
+    ];
+    const session = { id: "session-1", createdAt: 1, updatedAt: 2, turns };
+
+    expect(historyTranscript(session)).toBe(conversationMarkdown(session));
+    const single = historyTranscript(session, turns[1]);
+    expect(single).toContain("## Turn 2");
+    expect(single).not.toContain("first");
+    const capped = historyTranscript({ ...session, turns: [{ ...turns[0]!, output: "x".repeat(DEFAULT_HISTORY_LIMITS.maxOutputLength) }] });
+    expect(capped.length).toBeLessThanOrEqual(DEFAULT_HISTORY_LIMITS.maxOutputLength + 20);
+    expect(capped.endsWith("truncated")).toBe(true);
+  });
 });
+
+it("renders unknown historical UI results as bounded escaped JSON without an executable card", () => {
+  const output = JSON.stringify({ kind: "workflow", executions: [{
+    invocation: { kind: "invocation", method: "ui.choose", source: "code", arguments: [] },
+    method: { id: "ui.choose", title: "Old interaction", source: "builtin", kind: "command" },
+    result: { kind: "ui", type: "choice", selected: ["<img src=x onerror=alert(1)>", "x".repeat(30000)] }, durationMs: 1
+  }] });
+  const html = renderHistoryRecord({ id: "old", createdAt: 1, input: "Old workflow", process: [], output });
+  expect(html).toContain("&lt;img");
+  expect(html).not.toContain("<img");
+  expect(html).not.toContain("<form");
+  expect(html).not.toContain('type="radio"');
+  expect(html).not.toContain("x".repeat(21000));
+});
+
+it("renders process output steps as Markdown rather than as API cards", () => {
+  const execution: RuntimeResponse = {
+    invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
+    method: { id: "ask", title: "Ask", source: "builtin", kind: "command" },
+    result: { kind: "ask", text: "x" },
+    durationMs: 1
+  };
+  const html = renderHistoryRecord({
+    id: "turn",
+    createdAt: 1,
+    input: "Run",
+    output: "",
+    process: [],
+    response: {
+      kind: "workflow",
+      executions: [execution],
+      steps: [
+        { method: "ask", state: "success", response: execution },
+        { method: "stdout", state: "success", stream: { channel: "stdout", text: "x\n" } },
+        { method: "stderr", state: "success", stream: { channel: "stderr", text: "<boom>\n" } }
+      ]
+    }
+  });
+  expect(html).toContain('<div class="markdown-body history-process-output process-output-stdout"><p>x</p>');
+  expect(html).toContain('<div class="markdown-body history-process-output process-output-stderr"><p>&lt;boom&gt;</p>');
+  // A stream step never renders the disclosure an API step without a response gets.
+  expect(html).not.toContain("<span>stdout</span>");
+  expect(html).toContain('<section class="history-execution execution-result">');
+});
+

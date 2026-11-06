@@ -1,60 +1,368 @@
 import * as vscode from "vscode";
-import { DextApiDefinitionProvider } from "./vscodeApiDefinitions.js";
-import { DextApplication } from "./application.js";
-import { DextSidebarProvider } from "./sidebarProvider.js";
-import { DEFAULT_HISTORY_LIMITS, DextHistoryStore } from "./historyStore.js";
-import type { DextHistoryRecord, DextHistorySession } from "./historyStore.js";
-import { DextHistoryPanel } from "./historyEditorProvider.js";
-import { DextConversationPreferences } from "./conversationPreferences.js";
-import type { HistorySortOrder } from "./conversationPreferences.js";
-import { conversationMarkdown, conversationTitle, historyTurnMarkdown, historyTurnTitle } from "./historyRender.js";
-import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./turnPresentation.js";
-import { recordWorkflow } from "./core/workflowRecorder.js";
-import { DextCompletionHost } from "./vscodeCompletionHost.js";
-import { DextSelectionActions } from "./vscodeSelectionActions.js";
-import type { SelectionTarget } from "./vscodeAttachments.js";
-import {
-  configureCompletionModel,
-  diagnoseCompletion,
-  openCompletionMenu,
-  setCompletionApiKey,
-  testCompletionModel,
-  type CompletionDiagnoseOptions
-} from "./vscodeCompletionSetup.js";
-import {
-  dextSemanticTokens,
-  DEXT_SEMANTIC_TOKEN_MODIFIERS,
-  DEXT_SEMANTIC_TOKEN_TYPES
-} from "./dextSemanticTokens.js";
-
+import { DextApplication } from "./app/application.js";
+import type { HistorySortOrder } from "./features/conversations/contracts/preferences.js";
+import { DextConversationPreferences } from "./features/conversations/host/conversationPreferences.js";
+import { createApiReferenceSource } from "./features/workflow/host/apiReference.js";
+import { describeApiSource } from "./features/workflow/host/apiSource.js";
+import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
+import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
+import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
+import { skillEntryId, type ResourceEditorDataSource } from "./features/resources/contracts/resourceDocuments.js";
+import type { ResourceScope } from "./features/resources/contracts/resourceSession.js";
+import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.js";
+import { GlobalResourcesEditorProvider } from "./features/resources/host/globalResourcesEditorProvider.js";
+import { createApiDataSource, createFileResourceDataSource } from "./features/resources/host/resourceEditorProvider.js";
+import { managedResourcePath, removeManagedResource } from "./features/resources/host/resourceActions.js";
+import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
+import { DextHistoryPanel } from "./features/conversations/host/historyEditorProvider.js";
+import { conversationMarkdown, conversationTitle, historyTranscript, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
+import type { DextHistoryRecord, DextHistorySession } from "./features/conversations/contracts/history.js";
+import { DEFAULT_HISTORY_LIMITS } from "./features/conversations/contracts/history.js";
+import { openFileHistoryStore } from "./features/conversations/host/historyFileState.js";
+import { renderEditorTabHtml } from "./platform/editor-tabs/editorTabHtml.js";
+import type { VscodeWebviewPanelLike } from "./platform/editor-tabs/editorTabManager.js";
+import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, type EditorTabPanelHandle } from "./platform/editor-tabs/editorTabManager.js";
+import { EditorTabRestorer } from "./platform/editor-tabs/editorTabSerializer.js";
+import { restoreEditorTabState } from "./platform/editor-tabs/editorTabState.js";
+import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs/editorTabTypes.js";
+import { DextSidebarProvider } from "./app/sidebarProvider.js";
+import { DextAppearanceController } from "./platform/vscode/appearance.js";
+import { parseDextAppearanceRequest } from "./platform/webviewProtocol.js";
+import type { DextAppearance } from "./shared/contracts/appearance.js";
+import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./features/conversations/presentation/turnPresentation.js";
+import type { SelectionTarget } from "./platform/vscode/attachments.js";
+import { DextSelectionActions } from "./platform/vscode/selectionActions.js";
 let activeApplication: DextApplication | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
+  application.configurePiRuntime(vscode.Uri.joinPath(context.extensionUri, "media", "pi-extension.mjs").fsPath);
   activeApplication = application;
   context.subscriptions.push({ dispose: () => { void application.dispose(); } });
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) application.runtime.setWorkspaceRoot(folder.uri.fsPath);
   application.runtime.setWorkspaceTrusted(vscode.workspace.isTrusted && folder?.uri.scheme === "file");
   await application.reload();
-  // Conversation history belongs to the active workspace. Using globalState
-  // here makes every project share the same sessions, so reopening VS Code (or
-  // switching projects) can restore a conversation from an unrelated project.
-  // workspaceState survives extension/window reloads while remaining scoped to
-  // the current workspace.
-  const history = new DextHistoryStore(context.workspaceState, () => {
-    const configuration = vscode.workspace.getConfiguration("dext");
-    return {
-      maxTurns: configuration.get<number>("history.maxTurns", DEFAULT_HISTORY_LIMITS.maxTurns),
-      maxOutputLength: configuration.get<number>(
-        "history.maxOutputLength",
-        DEFAULT_HISTORY_LIMITS.maxOutputLength
-      )
-    };
-  });
+  // Memento updates serialize the extension's entire state across renderer IPC.
+  // Keep history in workspace storage files, and retire old keys only after a
+  // backed-up, resumable import has committed to disk.
+  const historyDirectory = vscode.Uri.joinPath(
+    context.storageUri ?? context.globalStorageUri, "conversation-history"
+  ).fsPath;
+  const skippedHistory: string[] = [];
+  const history = await openFileHistoryStore(
+    historyDirectory,
+    context.workspaceState,
+    () => {
+      const configuration = vscode.workspace.getConfiguration("dext");
+      return {
+        maxTurns: configuration.get<number>("history.maxTurns", DEFAULT_HISTORY_LIMITS.maxTurns),
+        maxOutputLength: configuration.get<number>(
+          "history.maxOutputLength",
+          DEFAULT_HISTORY_LIMITS.maxOutputLength
+        )
+      };
+    },
+    (names) => skippedHistory.push(...names)
+  );
+  // A skipped conversation is absent from History, so say why instead of letting
+  // the user conclude they lost it; the files stay where they are.
+  if (skippedHistory.length) {
+    const listed = skippedHistory.slice(0, 3).join(", ");
+    void vscode.window.showWarningMessage(
+      `Dext ignored ${skippedHistory.length} unreadable conversation history file(s): ${listed}${skippedHistory.length > 3 ? ", …" : ""}. They are unchanged in ${historyDirectory}.`
+    );
+  }
   const preferences = new DextConversationPreferences(context.workspaceState);
-  const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage);
-  const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences);
+  // Appearance belongs to Dext, not to one Webview: the sidebar, History and every
+  // editor tab are separate documents, so the choice is persisted host-side and
+  // broadcast instead of being stored in a single document's localStorage.
+  const appearance = new DextAppearanceController(context.globalState);
+  // History trims whole conversations inside its own persist(), where no
+  // preferences object exists; clear what trimming left behind at startup.
+  await preferences.pruneConversations(history.list(true).map((session) => session.id));
+  const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage, appearance);
+  const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences, appearance);
+  // Unified editor tabs: API, Global Resources, and History all go through one manager so
+  // a stable key can never open twice, whichever recovery path runs first.
+  const editors: {
+    api?: ApiEditorProvider;
+    globalResources?: GlobalResourcesEditorProvider;
+  } = {};
+  const renderEditorHtml = (panel: VscodeWebviewPanelLike, body: string): string => {
+    const webview = (panel as vscode.WebviewPanel).webview;
+    // An API page replaces this script with the local Mermaid entry only when a flow exists.
+    const script = body.includes("data-api-flow") ? "apiFlow.js" : undefined;
+    return renderEditorTabHtml(body,
+      webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "editorTabs.css")).toString(),
+      webview.cspSource,
+      {
+        codiconStylesheetUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "codicons", "codicon.css")).toString(),
+        // Both the conversation page and the API page lazy-load this one bundle;
+        // it is listed for every editor tab so an API page can render its flow
+        // without each tab paying for Mermaid up front.
+        mermaidUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "mermaid.js")).toString(),
+        appearance: {
+          theme: appearance.current,
+          stylesheetUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "appearance.css")).toString(),
+          scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "appearance.js")).toString()
+        },
+        ...(script ? { scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", script)).toString() } : {})
+      });
+  };
+  const editorTabs = new EditorTabManager(
+    createVscodeEditorTabHost(vscode.window, { localResourceRoots: [context.extensionUri], renderHtml: renderEditorHtml }),
+    (key, message) => {
+      // The appearance menu is host-level; intercept it before the feature
+      // provider, which only understands its own page protocol.
+      const requestedTheme = parseDextAppearanceRequest(message);
+      if (requestedTheme) {
+        void reportCommandError(() => appearance.set(requestedTheme));
+        return;
+      }
+      const kind = parseEditorTabKey(key)?.kind;
+      const provider = kind === "api" ? editors.api : kind === "globalResources" ? editors.globalResources : undefined;
+      void reportCommandError(() => provider?.handleMessage(key, message) ?? Promise.resolve());
+    }
+  );
+  const editorTabRestorer = new EditorTabRestorer(editorTabs);
+  // Every document follows the persisted choice, including a sidebar that was
+  // reloaded while another surface made the change.
+  context.subscriptions.push(appearance.onDidChange(theme => {
+    sidebar.setAppearance(theme);
+    historyPanel.setAppearance(theme);
+    editorTabs.postAll({ type: "dextAppearance", theme });
+  }));
+  context.subscriptions.push({ dispose: () => editorTabs.dispose() });
+  const textDecoderForResources = new TextDecoder();
+  // The Node and JavaScript reference the APIs page lists: generated at build time
+  // from `@types/node` and TypeScript's own lib files, so it documents the same
+  // declarations the editor and the kernel resolve. Only the brotli copy ships;
+  // the host inflates it on the first API page render.
+  const apiReference = createApiReferenceSource(vscode.Uri.joinPath(context.extensionUri, "dist", "api-reference.json.br").fsPath);
+  // One analyser feeds both the detail page and the creation rules, so they cannot
+  // disagree about whether a function breaks the wrapper rule.
+  const structureAssets = vscode.Uri.joinPath(context.extensionUri, "dist", "structure-index").fsPath;
+  const apiFlowFor = (content: string, entryName?: string) => describeApiFlow(content, structureAssets, entryName);
+  application.setApiFlowAnalyzer(apiFlowFor);
+  const resourceRoots = () => ({
+    global: application.storage.globalStorageUri.fsPath,
+    ...(vscode.workspace.isTrusted && folder?.uri.scheme === "file" ? { project: vscode.Uri.joinPath(folder.uri, ".dext").fsPath } : {})
+  });
+  const resourceDataSource = createFileResourceDataSource({
+    roots: resourceRoots,
+    describeApi: content => describeApiSource(content, structureAssets),
+    describeApiFlow: apiFlowFor,
+    listFiles: (kind) => application.listResources(kind),
+    readFile: async (entry) => {
+      const path = entry.source.path;
+      if (!path) return undefined;
+      try {
+        return textDecoderForResources.decode(await vscode.workspace.fs.readFile(vscode.Uri.file(path)));
+      } catch {
+        // A resource removed since discovery has no readable detail.
+        return undefined;
+      }
+    }
+  });
+  const apiDataSource = createApiDataSource({
+    methods: () => application.registry.list(), files: resourceDataSource, reference: apiReference
+  });
+  const resourceCommandFor = (scope: ResourceScope, dataSource: ResourceEditorDataSource) =>
+    async (command: string, payload: { id?: string; kind?: string; pack?: string; path?: string; scope?: ResourceScope }): Promise<void | boolean> => {
+      if (command.endsWith(".upgradeSkillPack")) {
+        if (!payload.pack) throw new Error("Select a Skill pack to update.");
+        const result = await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: `Checking Skill pack '${payload.pack}' for updates…`
+        }, async () => await application.upgradeSkillPack(payload.pack!, scope, {
+          confirm: async (plan) => await vscode.window.showWarningMessage(`Update ${plan.label}?`, {
+            modal: true,
+            detail: plan.detail
+          }, "Update") === "Update",
+          dirtyPaths: () => vscode.workspace.textDocuments.filter((document) => document.isDirty && document.uri.scheme === "file").map((document) => document.uri.fsPath),
+          trash: async (target) => {
+            try { await vscode.workspace.fs.delete(vscode.Uri.file(target), { recursive: true, useTrash: true }); }
+            catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== "FileNotFound") throw error; }
+          }
+        }));
+        if (result.cancelled) return false;
+        const pinChange = result.commitFrom && result.commitTo && result.commitFrom !== result.commitTo
+          ? ` (commit ${result.commitFrom} → ${result.commitTo})`
+          : "";
+        if (result.updated) {
+          await application.reload();
+          await sidebar.resourcesChanged();
+          void vscode.window.showInformationMessage(result.from === result.to
+            ? `Updated Skill pack '${result.name}' at ${result.to}${pinChange}.`
+            : `Updated Skill pack '${result.name}' from ${result.from} to ${result.to}.`);
+        } else if (result.refreshed) {
+          // The version label and commit pin changed even though no Skill file did.
+          await sidebar.resourcesChanged();
+          void vscode.window.showInformationMessage(`Skill pack '${result.name}' content is unchanged; release metadata now records ${result.commitTo ? `commit ${result.commitTo}` : "the source pin"} (${result.to}).`);
+        } else {
+          void vscode.window.showInformationMessage(`Skill pack '${result.name}' is already up to date (${result.to}).`);
+        }
+        return result.updated || Boolean(result.refreshed);
+      }
+      if (command.endsWith(".toggleSkillPackVisibility")) {
+        if (!payload.pack) throw new Error("Select a Skill pack to toggle.");
+        await application.toggleSkillPackVisibility(payload.pack, payload.scope);
+        await sidebar.refresh();
+        return true;
+      }
+      if (command.endsWith(".toggleSkillVisibility")) {
+        const document = payload.id ? await dataSource.definition(payload.id) : undefined;
+        const skillId = document ? skillEntryId(document.entry) : undefined;
+        if (!document || !skillId) throw new Error("This resource is not a Skill's SKILL.md file.");
+        await application.toggleHiddenSkill(skillId);
+        await sidebar.refresh();
+        return true;
+      }
+      if (command.endsWith(".editResourceDocument")) {
+        const document = payload.id ? await dataSource.definition(payload.id) : undefined;
+        if (!document) throw new Error("This resource is no longer available. Refresh the list.");
+        await sidebar.editResource(document.entry.kind, document.entry.scope,
+          { path: document.entry.path, name: document.entry.name });
+        return;
+      }
+      if (command.endsWith(".deleteResource") || command.endsWith(".openResourceFolder") || (command.endsWith(".openResourceSource") && payload.id)) {
+        const document = payload.id ? await dataSource.definition(payload.id) : undefined;
+        if (!document) throw new Error("This resource is no longer available. Refresh the list.");
+        // The APIs page can show both scopes; resolve ownership from the current
+        // data source entry rather than from the tab's creation default.
+        const root = resourceRoots()[document.entry.scope];
+        if (!root) throw new Error("Project resources require a trusted local workspace.");
+        const path = managedResourcePath(document.entry, root);
+        if (command.endsWith(".openResourceSource")) {
+          await vscode.window.showTextDocument(vscode.Uri.file(path));
+          return;
+        }
+        if (command.endsWith(".openResourceFolder")) {
+          if (!await vscode.env.openExternal(vscode.Uri.joinPath(vscode.Uri.file(path), ".."))) throw new Error("VS Code could not open the resource folder.");
+          return;
+        }
+        let removed: boolean;
+        try {
+          removed = await removeManagedResource(document.entry, root, {
+            confirm: async (plan) => await vscode.window.showWarningMessage(`Delete ${plan.label}?`, {
+              modal: true,
+              detail: `${plan.skills.length ? `This removes the entire pack and all ${plan.skills.length} Skills: ${plan.skills.join(", ")}.\n\n` : ""}Files and folders will be moved to Trash:\n${plan.targets.join("\n")}`
+            }, "Move to Trash") === "Move to Trash",
+            dirtyPaths: () => vscode.workspace.textDocuments.filter((document) => document.isDirty && document.uri.scheme === "file").map((document) => document.uri.fsPath),
+            trash: async (target) => {
+              try { await vscode.workspace.fs.delete(vscode.Uri.file(target), { recursive: true, useTrash: true }); }
+              catch (error) { if (!(error instanceof vscode.FileSystemError) || error.code !== "FileNotFound") throw error; }
+            }
+          });
+        } catch (error) {
+          await application.reload();
+          await sidebar.resourcesChanged();
+          throw error;
+        }
+        if (removed) { await application.reload(); await sidebar.resourcesChanged(); }
+        return removed;
+      }
+      if (command.endsWith(".newResource")) {
+        const kind = payload.kind;
+        if (kind !== "api" && kind !== "mcp" && kind !== "rule" && kind !== "skill") {
+          throw new Error(`Unknown resource type '${payload.kind ?? ""}'.`);
+        }
+        await sidebar.editResource(kind, scope);
+        return;
+      }
+      if (command.endsWith(".openResourceDirectory")) {
+        const root = resourceRoots()[scope];
+        if (!root) throw new Error("Open a local project folder to open project resources.");
+        const directory = vscode.Uri.file(root);
+        // A scope with no resources yet has no directory to reveal, so create the root first.
+        await vscode.workspace.fs.createDirectory(directory);
+        const opened = await vscode.env.openExternal(directory);
+        if (!opened) throw new Error("VS Code could not open the resource directory.");
+        return;
+      }
+      if (command.endsWith(".openResourceSource")) {
+        if (!payload.path) throw new Error("This resource has no readable source file.");
+        await vscode.window.showTextDocument(vscode.Uri.file(payload.path));
+        return;
+      }
+      if (command.endsWith(".insertResourceReference")) {
+        const entry = payload.id ? await dataSource.definition(payload.id) : undefined;
+        if (!entry) throw new Error("Select a resource before inserting a reference.");
+        if (entry.entry.kind === "api") sidebar.insertReferences([`${entry.entry.name}()`]);
+        else await sidebar.editResource(entry.entry.kind, entry.entry.scope);
+        return;
+      }
+      await vscode.commands.executeCommand(command);
+    };
+  editors.api = new ApiEditorProvider({
+    manager: editorTabs,
+    restorer: editorTabRestorer,
+    dataSource: apiDataSource,
+    scope: "project",
+    onCommand: resourceCommandFor("project", apiDataSource),
+    copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
+  });
+  editors.globalResources = new GlobalResourcesEditorProvider({
+    manager: editorTabs,
+    restorer: editorTabRestorer,
+    dataSource: resourceDataSource,
+    scope: resourceRoots().project ? "project" : "global",
+    availableScopes: () => resourceRoots().project ? ["project", "global"] : ["global"],
+    onCommand: async (command, payload) => {
+      // Resources refreshes its file listing; reloading runtime callables is unnecessary.
+      if (command === "dext.reloadMethods") return;
+      return await resourceCommandFor(payload.scope === "project" ? "project" : "global", resourceDataSource)(command, payload);
+    },
+    copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
+  }, ["api", "mcp", "rule", "skill"]);
+  const resourceSerializer = (provider: () => ApiEditorProvider | GlobalResourcesEditorProvider | undefined) => ({
+    deserializeWebviewPanel: async (panel: vscode.WebviewPanel, state: unknown): Promise<void> => {
+      const active = provider();
+      const restoredState = restoreEditorTabState(state).state;
+      const resourceId = restoredState?.resourceId ?? parseEditorTabKey(restoredState?.key ?? "")?.resourceId;
+      // Migrate old API detail tabs into the single API browser when restoring a window. The browser
+      // keeps one stable key, so a panel restored without usable state can still be adopted.
+      const key = active instanceof ApiEditorProvider ? active.listTabKey : restoredState?.key ?? "";
+      if (!active || !key) { panel.dispose(); return; }
+      const adopted: EditorTabPanelHandle = wrapVscodeWebviewPanel(panel as unknown as VscodeWebviewPanelLike, {
+        onDispose: () => { editorTabs.closeIfCurrent(key, adopted); },
+        onMessage: (message) => { editorTabs.receive(key, message); }
+      }, renderEditorHtml);
+      const outcome = editorTabRestorer.adoptRestored({ ...(restoredState ?? {}), key }, () => adopted);
+      if (outcome.status === "invalid") { adopted.dispose(); return; }
+      if (outcome.status !== "opened") return;
+      try {
+        if (resourceId) await active.showDetail(resourceId);
+        else await active.showList();
+      } catch (error) {
+        // A resource that disappeared keeps its stable key and shows a recoverable error.
+        adopted.setHtml?.(renderResourceError(resourceId ?? key, error instanceof Error ? error.message : String(error)));
+      }
+    }
+  });
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dext.viewApis", () =>
+      reportCommandError(() => editors.api?.showList() ?? Promise.resolve(undefined))
+    ),
+    vscode.commands.registerCommand("dext.viewResources", () =>
+      reportCommandError(() => editors.globalResources?.showList() ?? Promise.resolve(undefined))
+    ),
+    vscode.commands.registerCommand("dext.openResourceSource", (path?: string) =>
+      reportCommandError(() => resourceCommandFor("project", resourceDataSource)("dext.openResourceSource", typeof path === "string" ? { path } : {}))
+    ),
+    vscode.commands.registerCommand("dext.insertResourceReference", (id?: string) =>
+      reportCommandError(() => resourceCommandFor("project", apiDataSource)("dext.insertResourceReference", typeof id === "string" ? { id } : {}))
+    ),
+    vscode.commands.registerCommand("dext.editResource", (kind?: string, scope?: string) =>
+      reportCommandError(() => sidebar.editResource(
+        (kind === "api" || kind === "mcp" || kind === "rule" || kind === "skill") ? kind : "rule",
+        scope === "global" ? "global" : "project"
+      ))
+    ),
+    vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.api, resourceSerializer(() => editors.api)),
+    vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.globalResources, resourceSerializer(() => editors.globalResources))
+  );
   if (folder?.uri.scheme === "file") {
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, ".dext/mcp/**/*.jsonc"));
     const refreshMcpManifests = async (): Promise<void> => {
@@ -81,14 +389,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!invalid.length) return;
     await vscode.window.showErrorMessage(
       `Unsupported Dext agent CLI profile${invalid.length === 1 ? "" : "s"}: ${invalid.join(", ")}. `
-      + "Supported values: codex, claude, deepseek-harness."
+      + "Supported values: codex, claude, deepseek-harness, pi."
     );
   };
   await reportInvalidAgentCliConfiguration();
   const focusSidebar = async (): Promise<void> => {
     await vscode.commands.executeCommand("dext.sidebar.focus");
   };
-  const activeDextEditor = (): boolean => vscode.window.activeTextEditor?.document.languageId === "dext-api";
   // The History and sidebar webviews pass the right-clicked element's context
   // object.
   interface ConversationContext {
@@ -143,7 +450,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } catch {
         break;
       }
-      file = vscode.Uri.joinPath(directory, `${recorded.apiId}_${suffix}.dx`);
+      file = vscode.Uri.joinPath(directory, `${recorded.apiId}_${suffix}.ts`);
     }
     await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(recorded.source));
     await application.reload();
@@ -205,63 +512,51 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await vscode.window.showErrorMessage("MCP credentials require a trusted local workspace.");
       return undefined;
     }
-    const transports = verifyOnly
-      ? { transport: "http" as const }
-      : await vscode.window.showQuickPick([
-        { label: "HTTP · Bearer", description: "Send Authorization: Bearer ..." , transport: "http" as const },
-        { label: "stdio · Environment token", description: "Inject the token into the configured child-process environment variable", transport: "stdio" as const }
-      ], { placeHolder: "Choose MCP credential type" });
-    if (!transports) return undefined;
-    const servers = application.mcpCredentialServers(transports.transport);
+    if (verifyOnly) {
+      // Verification is a read-only handshake, so any configured server is a
+      // candidate — including stdio and servers a rejected manifest dropped.
+      const choices = application.mcpServerChoices();
+      if (!choices.length) {
+        await vscode.window.showErrorMessage("No MCP servers are configured in .dext/mcp.");
+        return undefined;
+      }
+      const picked = await vscode.window.showQuickPick(
+        choices.map((choice) => ({
+          label: choice.name,
+          description: choice.reason ? "rejected configuration" : choice.detail
+        })),
+        { placeHolder: "Choose an MCP server to verify" }
+      );
+      if (!picked) return undefined;
+      const choice = choices.find((candidate) => candidate.name === picked.label);
+      if (choice?.reason) {
+        await vscode.window.showErrorMessage(`MCP server '${picked.label}' was rejected: ${choice.reason}`);
+        return undefined;
+      }
+      return picked.label;
+    }
+    const credential = await vscode.window.showQuickPick([
+      { label: "HTTP · Bearer", description: "Send Authorization: Bearer ...", transport: "http" as const, credentialKind: "bearer" as const },
+      { label: "HTTP · Query parameter", description: "Send the token as a URL query parameter (?name=...); the configured URL stays credential-free", transport: "http" as const, credentialKind: "query" as const },
+      { label: "stdio · Environment token", description: "Inject the token into the configured child-process environment variable", transport: "stdio" as const, credentialKind: "token" as const }
+    ], { placeHolder: "Choose MCP credential type" });
+    if (!credential) return undefined;
+    const servers = application.mcpCredentialServers(credential.transport, credential.credentialKind);
     if (!servers.length) {
-      await vscode.window.showErrorMessage(`No token-authenticated ${transports.transport} MCP servers are configured in .dext/mcp.`);
+      await vscode.window.showErrorMessage(`No ${credential.label} MCP servers are configured in .dext/mcp.`);
       return undefined;
     }
     const picked = await vscode.window.showQuickPick(
       servers.map((server) => ({
         label: server.name,
-        description: server.transport === "http" ? server.url : `${server.command} ${(server.args ?? []).join(" ")}`
+        description: server.transport === "http" ? redactedMcpUrl(server) : `${server.command} ${(server.args ?? []).join(" ")}`
       })),
-      { placeHolder: `Choose a ${transports.transport} MCP server` }
+      { placeHolder: `Choose an MCP server (${credential.label})` }
     );
     return picked?.label;
   };
   updateTrustContext();
   updateHistoryContext();
-  const completionHost = new DextCompletionHost({
-    settings: () => application.completionSettings(),
-    apiKey: () => application.completionApiKey()
-  });
-  const completionDiagnostics = vscode.window.createOutputChannel("Dext Completion");
-  // A leftover `dext.completion` object shadows the individual settings, so it
-  // is cleared before the first keystroke rather than on next launch. It only
-  // does anything the first time, in the first window to run it.
-  void application.migrateCompletionSettings()
-    .then((migrated) => {
-      if (migrated) completionHost.refresh();
-    })
-    .catch(() => {
-      // A read-only settings file is not a reason to fail activation.
-    });
-  const completionSetup: CompletionDiagnoseOptions = {
-    report: () => completionHost.report(),
-    probe: (document, position) => completionHost.probe(document, position),
-    scope: (field) => application.completionSettingScope(field),
-    settings: () => application.completionSettings(),
-    writeSettings: (patch) => application.writeCompletionSettings(patch),
-    apiKey: () => application.completionApiKey(),
-    setApiKey: (value) => application.setCompletionApiKey(value),
-    clearApiKey: () => application.clearCompletionApiKey(),
-    verify: (settings, apiKey) => completionHost.verify(settings, apiKey),
-    suspended: () => completionHost.suspended,
-    toggle: () => completionHost.toggle(),
-    refresh: () => completionHost.refresh()
-  };
-  const semanticLegend = new vscode.SemanticTokensLegend(
-    [...DEXT_SEMANTIC_TOKEN_TYPES],
-    [...DEXT_SEMANTIC_TOKEN_MODIFIERS]
-  );
-
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(DextSidebarProvider.viewType, sidebar),
     historyPanel,
@@ -313,12 +608,49 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         historyPanel.refreshTurnTitle(session.id, turn.id);
       })
     ),
+    vscode.commands.registerCommand("dext.history.copyTurnInput", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        // Exactly what was submitted, without the answer or the Markdown wrapper.
+        await vscode.env.clipboard.writeText(turn.input);
+      })
+    ),
     vscode.commands.registerCommand("dext.history.copyTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
         const session = historySession(context);
         const index = session.turns.findIndex((item) => item.id === context?.turnId);
         if (index === -1) throw new Error("Conversation turn not found.");
         await vscode.env.clipboard.writeText(historyTurnMarkdown(session.turns[index]!, index));
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.addTurnToDext", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        await sidebar.referenceConversation(historyTranscript(session, turn));
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.addConversationToDext", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        await sidebar.referenceConversation(historyTranscript(historySession(context)));
+        await focusSidebar();
+        sidebar.showChat();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.openSpill", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = historySession(context);
+        const path = session.turns.find((item) => item.id === context?.turnId)?.spillPath;
+        if (!path) {
+          await vscode.window.showInformationMessage("This turn has no truncated output.");
+          return;
+        }
+        await vscode.window.showTextDocument(vscode.Uri.file(path));
       })
     ),
     vscode.commands.registerCommand("dext.history.retryTurn", (context?: ConversationContext) =>
@@ -329,6 +661,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const confirmed = await vscode.window.showWarningMessage(TURN_RETRY_CONFIRMATION, { modal: true }, "Retry");
         if (confirmed !== "Retry") return;
         await sidebar.retryTurn(session.id, turn.id);
+        historyPanel.refresh();
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.continueTurn", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        if (!context?.sessionId || !context.turnId) throw new Error("Conversation turn not found.");
+        await sidebar.continueTurn(context.sessionId, context.turnId);
         historyPanel.refresh();
       })
     ),
@@ -412,8 +751,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.tab.closeConversation", (context?: ConversationContext) =>
       reportCommandError(() => sidebar.closeTab(tabSessionId(context)))
     ),
-    vscode.commands.registerCommand("dext.viewApis", () => sidebar.viewApis()),
-    vscode.commands.registerCommand("dext.viewMcp", () => sidebar.viewMcp()),
     vscode.commands.registerCommand("dext.addMcp", () => sidebar.addMcp()),
     vscode.commands.registerCommand("dext.newConversation", () =>
       reportCommandError(() => sidebar.newConversation())
@@ -429,6 +766,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await application.reload();
       await sidebar.refresh();
     }),
+    vscode.commands.registerCommand("dext.chooseAppearance", () =>
+      reportCommandError(async () => {
+        const kind = vscode.window.activeColorTheme.kind;
+        if (kind === vscode.ColorThemeKind.HighContrast || kind === vscode.ColorThemeKind.HighContrastLight) {
+          void vscode.window.showInformationMessage("Dext follows VS Code while a high-contrast theme is active.");
+          return;
+        }
+        const options: Array<vscode.QuickPickItem & { appearance: DextAppearance }> = [
+          { label: "Auto", description: "Follow VS Code", appearance: "auto" },
+          { label: "Paper", description: "Warm light", appearance: "paper" },
+          { label: "Dim", description: "Warm dark", appearance: "dim" }
+        ];
+        for (const option of options) {
+          if (option.appearance === appearance.current) option.description = `Current · ${option.description}`;
+        }
+        const choice = await vscode.window.showQuickPick(options, {
+          title: "Dext Theme",
+          placeHolder: "Choose how Dext pages and the reading area look"
+        });
+        if (choice) await appearance.set(choice.appearance);
+      })
+    ),
     vscode.commands.registerCommand("dext.openWorkspaceTrust", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceTrustedStatus", openWorkspaceTrust),
     vscode.commands.registerCommand("dext.workspaceUntrustedStatus", openWorkspaceTrust),
@@ -465,29 +824,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.window.showInformationMessage(`Cleared the access token for MCP server '${serverName}'.`);
       })
     ),
-    vscode.commands.registerCommand("dext.completionMenu", () =>
-      reportCommandError(() => openCompletionMenu(completionSetup))
-    ),
-    vscode.commands.registerCommand("dext.configureCompletionModel", () =>
-      reportCommandError(() => configureCompletionModel(completionSetup))
-    ),
-    vscode.commands.registerCommand("dext.testCompletionModel", () =>
-      reportCommandError(() => testCompletionModel(completionSetup))
-    ),
-    completionDiagnostics,
-    vscode.commands.registerCommand("dext.diagnoseCompletion", () =>
-      reportCommandError(() => diagnoseCompletion(completionSetup, completionDiagnostics))
-    ),
-    vscode.commands.registerCommand("dext.setCompletionApiKey", () =>
-      reportCommandError(() => setCompletionApiKey(completionSetup))
-    ),
-    vscode.commands.registerCommand("dext.clearCompletionApiKey", () =>
-      reportCommandError(async () => {
-        await application.clearCompletionApiKey();
-        completionHost.refresh();
-        await vscode.window.showInformationMessage("Cleared the Dext completion API key.");
-      })
-    ),
     vscode.commands.registerCommand("dext.verifyMcpServer", () =>
       reportCommandError(async () => {
         const serverName = await pickMcpCredentialServer(true);
@@ -496,22 +832,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.window.showInformationMessage(`MCP server '${serverName}' is ready.`);
       })
     ),
-    vscode.commands.registerCommand("dext.triggerSuggest", async () => {
-      if (activeDextEditor()) {
-        await vscode.commands.executeCommand("editor.action.triggerSuggest");
-        return;
-      }
-      await focusSidebar();
-      sidebar.triggerSuggest();
-    }),
-    vscode.commands.registerCommand("dext.triggerParameterHints", async () => {
-      if (activeDextEditor()) {
-        await vscode.commands.executeCommand("editor.action.triggerParameterHints");
-        return;
-      }
-      await focusSidebar();
-      sidebar.triggerParameterHints();
-    }),
+    vscode.commands.registerCommand("dext.triggerSuggest", () => sidebar.triggerSuggest()),
+    vscode.commands.registerCommand("dext.triggerParameterHints", () => sidebar.triggerParameterHints()),
     vscode.commands.registerCommand("dext.addSelectionToChat", (target?: SelectionTarget) =>
       reportCommandError(async () => {
         await sidebar.addSelectionToChat(target);
@@ -524,6 +846,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.copyTerminalSelectionWithContext", () =>
       reportCommandError(() => sidebar.copyTerminalSelectionWithContext())
+    ),
+    vscode.commands.registerCommand("dext.copyFilePathWithFiles", () =>
+      reportCommandError(() => sidebar.copyFilePathWithFiles())
+    ),
+    vscode.commands.registerCommand("dext.copyFilePathWithLine", () =>
+      reportCommandError(() => sidebar.copyFilePathWithLine())
     ),
     vscode.commands.registerCommand("dext.addFileToChat", (resource?: vscode.Uri) =>
       reportCommandError(async () => {
@@ -558,6 +886,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ignoreFocusOut: true
       });
       if (command === undefined) return;
+      if (picked.profile.provider === "pi") {
+        application.updateAgentProfile({ ...picked.profile, command: command.trim() });
+        try { await application.discoverPiModels(); }
+        catch (error) { await vscode.window.showWarningMessage(`Pi command saved; model discovery failed: ${String(error)}`); }
+        await sidebar.refresh();
+        return;
+      }
       if (picked.profile.provider === "deepseek-harness") {
         application.updateAgentProfile({ ...picked.profile, command: command.trim() });
         try { await application.discoverHarnessModels(); }
@@ -579,16 +914,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await sidebar.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
-      // A new API directory changes the registered API set, so this one has to
-      // go through a full reload rather than a refresh.
-      if (event.affectsConfiguration("dext.apiDirs")) {
+      // The interaction language only steers the next prompt. Apply it before
+      // the early-return branches below so a batch change that also touches
+      // submitOnEnter, a timeout, or an Agent setting never skips it. It must
+      // not reload the API set.
+      if (event.affectsConfiguration("dext.outputLanguage")) {
+        application.applyOutputLanguageSettings();
+      }
+      // These four settings name the directories discovery walks, so the next
+      // reload is what makes a change visible.
+      if (
+        event.affectsConfiguration("dext.apiDirectories")
+        || event.affectsConfiguration("dext.skillDirectories")
+        || event.affectsConfiguration("dext.mcpDirectories")
+        || event.affectsConfiguration("dext.planDirectory")
+      ) {
         await application.reload();
         await sidebar.refresh();
         return;
       }
       if (
-        event.affectsConfiguration("dext.diff.defaultView")
-        || event.affectsConfiguration("dext.submitOnEnter")
+        event.affectsConfiguration("dext.submitOnEnter")
       ) {
         await sidebar.refresh();
         return;
@@ -597,15 +943,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       // reloading the API set, which would needlessly re-scan the workspace.
       if (
         event.affectsConfiguration("dext.agent.timeoutMs")
+        || event.affectsConfiguration("dext.agent.idleTimeoutMs")
         || event.affectsConfiguration("dext.workflow.maxConcurrency")
       ) {
         application.applyTimeoutSettings();
-        return;
-      }
-      // Cached completions were produced under the old configuration, and the
-      // status bar advertises the model, so both are rebuilt.
-      if (event.affectsConfiguration("dext.completion")) {
-        completionHost.refresh();
         return;
       }
       if (
@@ -632,105 +973,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         || event.affectsConfiguration("editor.tokenColorCustomizations")
       ) {
         await sidebar.refresh();
+        historyPanel.refresh();
       }
     }),
-    vscode.window.onDidChangeActiveColorTheme(() => sidebar.refresh()),
+    vscode.window.onDidChangeActiveColorTheme(async () => {
+      await sidebar.refresh();
+      historyPanel.refresh();
+    }),
     vscode.workspace.onDidGrantWorkspaceTrust(async () => {
       updateTrustContext();
       await application.reload();
       await sidebar.refresh();
     }),
-    completionHost,
-    // Every file document, with the exclusions applied inside the provider. A
-    // `pattern` here would be matched against the absolute path, which is one
-    // more thing that can quietly fail to match.
-    vscode.languages.registerInlineCompletionItemProvider({ scheme: "file" }, completionHost),
-    vscode.commands.registerCommand("dext.toggleCompletion", () => completionHost.toggle()),
-    vscode.languages.registerCompletionItemProvider(
-      { language: "dext-api", scheme: "file" },
-      {
-        provideCompletionItems(document, position) {
-          const source = document.getText();
-          const cursor = document.offsetAt(position);
-          const relative = vscode.workspace.asRelativePath(document.uri, false).replace(/\\/g, "/");
-          const marker = ".dext/api/";
-          const index = relative.indexOf(marker);
-          const apiId = index >= 0 ? relative.slice(index + marker.length).replace(/\.dx$/i, "").replace(/\//g, ".") : undefined;
-          return application.language.apiCompletions(source, cursor, apiId).map((candidate) => {
-            const completion = new vscode.CompletionItem(
-              candidate.label,
-              candidate.kind === "namespace" ? vscode.CompletionItemKind.Module :
-                candidate.kind === "method" ? vscode.CompletionItemKind.Function :
-                  candidate.kind === "parameter" ? vscode.CompletionItemKind.Field : vscode.CompletionItemKind.Value
-            );
-            completion.detail = candidate.detail;
-            completion.insertText = candidate.insertText;
-            if (candidate.sortText) completion.sortText = candidate.sortText;
-            completion.range = new vscode.Range(document.positionAt(candidate.replaceStart), document.positionAt(candidate.replaceEnd));
-            return completion;
-          });
-        }
-      },
-      ".",
-      " "
-    ),
-    vscode.languages.registerDefinitionProvider(
-      { language: "dext-api", scheme: "file" },
-      new DextApiDefinitionProvider((id) => application.customApiSourcePath(id))
-    ),
-    vscode.languages.registerHoverProvider(
-      { language: "dext-api", scheme: "file" },
-      {
-        provideHover(document, position) {
-          const source = document.getText();
-          const cursor = document.offsetAt(position);
-          const hover = application.language.apiHover(source, cursor);
-          if (!hover) return undefined;
-          return new vscode.Hover(
-            new vscode.MarkdownString(`**${hover.label}**\n\n${hover.documentation}`),
-            new vscode.Range(document.positionAt(hover.rangeStart), document.positionAt(hover.rangeEnd))
-          );
-        }
-      }
-    ),
-    vscode.languages.registerSignatureHelpProvider(
-      { language: "dext-api", scheme: "file" },
-      {
-        provideSignatureHelp(document, position) {
-          const source = document.getText();
-          const signature = application.language.apiSignature(source, document.offsetAt(position));
-          if (!signature) return undefined;
-          const item = new vscode.SignatureInformation(signature.label, signature.documentation);
-          item.parameters = signature.parameters.map((parameter) => new vscode.ParameterInformation(parameter.label, parameter.documentation));
-          const result = new vscode.SignatureHelp();
-          result.signatures = [item];
-          result.activeSignature = 0;
-          result.activeParameter = signature.activeParameter;
-          return result;
-        }
-      },
-      "(", ","
-    ),
-    vscode.languages.registerDocumentSemanticTokensProvider(
-      { language: "dext-api", scheme: "file" },
-      {
-        provideDocumentSemanticTokens(document) {
-          const builder = new vscode.SemanticTokensBuilder(semanticLegend);
-          for (const token of dextSemanticTokens(document.getText())) {
-            builder.push(
-              new vscode.Range(document.positionAt(token.from), document.positionAt(token.to)),
-              token.type,
-              token.declaration ? ["declaration"] : []
-            );
-          }
-          return builder.build();
-        }
-      },
-      semanticLegend
-    )
   );
 
-  const watcher = vscode.workspace.createFileSystemWatcher("**/.dext/api/**/*.dx");
+  const watcher = vscode.workspace.createFileSystemWatcher("**/.dext/api/**/*.ts");
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   let reloadRunning = false;
   let reloadQueued = false;

@@ -1,0 +1,63 @@
+:root {
+  color-scheme: dark;
+  --editor-width: 760px;
+  --page-bg: #11151d; --text: #dbe2ef; --muted: #a6b7cf; --accent: #8fcef9;
+  --surface: #19212f; --panel-bg: #1c2635; --border: #44546c;
+  --control-bg: #222f43; --strong: #eef4ff; --code: #a9c5eb;
+  --ref-bg: #26415f; --ref-fg: #c2e1ff; --ref-border: #739ac5; --ref-raw-bg: #324f7055;
+  font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--page-bg); color: var(--text);
+}
+:root[data-theme="vs"] {
+  color-scheme: light;
+  --page-bg: #f5f7fa; --text: #202b3a; --muted: #526278; --accent: #145d91;
+  --surface: #ffffff; --panel-bg: #eaf0f7; --border: #8797ab;
+  --control-bg: #ffffff; --strong: #18263a; --code: #284e78;
+  --ref-bg: #e3effb; --ref-fg: #173e67; --ref-border: #6686aa; --ref-raw-bg: #dceafa;
+}
+:root[data-theme="hc-black"] {
+  --page-bg: #000000; --text: #ffffff; --muted: #ffffff; --accent: #ffff00;
+  --surface: #000000; --panel-bg: #000000; --border: #ffffff;
+  --control-bg: #000000; --strong: #ffffff; --code: #ffffff;
+  --ref-bg: #000000; --ref-fg: #ffffff; --ref-border: #ffff00; --ref-raw-bg: #000000;
+}
+:root[data-theme="hc-light"] {
+  color-scheme: light;
+  --page-bg: #ffffff; --text: #000000; --muted: #000000; --accent: #000080;
+  --surface: #ffffff; --panel-bg: #ffffff; --border: #000000;
+  --control-bg: #ffffff; --strong: #000000; --code: #000000;
+  --ref-bg: #ffffff; --ref-fg: #000000; --ref-border: #000080; --ref-raw-bg: #ffffff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1220px; padding: 32px; margin: auto; }
+.eyebrow { color: var(--accent); font-size: 11px; letter-spacing: 2px; }
+h1 { font-size: 27px; margin: 8px 0; font-weight: 600; }
+h2 { font-size: 14px; margin: 0 0 12px; }
+p { color: var(--muted); margin: 8px 0; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 24px 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+select, button { border: 1px solid var(--border); border-radius: 5px; background: var(--control-bg); color: var(--text); padding: 5px 9px; font: inherit; }
+button { cursor: pointer; }
+input { accent-color: var(--accent); }
+.grid { display: flex; gap: 24px; align-items: flex-start; }
+.input-panel { width: min(var(--editor-width), 100%); flex-shrink: 0; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.panel-heading, footer { padding: 10px 14px; display: flex; justify-content: space-between; gap: 10px; align-items: center; background: var(--panel-bg); color: var(--muted); font-size: 12px; }
+.panel-heading strong { color: var(--strong); }
+#editor { height: 310px; width: 100%; }
+.pill { border: 1px solid var(--accent); border-radius: 20px; padding: 2px 10px; color: var(--accent); }
+aside { flex: 1; min-width: 190px; padding-top: 10px; font-size: 13px; }
+ol { padding-left: 20px; color: var(--muted); }
+li { margin: 8px 0; }
+.inspection { display: grid; grid-template-columns: 1.5fr 1fr; gap: 18px; margin: 24px 0; }
+.inspection > div { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 Consolas, monospace; color: var(--code); }
+#source { max-height: 250px; overflow: auto; }
+#events { max-height: 130px; overflow: auto; }
+textarea { display: block; width: 100%; min-height: 78px; padding: 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; }
+textarea::placeholder { color: var(--muted); }
+.ref-raw { background: var(--ref-raw-bg); border-bottom: 1px solid var(--ref-border); }
+/* Deliberately experimental: CSS hides model text, but does not remove its
+   columns from Monaco's model/view mapping. The lab measures the consequences. */
+.ref-hidden, .dext-ref-source { display: none !important; }
+/* Override Monaco token colors: injected labels carry syntax-token classes too. */
+.monaco-editor .view-line .ref-chip, .monaco-editor .view-line .dext-ref-chip { background: var(--ref-bg); color: var(--ref-fg); border: 1px solid var(--ref-border); border-radius: 4px; cursor: pointer; }
+@media(max-width: 850px) { main { padding: 18px; }.grid { flex-direction: column; }.inspection { grid-template-columns: 1fr; }aside { min-width: 0; } }

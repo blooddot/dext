@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { agentTodoEvent, ClaudeTodoTracker, normalizeAgentTodos } from "../src/core/agentTodoTracking.js";
-import { CliAgentRunner, parseClaudeStreamEvents, parseCodexStreamLine } from "../src/core/agentRunner.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
-import { agentTodoProgress, agentTodoRows, latestAgentTodos } from "../src/agentTodoPresentation.js";
-import { DextHistoryStore } from "../src/historyStore.js";
-import { renderHistoryRecord } from "../src/historyRender.js";
+import { agentTodoEvent, ClaudeTodoTracker, normalizeAgentTodos } from "../src/features/agents/domain/agentTodoTracking.js";
+import { CliAgentRunner, parseClaudeStreamEvents } from "../src/features/agents/host/agentRunner.js";
+import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
+import { agentTodoProgress, agentTodoRows, latestAgentTodos, renderAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
+import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 
 function claudeHarness() {
   const tracker = new ClaudeTodoTracker();
@@ -41,23 +41,11 @@ describe("agent task progress", () => {
       .toEqual([{ id: "0", text: "Build", status: "in_progress" }]);
     expect(events.filter((event) => event.phase === "tool")).toHaveLength(1);
   });
-  it("consumes Codex snapshots without inventing the active task or completing tasks when a turn ends", () => {
-    const parse = (type: string, items: unknown) => parseCodexStreamLine(JSON.stringify({ type, item: { id: "todo", type: "todo_list", items } }));
-    const first = parse("item.started", [{ text: "Inspect", completed: false }, { text: "Build", completed: false }])!;
-    expect(first.todos?.map((item) => item.status)).toEqual(["pending", "pending"]);
-    const next = parse("item.updated", [{ text: "Inspect", completed: true }, { text: "Build", completed: false }])!;
-    expect(next.todos?.map((item) => item.status)).toEqual(["completed", "pending"]);
-    expect(parse("item.completed", [{ text: "Build", completed: false }])?.todos?.[0]?.status).toBe("pending");
-    expect(latestAgentTodos([first, next])).toEqual(next.todos);
-    expect(first.todos?.[0]?.status).toBe("pending");
-    expect(parse("item.updated", [{ text: "bad", completed: "true" }])).toBeUndefined();
-  });
-
-  it("keeps explicit ACP statuses and accepts clearing the whole list", () => {
-    expect(normalizeAgentTodos([{ content: "Build", status: "in_progress", priority: "high" }], "acp"))
+  it("keeps explicit statuses and accepts clearing the whole list", () => {
+    expect(normalizeAgentTodos([{ content: "Build", status: "in_progress", priority: "high" }]))
       .toEqual([{ id: "0", text: "Build", status: "in_progress" }]);
-    expect(normalizeAgentTodos([{ content: "Build", status: "unknown" }], "acp")).toBeUndefined();
-    expect(normalizeAgentTodos(undefined, "acp")).toBeUndefined();
+    expect(normalizeAgentTodos([{ content: "Build", status: "unknown" }])).toBeUndefined();
+    expect(normalizeAgentTodos(undefined)).toBeUndefined();
     expect(latestAgentTodos([agentTodoEvent([{ id: "a", text: "Build", status: "pending" }]), agentTodoEvent([])]))
       .toEqual([]);
   });
@@ -117,9 +105,36 @@ describe("agent task progress", () => {
     expect(agentTodoProgress(items, false)).toEqual({ label: "0/1 completed · Incomplete", complete: false });
   });
 
+  it("renders Todo Markdown consistently in live rows and restored history", () => {
+    const items = [{ id: "markdown", status: "in_progress" as const,
+      text: '**验证源码一致性。** 检查 `DextCodeEditor` 和 [文档](https://example.com/docs)。\n保留换行。\n\n- 覆盖选择\n- 验证撤销\n\n```ts\nconst ready = true;\n```' }];
+    for (const html of [agentTodoRows(items, true), renderAgentTodos(items)]) {
+      expect(html).toContain('<div class="agent-todo-text markdown-body">');
+      expect(html).toContain("<strong>验证源码一致性。</strong>");
+      expect(html).toContain("<code>DextCodeEditor</code>");
+      expect(html).toContain('<a href="https://example.com/docs">文档</a>');
+      expect(html).toContain("<br>\n保留换行。");
+      expect(html).toContain("<li>覆盖选择</li>");
+      expect(html).toContain('<pre><code class="language-ts">const ready = true;');
+      expect(html).not.toContain("**验证源码一致性。**");
+    }
+  });
+
+  it("keeps raw HTML and executable links inert in Todo Markdown", () => {
+    const html = agentTodoRows([{ id: "untrusted", status: "pending",
+      text: '<img src=x onerror="alert(1)"> [unsafe](javascript:alert(1)) **Safe bold**' }], true);
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("<strong>Safe bold</strong>");
+  });
+
   it("persists interrupted progress and renders the last snapshot above Process after reloading", async () => {
-    let stored: unknown;
-    const state = { get: <T>(_: string, fallback: T): T => (stored as T) ?? fallback, update: async (_: string, value: unknown) => { stored = value; } };
+    const stored = new Map<string, unknown>();
+    const state = {
+      get: <T>(key: string, fallback: T): T => (stored.has(key) ? stored.get(key) as T : fallback),
+      update: async (key: string, value: unknown) => { if (value === undefined) stored.delete(key); else stored.set(key, value); }
+    };
     const history = new DextHistoryStore(state as never);
     const initial = agentTodoEvent([{ id: "1", text: "Old title", status: "pending" }]);
     const latest = agentTodoEvent([{ id: "1", text: "New title", status: "in_progress" }]);
@@ -129,7 +144,7 @@ describe("agent task progress", () => {
     const html = renderHistoryRecord(turn);
     expect(html).toContain("New title");
     expect(html).not.toContain("Old title");
-    expect(html.indexOf(">Todo</span>")).toBeLessThan(html.indexOf(">Process</span>"));
+    expect(html.indexOf(">Todo</span>")).toBeLessThan(html.indexOf("data-turn-section=\"process\""));
     expect(html).toContain("Paused");
     expect(html).not.toContain("codicon-modifier-spin");
     expect(renderHistoryRecord({ ...turn, process: [agentTodoEvent([])] })).not.toContain(">Todo</span>");

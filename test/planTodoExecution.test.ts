@@ -1,49 +1,104 @@
-import { describe, expect, it, vi } from "vitest";
-import { DextSidebarProvider } from "../src/sidebarProvider.js";
-import type { AgentStreamEvent, ExecutionMetadata, InputExecutionResponse } from "../src/core/types.js";
-import type { DextHistoryRecord } from "../src/historyStore.js";
-
-vi.mock("vscode", () => ({}));
+import { describe, expect, it } from "vitest";
+import type { AgentStreamEvent, InputExecutionResponse } from "../src/shared/contracts/types.js";
+import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
+import { createConversationHarness } from "./conversationHarness.js";
 
 describe("Plan execution task initialization", () => {
   it("publishes task rows before calling the agent and saves explicit progress without protocol comments", async () => {
     const source = "# Old plan\n## Tasks\n1. [ ] Inspect\n2. [ ] Verify";
-    const posted: AgentStreamEvent[] = [];
-    const initial = { id: "session", turns: [] as DextHistoryRecord[], planStatus: "running", activePlanPath: "old.plan.md" };
+    const initial: DextHistorySession = {
+      id: "session", createdAt: 1, updatedAt: 1, turns: [], planStatus: "running", activePlanPath: "old.plan.md"
+    };
     const response: InputExecutionResponse = { kind: "workflow", executions: [{
       invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
       method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
-      result: { kind: "chat", executePlan: true, planPath: "old.plan.md", text: 'Checked. <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}]} -->' }
+      result: {
+        kind: "plan",
+        executePlan: true,
+        planPath: "old.plan.md",
+        text: 'Checked. <!-- dext-todo: {"updates":[{"id":"plan-1","status":"completed"}]} -->'
+      }
     }] };
-    const execute = vi.fn(async (_mode: string, _source: string, metadata: ExecutionMetadata) => {
-      expect(posted[0]?.todos?.map((item) => item.text)).toEqual(["Inspect", "Verify"]);
-      expect(posted[0]?.todos?.every((item) => item.status === "pending")).toBe(true);
+    const harness = createConversationHarness();
+    // The session is not stored yet: hydrate a conversation opened from history,
+    // then let the plan execution itself write the first turn.
+    await harness.controller.open(initial);
+    const session = harness.controller.session("session");
+    if (!session) throw new Error("The plan conversation was not opened.");
+    session.planStatus = "running";
+
+    const execute = harness.executeConversation;
+    execute.mockImplementation(async (_mode, _source, metadata) => {
+      const roundResponse = structuredClone(response);
+      // The task rows must already be in the turn's published event log when
+      // the agent is called, not reconstructed after the answer arrives.
+      const published = harness.coordinator.active("session")?.events ?? [];
+      expect(published[0]?.todos?.map((item) => item.text)).toEqual(["Inspect", "Verify"]);
+      // The event log keeps the current task snapshot across rounds. Initial
+      // tasks must be pending; later rounds retain the reported completion.
+      expect(published[0]?.todos?.map((item) => item.status)).toEqual(
+        execute.mock.calls.length === 1 ? ["pending", "pending"] : ["completed", "pending"]
+      );
       metadata.onAgentEvent?.({ phase: "message", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->' });
-      metadata.onAgentEvent?.({ phase: "message", id: "last", text: (response.executions[0]!.result as { text: string }).text });
-      return response;
+      metadata.onAgentEvent?.({
+        phase: "message",
+        id: "last",
+        text: (roundResponse.executions[0]!.result as { text: string }).text
+      });
+      return roundResponse;
     });
-    const saved = vi.fn(async (input: string, process: AgentStreamEvent[]) => ({ id: "turn", input, process, createdAt: 1, output: "Checked.", response }));
-    const sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
-    Object.assign(sidebar, {
-      activeSession: initial, activeExecutions: new Map(), conversationSelections: new Map(), sessions: new Map(), pendingPatches: new Map(),
-      application: { state: () => ({ agentSelection: {} }), agentProfiles: () => [], executeConversation: execute },
-      history: { addSuccess: saved, updatePlanContext: vi.fn() },
-      postAgentEvent: (_sessionId: string, event: AgentStreamEvent) => posted.push(event),
-      post: vi.fn(), postConversationState: vi.fn(), postPlanContext: vi.fn(), updateRunningContext: vi.fn(),
-      persistProviderSessions: vi.fn(), flushAttachmentDeletes: vi.fn(), uiInteraction: vi.fn()
-    });
-    await (sidebar as unknown as { run(mode: string, source: string, path: undefined, executePlan: boolean): Promise<void> })
-      .run("plan", source, undefined, true);
-    expect(execute).toHaveBeenCalledOnce();
-    expect(saved).toHaveBeenCalledOnce();
-    expect(saved).toHaveBeenCalledWith(source, expect.any(Array), response, "session", "plan", expect.any(String), {
-      executePlan: true, planPath: "old.plan.md"
-    });
-    const todos = initial.turns[0]!.process.filter((event) => event.phase === "todo").at(-1)?.todos;
+
+    await harness.coordinator.execute(session, "plan", source, { planPath: "old.plan.md", executePlan: true });
+
+    expect(execute).toHaveBeenCalledTimes(4);
+    expect(execute.mock.calls[1]?.[1]).toContain("Continue the remaining actionable tasks");
+
+    expect(session.turns).toHaveLength(1);
+    const turn = session.turns[0]!;
+    expect(turn.input).toBe(source);
+    expect(turn.mode).toBe("plan");
+    expect(turn.planPath).toBe("old.plan.md");
+    expect(turn.executePlan).toBe(true);
+    expect(turn.planOutcome).toMatchObject({ status: "incomplete", rounds: 4 });
+    expect(harness.history.list()[0]?.turns[0]?.planOutcome).toMatchObject({ status: "incomplete", rounds: 4 });
+
+    const todos = turn.process.filter((event) => event.phase === "todo").at(-1)?.todos;
     expect(todos?.map((item) => item.status)).toEqual(["completed", "pending"]);
-    expect(posted.filter((event) => event.phase === "message").every((event) => !event.text.includes("dext-todo"))).toBe(true);
-    expect((response.executions[0]!.result as { text: string }).text).toBe("Checked. ");
-    expect(initial.planStatus).toBe("new");
-    expect(initial.activePlanPath).toBeUndefined();
+    expect(session.planProgress?.path).toBe("old.plan.md");
+    expect(session.planProgress?.todos.map((item) => item.status)).toEqual(["completed", "pending"]);
+    expect(harness.history.list()[0]?.planProgress?.todos.map((item) => item.status)).toEqual(["completed", "pending"]);
+
+    const agentEvents = harness.messages.flatMap((message): AgentStreamEvent[] =>
+      message.type === "agentEvent" ? [message.event] : []);
+    expect(agentEvents.filter((event) => event.phase === "todo")[0]?.todos?.map((item) => item.text))
+      .toEqual(["Inspect", "Verify"]);
+    expect(agentEvents.filter((event) => event.phase === "message").every((event) => !event.text.includes("dext-todo")))
+      .toBe(true);
+    expect((turn.response!.executions[0]!.result as { text: string }).text).toContain("Dext plan execution: incomplete");
+    expect(session.planStatus).toBe("active");
+    expect(session.activePlanPath).toBe("old.plan.md");
+  });
+  it("takes the same task report from the provider's update tool, without a protocol comment", async () => {
+    const harness = createConversationHarness();
+    await harness.controller.open({ id: "session", createdAt: 1, updatedAt: 1, turns: [], planStatus: "running", activePlanPath: "a.plan.md" });
+    const session = harness.controller.session("session")!;
+    session.planStatus = "running";
+    let round = 0;
+    harness.executeConversation.mockImplementation(async (_mode, _source, metadata) => {
+      metadata.planTodo?.(round++ === 0
+        ? { updates: [{ id: "plan-1", status: "completed" }, { id: "plan-2", status: "completed" }] }
+        : { verification: "passed" });
+      return { kind: "workflow", executions: [{
+        invocation: { kind: "invocation", method: "plan", arguments: [], source: "chat" },
+        method: { id: "plan", title: "Plan", kind: "command", source: "builtin" }, durationMs: 1,
+        result: { kind: "plan", text: "Done." }
+      }] };
+    });
+
+    await harness.coordinator.execute(session, "plan", "## Tasks\n1. [ ] Inspect\n2. [ ] Verify", { planPath: "a.plan.md", executePlan: true });
+
+    expect(harness.executeConversation).toHaveBeenCalledTimes(2);
+    expect(session.turns[0]?.planOutcome?.status).toBe("completed");
+    expect(session.planProgress?.todos.map((item) => item.status)).toEqual(["completed", "completed"]);
   });
 });

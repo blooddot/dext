@@ -1,0 +1,560 @@
+import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
+import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
+import { skillEntryId, type ResourceDefinitionDocument, type ResourceEntry, type ResourceListDocument, type ResourcePackRef, type ResourcePanelOptions, type ResourceTreeNode } from "../contracts/resourceDocuments.js";
+import { RESOURCE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
+import { renderApiFlow } from "./apiFlowDiagram.js";
+import { escapeHtml as escapeResourceHtml } from "../../../shared/lib/html.js";
+
+
+/** Toolbar glyphs are codicons; the editor tab document links their stylesheet once. */
+function resourceIcon(name: string): string { return `<i class="codicon codicon-${name}" aria-hidden="true"></i>`; }
+
+
+export function resourceEntryId(entry: Pick<ResourceEntry, "kind" | "scope" | "path">): string {
+  return `${entry.kind}:${entry.scope}:${entry.path}`;
+}
+
+
+/** An MCP tool is registered as the `mcp.<server>.<tool>` API, so its id starts with the MCP root. */
+export function isMcpApiId(id: string): boolean {
+  return /^mcp\.[^.]+\./.test(id);
+}
+
+
+/**
+ * The category an entry belongs to on the Resources page. MCP tools are callable APIs, but they
+ * belong to the MCP category rather than the API directory.
+ */
+export function resourceCategory(entry: Pick<ResourceEntry, "kind" | "name">): ResourceKind {
+  return entry.kind === "api" && isMcpApiId(entry.name) ? "mcp" : entry.kind;
+}
+
+
+/** Maps a rendered category label back to its resource kind. */
+export function resourceKindForLabel(label: string): ResourceKind | undefined {
+  return (Object.keys(RESOURCE_LABELS) as ResourceKind[]).find((kind) => RESOURCE_LABELS[kind] === label);
+}
+
+
+/**
+ * Tree levels for one entry inside a category. APIs nest by their dotted namespace;
+ * file resources nest by the directories they live in, so `rules/git/commit.md` reads
+ * as `git` with `commit` beneath it. An MCP tool drops the `mcp` root the category names.
+ */
+export function categoryTreePath(entry: ResourceEntry, kind: ResourceKind | undefined): string[] {
+  if (entry.kind !== "api") return resourceDirectorySegments(entry.kind, entry.path);
+  const namespace = entry.name.split(".").slice(0, -1);
+  return kind === "mcp" && namespace[0] === "mcp" ? namespace.slice(1) : namespace;
+}
+
+
+/** Groups entries by their category or parent directory so nested namespaces stay readable. */
+export function groupResourceEntries(entries: readonly ResourceEntry[], groupBy: "directory" | "kind" = "directory"): Array<{ label: string; entries: ResourceEntry[] }> {
+  const groups = new Map<string, ResourceEntry[]>();
+  for (const entry of entries) {
+    const label = groupBy === "kind" ? RESOURCE_LABELS[resourceCategory(entry)] : entry.group;
+    groups.set(label, [...(groups.get(label) ?? []), entry]);
+  }
+  return [...groups.entries()]
+    .map(([label, value]) => ({ label, entries: [...value].sort((left, right) => left.name.localeCompare(right.name)) }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+
+/** Search matches the name and the declared description; an empty query keeps every entry. */
+export function filterResourceEntries(entries: readonly ResourceEntry[], query: string): ResourceEntry[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return [...entries];
+  return entries.filter((entry) =>
+    entry.name.toLocaleLowerCase().includes(needle)
+    || (entry.description ?? "").toLocaleLowerCase().includes(needle)
+    || (entry.apiFunctions?.map(item => item.api.signature).join(" ") ?? entry.api?.signature ?? "").toLocaleLowerCase().includes(needle));
+}
+
+
+export function buildResourceList(input: {
+  kind: ResourceKind;
+  scope: ResourceScope;
+  entries: readonly ResourceEntry[];
+  query?: string;
+  groupBy?: "directory" | "kind";
+}): ResourceListDocument {
+  const filtered = filterResourceEntries(input.entries, input.query ?? "");
+  return {
+    kind: input.kind,
+    scope: input.scope,
+    entries: filtered,
+    groups: groupResourceEntries(filtered, input.groupBy ?? "directory"),
+    query: input.query ?? ""
+  };
+}
+
+
+export function buildResourceDefinition(entry: ResourceEntry, content: string): ResourceDefinitionDocument {
+  return { entry, content, source: entry.source };
+}
+
+
+export { escapeResourceHtml };
+
+export function renderResourceNavigation(options: ResourcePanelOptions): string {
+  const navigation = options.navigation;
+  if (!navigation) return "";
+  const scope = options.scope && options.availableScopes?.length
+    ? `<span class="resource-scope-switch" role="group" aria-label="Resource scope">${options.availableScopes.map((value) => `<button type="button" data-resource-scope="${value}" class="${value === options.scope ? "is-active" : ""}">${value === "global" ? "Global" : "Project"}</button>`).join("")}</span>` : "";
+  return `<nav class="resource-navigation" aria-label="Resource navigation" data-resource-scroll="${navigation.scrollTop}">`
+    + `<button type="button" data-resource-navigate="back" aria-label="Back" title="Back"${navigation.canGoBack ? "" : " disabled"}>←</button>`
+    + `<button type="button" data-resource-navigate="forward" aria-label="Forward" title="Forward"${navigation.canGoForward ? "" : " disabled"}>→</button>`
+    + `<button type="button" class="resource-navigation-home" data-resource-navigate="home">${options.title === "Resources" ? "Resources" : "APIs"}</button>`
+    + (navigation.label ? `<span aria-hidden="true">/</span><span class="resource-navigation-current" aria-current="page">${escapeResourceHtml(navigation.label)}</span>` : "")
+    + scope + `</nav>`;
+}
+
+
+/** Lightweight lexical colouring for the read-only source preview, shared by both pages. */
+export function highlightResourceSource(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\b\d+(?:\.\d+)?\b|[^A-Za-z_$\d"'`/]+|./g, (token: string) => {
+    const kind = token.startsWith("//") || token.startsWith("/*") ? "comment"
+      : /^["'`]/.test(token) ? "string"
+      : /^(?:import|from|export|default|async|await|function|return|const|let|var|if|else|throw|new|type|interface|extends|typeof|keyof|as)$/.test(token) ? "keyword"
+      : /^(?:true|false|null|undefined)$/.test(token) ? "bool"
+      : /^(?:string|number|boolean|void|unknown|never|any|bigint|[A-Z][\w$]*)$/.test(token) ? "typeName"
+      : /^\d/.test(token) ? "number" : undefined;
+    const text = escapeResourceHtml(token);
+    return kind ? `<span class="tok-${kind}">${text}</span>` : text;
+  });
+}
+
+
+export function apiEntries(entry: ResourceEntry): ResourceEntry[] {
+  return entry.apiFunctions?.length ? entry.apiFunctions.map(item => ({ ...entry, ...item, displayName: item.name.split(".").at(-1)! })) : [entry];
+}
+
+
+export function apiDisplayName(entry: ResourceEntry): string {
+  if (entry.displayName) return entry.displayName;
+  return entry.kind === "api" ? entry.name.split(".").at(-1)! : entry.name;
+}
+
+
+export function highlightApiType(type: string): string {
+  return [...type.matchAll(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_][\w.]*|[^A-Za-z_'"]+/g)]
+    .map(([token]) => /^['"]/.test(token) ? `<span class="tok-string">${escapeResourceHtml(token)}</span>`
+      : /^[A-Za-z_]/.test(token) ? `<span class="tok-typeName">${escapeResourceHtml(token)}</span>` : escapeResourceHtml(token)).join("");
+}
+
+
+/** Both pages render signatures from callable or statically extracted file metadata. */
+export function renderApiSignature(entry: ResourceEntry, shortName = false): string {
+  const api = entry.api;
+  if (!api) return escapeResourceHtml(entry.name);
+  return `<span class="tok-function">${escapeResourceHtml(shortName ? apiDisplayName(entry) : entry.name)}</span>${api.typeParameters ? highlightApiType(api.typeParameters) : ""}(`
+    + api.parameters.map((parameter) => `<span class="tok-propertyName">${escapeResourceHtml(parameter.name)}</span>${parameter.required ? "" : "?"}: ${highlightApiType(parameter.type)}`
+      + (parameter.defaultValue === undefined ? "" : ` = ${highlightResourceSource(parameter.defaultValue)}`)).join(", ")
+    + `) -&gt; ${highlightApiType(api.returnType)}`;
+}
+
+
+export function resourceToggleButton(attributes: string, label: string, expanded: boolean): string {
+  const title = `${expanded ? "Collapse" : "Expand"} ${label}`;
+  return `<button type="button" class="resource-icon-button" ${attributes} data-resource-toggle-label="${escapeResourceHtml(label)}" title="${escapeResourceHtml(title)}" aria-label="${escapeResourceHtml(title)}" aria-expanded="${expanded}">`
+    + `<span data-resource-icon="collapse-all"${expanded ? "" : " hidden"}>${resourceIcon("collapse-all")}</span>`
+    + `<span data-resource-icon="expand-all"${expanded ? " hidden" : ""}>${resourceIcon("expand-all")}</span></button>`;
+}
+
+
+export function resourceRefreshButton(prefix: string): string {
+  return `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.reloadMethods" title="Refresh" aria-label="Refresh">${resourceIcon("refresh")}</button>`;
+}
+
+
+/** Opens the resource directory for the scope the page is currently showing. */
+export function resourceDirectoryButton(prefix: string, scope?: ResourceScope): string {
+  const label = scope === "project" ? "Open project resources folder" : scope === "global" ? "Open global resources folder" : "Open resources folder";
+  return `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.openResourceDirectory" title="${label}" aria-label="${label}">${resourceIcon("folder-opened")}</button>`;
+}
+
+
+/** The installed release line shown beside a pack name. */
+export function resourcePackVersion(pack: Pick<ResourcePackRef, "upstreamVersion" | "releaseTag" | "commit">): string {
+  if (pack.releaseTag) return pack.releaseTag;
+  if (pack.upstreamVersion) return `v${pack.upstreamVersion.replace(/^v/i, "")}`;
+  return pack.commit ? `@${pack.commit.slice(0, 7)}` : "";
+}
+
+
+function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[], collapsed: Set<string>, prefix: string): string {
+  const node = `Skill/${pack.id}`;
+  const version = resourcePackVersion(pack);
+  const action = pack.updatable
+    ? `<span class="resource-group-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("cloud-download")}</button></span>`
+    : "";
+  const skills = entries.flatMap((entry) => (skillEntryId(entry) ? [entry] : []));
+  const shown = skills.filter((entry) => !entry.hidden).length;
+  const visibility = `<input type="checkbox" class="resource-pack-visibility" data-resource-command="${prefix}.toggleSkillPackVisibility" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Show this pack's Skills in the Input skills menu" aria-label="Show this pack's Skills in the Input skills menu"${shown === skills.length && skills.length ? " checked" : ""}${skills.length ? "" : " disabled"}${shown > 0 && shown < skills.length ? ' data-resource-indeterminate="1"' : ""}>`;
+  return `<details class="resource-group resource-pack" data-resource-group="Skill" data-resource-node="${escapeResourceHtml(node)}" data-resource-type="skill" data-resource-pack="${escapeResourceHtml(pack.id)}"${collapsed.has(node) ? "" : " open"}>`
+    + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node)}">${escapeResourceHtml(pack.name)}</span>`
+    + (version ? `<span class="resource-pack-version">${escapeResourceHtml(version)}</span>` : "")
+    + `<span class="resource-count">${entries.length}</span>${action}${visibility}<span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary>`
+    + `<ul>${[...entries].sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
+}
+
+
+export function countTreeNodeEntries(node: ResourceTreeNode): number {
+  return node.entries.length + [...node.children.values()].reduce((total, child) => total + countTreeNodeEntries(child), 0);
+}
+
+
+export function newTreeNode(label: string, path: string): ResourceTreeNode {
+  return { label, path, entries: [], children: new Map() };
+}
+
+
+/** Entries sharing a namespace branch are nested, so a dotted name becomes collapsible levels. */
+export function buildResourceTree(root: ResourceTreeNode, entries: ReadonlyArray<{ entry: ResourceEntry; parts: readonly string[] }>): ResourceTreeNode {
+  for (const { entry, parts } of entries) {
+    let node = root;
+    for (const part of parts) {
+      // A "." root is the API page's top level, so its namespaces are not prefixed with it.
+      const path = node.path === "." ? part : `${node.path}.${part}`;
+      node.children.set(part, node.children.get(part) ?? newTreeNode(part, path));
+      node = node.children.get(part)!;
+    }
+    node.entries.push(entry);
+  }
+  return root;
+}
+
+
+/** Every member name a reference module documents, nested members included, so a
+ * search for `readFile` finds `node:fs/promises` rather than nothing. */
+export function referenceMemberNames(members: readonly ApiReferenceMember[], names: string[] = []): string[] {
+  for (const member of members) {
+    names.push(member.name);
+    if (member.members) referenceMemberNames(member.members, names);
+  }
+  return names;
+}
+
+
+/** The text one row is searched by. */
+export function resourceSearchText(entry: ResourceEntry): string {
+  return [entry.name, entry.description ?? "", entry.apiFunctions?.map(item => item.api.signature).join(" ") ?? entry.api?.signature ?? "", ...(entry.reference ? referenceMemberNames(entry.reference.members) : [])].join(" ");
+}
+
+
+/** Only a managed file on disk can be revised in Dext; built-in and read-only
+ * reference entries have nothing to rewrite. */
+export function editableResource(entry: ResourceEntry): boolean {
+  return !entry.reference && entry.kind !== "file" && Boolean(entry.source.path) && entry.source.kind === entry.scope;
+}
+
+export function renderResourceActions(entry: ResourceEntry, prefix: string): string {
+  if (!editableResource(entry)) return "";
+  const actions = [
+    ["editResourceDocument", "Edit in Dext", "edit"],
+    ["openResourceSource", "Open file", "file"],
+    ["openResourceFolder", "Open containing folder", "folder-opened"],
+    ["deleteResource", "Delete resource", "trash"]
+  ] as const;
+  return `<span class="resource-entry-actions" role="group" aria-label="Resource actions">${actions.map(([command, label, icon]) =>
+    `<button type="button" class="resource-icon-button${command === "deleteResource" ? " resource-delete" : ""}" data-resource-command="${escapeResourceHtml(prefix)}.${command}" data-resource-id="${escapeResourceHtml(entry.id)}" title="${label}" aria-label="${label}">${resourceIcon(icon)}</button>`
+  ).join("")}</span>`;
+}
+
+/** A Skill's Input-menu visibility. Always visible, unlike the hover toolbar,
+ * so its state reads at a glance. */
+export function renderSkillVisibility(entry: ResourceEntry, prefix: string): string {
+  if (!skillEntryId(entry)) return "";
+  return `<input type="checkbox" class="resource-entry-visibility" data-resource-command="${escapeResourceHtml(prefix)}.toggleSkillVisibility" data-resource-id="${escapeResourceHtml(entry.id)}" title="Show in the Input skills menu" aria-label="Show in the Input skills menu"${entry.hidden ? "" : " checked"}>`;
+}
+
+export function renderTreeEntry(entry: ResourceEntry, prefix = "dext"): string {
+  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span></span>${entry.api ? `<code class="resource-entry-signature">${apiEntries(entry).map(item => renderApiSignature(item, true)).join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button>${renderSkillVisibility(entry, prefix)}${renderResourceActions(entry, prefix)}</li>`;
+}
+
+
+export function renderTreeContents(node: ResourceTreeNode, collapsed: Set<string>, type: string, prefix = "dext"): string {
+  return [...node.entries].sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")
+    + [...node.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((child) => renderTreeNode(child, collapsed, type, prefix)).join("");
+}
+
+
+export function renderTreeNode(node: ResourceTreeNode, collapsed: Set<string>, type: string, prefix = "dext"): string {
+  return `<details class="resource-group resource-api-node" data-resource-group="${escapeResourceHtml(node.path)}" data-resource-node="${escapeResourceHtml(node.path)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(node.path) ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node.path)}">${escapeResourceHtml(node.label)}</span><span class="resource-count">${countTreeNodeEntries(node)}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${renderTreeContents(node, collapsed, type, prefix)}</ul></details>`;
+}
+
+
+export function renderApiTree(document: ResourceListDocument, collapsed: Set<string>, prefix = "dext"): string {
+  const root = buildResourceTree(newTreeNode("", "."),
+    document.groups.flatMap((group) => group.entries.map((entry) => ({ entry, parts: group.label === "." ? [] : group.label.split(".") }))));
+  // Keep the synthetic Top level group limited to APIs without a namespace. Namespace
+  // groups such as node and ui are siblings of it, rather than nested beneath it.
+  const topLevel = `<details class="resource-group resource-api-node" data-resource-group="." data-resource-node="." data-resource-type="api"${collapsed.has(".") ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle=".">Top level</span><span class="resource-count">${root.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${root.entries.sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
+  return topLevel + [...root.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((node) => renderTreeNode(node, collapsed, "api", prefix)).join("");
+}
+
+
+/**
+ * The Resources page keeps one category per kind and nests each category's own namespaces, so
+ * `dev.feat` reads as `dev` with `feat` beneath it instead of one flat list.
+ */
+export function renderCategoryTree(document: ResourceListDocument, collapsed: Set<string>, prefix = "dext"): string {
+  return document.groups.map((group) => {
+    const kind = resourceKindForLabel(group.label);
+    const type = kind ?? "";
+    const packs = new Map<string, { pack: ResourcePackRef; entries: ResourceEntry[] }>();
+    const loose: ResourceEntry[] = [];
+    for (const entry of group.entries) {
+      if (kind === "skill" && entry.pack) {
+        const current = packs.get(entry.pack.id) ?? { pack: entry.pack, entries: [] };
+        current.entries.push(entry);
+        packs.set(entry.pack.id, current);
+      } else loose.push(entry);
+    }
+    const root = buildResourceTree(newTreeNode("", group.label),
+      loose.map((entry) => ({ entry, parts: categoryTreePath(entry, kind) })));
+    const packHtml = kind === "skill"
+      ? [...packs.values()].sort((left, right) => left.pack.name.localeCompare(right.pack.name))
+        .map(({ pack, entries }) => renderSkillPack(pack, entries, collapsed, prefix)).join("")
+      : "";
+    return `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(group.label) ? "" : " open"}>`
+      + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label)}</span><span class="resource-count">${group.entries.length}</span>`
+      + `<span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${packHtml}${renderTreeContents(root, collapsed, type, prefix)}</ul>`
+      + (group.entries.length ? "" : `<p class="resource-empty">No ${escapeResourceHtml(group.label)} resources found.</p>`) + `</details>`;
+  }).join("");
+}
+
+
+/**
+ * Filter the loaded list in place so typing keeps focus; forward open and toolbar commands.
+ */
+export function resourceClientScript(state?: EditorTabState): string {
+  const restore = state ? `api.setState(${JSON.stringify(state)});` : "";
+  return `<script>(function(){
+    var api=window.__dextApi||(window.__dextApi=acquireVsCodeApi());${restore}
+    var collapsed=new Set((document.body.dataset.resourceCollapsed||'').split('\\u001f').filter(Boolean));
+    function nodes(){return Array.from(document.querySelectorAll('[data-resource-node]'));}
+    function search(){return document.querySelector('[data-resource-search]');}
+    function query(){var input=search();return input?input.value.trim().toLocaleLowerCase():'';}
+    function viewState(){var input=search();return {query:input?input.value:undefined,scrollTop:window.scrollY,collapsed:Array.from(collapsed)};}
+    function expanded(){
+      return nodes().filter(function(group){return !group.parentElement.closest('[data-resource-node]');}).some(function(group){return group.open;});
+    }
+    function syncButtons(){
+      document.querySelectorAll('[data-resource-toggle-label]').forEach(function(button){
+        var open=expanded(),label=(open?'Collapse ':'Expand ')+button.getAttribute('data-resource-toggle-label');
+        button.title=label;button.setAttribute('aria-label',label);button.setAttribute('aria-expanded',String(open));
+        button.querySelector('[data-resource-icon="collapse-all"]').hidden=!open;
+        button.querySelector('[data-resource-icon="expand-all"]').hidden=open;
+      });
+    }
+    function setOpen(node,open){
+      node.open=open;var id=node.getAttribute('data-resource-node');
+      if(open)collapsed.delete(id);else collapsed.add(id);
+    }
+    function announceCopy(button){
+      var previous=button.textContent;button.textContent='Copied';
+      setTimeout(function(){button.textContent=previous;},1200);
+    }
+    function packMark(box){var pack=box.closest('details[data-resource-pack]');return pack?[pack,pack.querySelector('.resource-pack-visibility')]:[null,null];}
+    /* The host does not re-render the list for a visibility toggle, so the pack's
+       checked/indeterminate state is recomputed here. */
+    function syncPack(box){
+      var found=packMark(box),pack=found[0],mark=found[1];
+      if(!pack||!mark)return;
+      var boxes=pack.querySelectorAll('.resource-entry-visibility'),shown=0;
+      boxes.forEach(function(box){if(box.checked)shown++;});
+      mark.checked=shown===boxes.length;mark.indeterminate=shown>0&&shown<boxes.length;
+    }
+    function applyPack(mark){
+      var found=packMark(mark),pack=found[0];
+      if(!pack)return;
+      pack.querySelectorAll('.resource-entry-visibility').forEach(function(box){box.checked=mark.checked;});
+      mark.indeterminate=false;
+    }
+    document.addEventListener('click',function(event){
+      var element=event.target.closest('[data-resource-command],[data-resource-open],[data-resource-navigate],[data-resource-toggle],[data-resource-toggle-all],[data-resource-copy],button[data-resource-scope]');
+      if(!element||element.disabled)return;
+      var copied=element.getAttribute('data-resource-copy');
+      if(copied){
+        // The host owns the clipboard: a Webview cannot be relied on to reach it.
+        event.preventDefault();
+        if(document.querySelector('.resource-navigation'))api.postMessage({type:'resourceCopy',text:copied,viewState:viewState()});
+        announceCopy(element);
+        return;
+      }
+      if(element.hasAttribute('data-resource-toggle-all')){
+        event.preventDefault();var open=!expanded();nodes().forEach(function(node){setOpen(node,open);});syncButtons();return;
+      }
+      var nodeId=element.getAttribute('data-resource-toggle');
+      if(nodeId){event.preventDefault();var node=nodes().find(function(item){return item.getAttribute('data-resource-node')===nodeId;});if(node)setOpen(node,!node.open);syncButtons();return;}
+      var scope=element.getAttribute('data-resource-scope');
+      if(scope){api.postMessage({type:'resourceScope',scope:scope,viewState:viewState()});return;}
+      var direction=element.getAttribute('data-resource-navigate'),command=element.getAttribute('data-resource-command'),id=element.getAttribute('data-resource-open');
+      var message=direction?{type:'resourceNavigate',direction:direction}:command?{
+        type:'resourceCommand',command:command,kind:element.getAttribute('data-resource-kind')||undefined,
+        path:element.getAttribute('data-resource-path')||undefined,id:element.getAttribute('data-resource-id')||undefined,
+        pack:element.getAttribute('data-resource-pack')||undefined
+      }:id?{type:'resourceOpen',id:id}:null;
+      if(message){if(command&&message.type==='resourceCommand'){
+        /* A checkbox already flipped its checkedness before this handler ran, so
+           preventing the default would roll that back; only sync the pack. */
+        if(element.type==='checkbox'){if(element.classList.contains('resource-pack-visibility'))applyPack(element);else syncPack(element);}
+        else event.preventDefault();
+      }if(document.querySelector('.resource-navigation'))message.viewState=viewState();api.postMessage(message);}
+    });
+    document.addEventListener('toggle',function(event){
+      var node=event.target;if(!node.matches('[data-resource-node]'))return;
+      if(!query()){var id=node.getAttribute('data-resource-node');if(node.open)collapsed.delete(id);else collapsed.add(id);}
+      syncButtons();
+    },true);
+    function filter(){
+      var needle=query(),total=0;
+      document.querySelectorAll('[data-resource-search-text]').forEach(function(row){
+        row.hidden=!(row.getAttribute('data-resource-search-text')||'').toLocaleLowerCase().includes(needle);if(!row.hidden)total++;
+      });
+      nodes().forEach(function(group){
+        var count=group.querySelectorAll('[data-resource-search-text]:not([hidden])').length;
+        group.hidden=!!needle&&!count;
+        group.open=needle?count>0:!collapsed.has(group.getAttribute('data-resource-node'));
+        var badge=group.querySelector(':scope > summary .resource-count');if(badge)badge.textContent=String(count);
+      });
+      var empty=document.querySelector('[data-resource-no-results]');if(empty)empty.hidden=!needle||total>0;
+      syncButtons();
+    }
+    document.addEventListener('input',function(event){if(event.target.matches('[data-resource-search]'))filter();});
+    document.querySelectorAll('input[data-resource-indeterminate]').forEach(function(box){box.indeterminate=true;});
+    filter();
+    var navigation=document.querySelector('[data-resource-scroll]');
+    if(navigation)requestAnimationFrame(function(){window.scrollTo(0,Number(navigation.getAttribute('data-resource-scroll'))||0);});
+  })();</script>`;
+}
+
+/** Renders the list page for API or Global Resources, preserving search, grouping and refresh. */
+export function renderResourceList(document: ResourceListDocument, options: ResourcePanelOptions = {}): string {
+  const prefix = options.commandPrefix ?? "dext";
+  const collapsed = new Set(options.collapsed ?? []);
+  const groups = options.apiTree ? renderApiTree(document, collapsed, prefix)
+    : options.categoryTree ? renderCategoryTree(document, collapsed, prefix)
+    : document.groups.map((group) => `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}"${collapsed.has(group.label) ? "" : " open"} data-resource-type="${document.kind === "api" ? "api" : (options.createKinds?.find((kind) => RESOURCE_LABELS[kind] === group.label) ?? "")}">`
+    + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label === "." ? "Top level" : group.label)}</span><span class="resource-count">${group.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>`
+    + group.entries.map((entry) => `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(`${entry.name} ${entry.description ?? ""}`)}" data-resource-id="${escapeResourceHtml(entry.id)}" data-resource-path="${escapeResourceHtml(entry.path)}">`
+      + `<button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(entry.name)}</span></span>`
+      + (entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : "") + `</button>`
+      + `${renderSkillVisibility(entry, prefix)}${renderResourceActions(entry, prefix)}</li>`).join("")
+    + `</ul>${group.entries.length ? "" : `<p class="resource-empty">No ${escapeResourceHtml(group.label)} resources found.</p>`}</details>`).join("");
+  return `<div class="resource-panel" data-resource-kind="${document.kind}" data-resource-scope="${document.scope}">`
+    + renderResourceNavigation(options)
+    + `<h1>${escapeResourceHtml(options.title ?? (document.kind === "api" ? "APIs" : RESOURCE_LABELS[document.kind]))}</h1>`
+    + `<header class="resource-toolbar">`
+    + `<input type="search" data-resource-search value="${escapeResourceHtml(document.query)}" placeholder="Search by name or description" aria-label="Search resources">`
+    + resourceRefreshButton(prefix)
+    + (options.openResourceDirectory ? resourceDirectoryButton(prefix, document.scope) : "")
+    + (options.createKinds ? "" : `<span class="resource-tree-actions">${resourceToggleButton('data-resource-toggle-all="toggle"', "all", true)}</span>`)
+    + (options.createKinds?.map((kind) => `<button type="button" class="resource-create" data-resource-command="${prefix}.newResource" data-resource-kind="${kind}" data-resource-type="${kind}">New ${RESOURCE_LABELS[kind]}</button>`).join("") ?? "")
+    + `</header>`
+    + (groups || `<p class="resource-empty">No ${escapeResourceHtml(RESOURCE_LABELS[document.kind])} resources found.</p>`)
+    + `<p class="resource-empty" data-resource-no-results hidden>No matching resources.</p>`
+    + `</div><script>document.body.dataset.resourceCollapsed=${JSON.stringify([...collapsed].join("\u001f"))};</script>${resourceClientScript(options.tabState)}`;
+}
+
+
+/** A resource that disappeared keeps its stable key and shows a recoverable error instead. */
+export function renderResourceError(id: string, message: string, options: ResourcePanelOptions = {}): string {
+  const prefix = options.commandPrefix ?? "dext";
+  return `<div class="resource-panel resource-error" data-resource-id="${escapeResourceHtml(id)}" data-resource-error="1">`
+    + renderResourceNavigation(options)
+    + `<p>${escapeResourceHtml(message)}</p>`
+    + resourceRefreshButton(prefix) + `</div>${resourceClientScript(options.tabState)}`;
+}
+
+
+/** The sections a reference module's own members are grouped into, in reading order. */
+export const REFERENCE_MEMBER_GROUPS: ReadonlyArray<{ label: string; kinds: readonly string[] }> = [
+  { label: "Functions", kinds: ["function", "method"] },
+  { label: "Classes", kinds: ["class"] },
+  { label: "Namespaces and objects", kinds: ["namespace"] },
+  { label: "Values", kinds: ["variable"] },
+  { label: "Types", kinds: ["interface", "type", "enum"] }
+];
+
+
+/** One member of a reference module: its declaration's signature, the JSDoc that
+ * documents it, and its own members — a class or namespace is a list inside a list. */
+export function renderReferenceMember(member: ApiReferenceMember): string {
+  const nested = member.members?.length
+    ? `<ul class="resource-api-members">${member.members.map(renderReferenceMember).join("")}</ul>` : "";
+  const documentation = member.documentation
+    ? `<div class="resource-api-documentation">${escapeResourceHtml(member.documentation)}</div>` : "";
+  const parameters = member.params?.length
+    ? `<dl class="resource-api-params">${member.params.map((parameter) => `<div><dt><code>${escapeResourceHtml(parameter.name)}</code></dt><dd>${escapeResourceHtml(parameter.text)}</dd></div>`).join("")}</dl>` : "";
+  const returns = member.returns
+    ? `<p class="resource-api-returns"><span class="resource-api-tag">Returns</span> ${escapeResourceHtml(member.returns)}</p>` : "";
+  const deprecated = member.deprecated
+    ? `<p class="resource-api-deprecated"><span class="resource-api-tag">Deprecated</span> ${escapeResourceHtml(member.deprecated)}</p>` : "";
+  const example = member.example
+    ? `<pre class="resource-api-example"><code>${escapeResourceHtml(member.example)}</code></pre>` : "";
+  return `<li class="resource-api-member" data-resource-member="${escapeResourceHtml(member.name)}">`
+    + `<code class="resource-api-member-signature">${escapeResourceHtml(member.signature)}</code>`
+    + documentation + parameters + returns + deprecated + example + nested + `</li>`;
+}
+
+
+/** A Node module or JavaScript global, rendered entirely from its own declaration:
+ * the declaration's signature for every member and the JSDoc beside it. */
+export function renderReferenceModule(module: ApiReferenceModule): string {
+  // A Node global or a language global is one member named after the entry, so a
+  // heading over a single row would only add noise.
+  const single = module.members.length === 1 && module.members[0]!.name === module.name;
+  const members = single
+    ? `<ul class="resource-api-members">${renderReferenceMember(module.members[0]!)}</ul>`
+    : REFERENCE_MEMBER_GROUPS.map((group) => {
+      const entries = module.members.filter((member) => group.kinds.includes(member.kind));
+      return entries.length
+        ? `<h3>${escapeResourceHtml(group.label)}</h3><ul class="resource-api-members">${entries.map(renderReferenceMember).join("")}</ul>`
+        : "";
+    }).join("");
+  const documentation = module.documentation
+    ? `<div class="resource-api-documentation">${escapeResourceHtml(module.documentation)}</div>` : "";
+  return `<section class="resource-api-reference">`
+    + `<p class="resource-api-specifier"><code>${escapeResourceHtml(module.id)}</code>`
+    + `<button type="button" class="resource-api-copy" data-resource-copy="${escapeResourceHtml(module.id)}">Copy</button></p>`
+    + documentation + members + `</section>`;
+}
+
+
+/** Renders one resource definition with its originating file for the source jump. */
+export function renderResourceDefinition(document: ResourceDefinitionDocument, options: ResourcePanelOptions = {}): string {
+  const prefix = options.commandPrefix ?? "dext";
+  const { entry } = document;
+  const apiDetails = apiEntries(entry).map(item => {
+    const api = entry.kind === "api" ? item.api : undefined;
+    const highlightedApiSignature = renderApiSignature(item);
+    const resultTitle = api ? ` title="${escapeResourceHtml(`Returned by ${api.signature}`)}"` : "";
+    return api
+      ? `<section class="resource-api-docs">${item.description ? `<p class="resource-api-documentation">${escapeResourceHtml(item.description)}</p>` : ""}<p class="resource-api-signature"><code>${highlightedApiSignature}</code></p><h3>Parameters</h3><dl>${(api.parameters.length ? api.parameters : [{ name: "", type: "", required: true, description: "This API takes no parameters." }]).map((parameter) => parameter.name
+        ? `<div><dt><code class="tok-propertyName">${escapeResourceHtml(parameter.name)}</code> <code class="resource-api-type">${highlightApiType(parameter.type)}</code>${parameter.required ? "" : " <em>(optional)</em>"}</dt><dd>${escapeResourceHtml(parameter.description ?? "No description provided.")}${parameter.defaultValue !== undefined ? ` <span class="resource-api-default">Default: <code>${highlightResourceSource(parameter.defaultValue)}</code></span>` : ""}</dd></div>`
+        : `<p>${escapeResourceHtml(parameter.description ?? "")}</p>`).join("")}</dl><h3>Returns</h3><p><code class="resource-result-type"${resultTitle}>${highlightApiType(api.returnType)}</code></p></section>`
+      : "";
+  }).join("");
+  const referenceDetails = entry.reference ? renderReferenceModule(entry.reference) : "";
+  // A flow without source (a built-in or a reference entry) has no module to analyse.
+  const flow = entry.apiFlow ? renderApiFlow(entry.apiFlow, entry.name) : "";
+  // A managed file can also be revised in Dext: the same conversation layout the
+  // Resources panel uses for a new resource, opened on this document.
+  const editable = editableResource(entry);
+  // A reference entry is documentation rather than a file: it has no Dext call to
+  // insert and no source to open, and its own section is the whole page.
+  const actions = entry.reference ? `<span class="resource-source">TypeScript declaration</span>`
+    : (entry.source.path ? `<button type="button" data-resource-command="${prefix}.openResourceSource" data-resource-path="${escapeResourceHtml(entry.source.path)}">Open source</button>` : "")
+      + (editable ? `<button type="button" data-resource-command="${prefix}.editResourceDocument" data-resource-id="${escapeResourceHtml(entry.id)}">Edit in Dext</button>` : "")
+      + `<button type="button" data-resource-command="${prefix}.insertResourceReference" data-resource-id="${escapeResourceHtml(entry.id)}">Insert reference</button>`;
+  const source = entry.reference || !document.content ? ""
+    : `<h3 class="resource-source-heading">Source</h3><pre class="resource-content" data-resource-source="${escapeResourceHtml(document.content)}"><code>${entry.kind === "api" ? highlightResourceSource(document.content) : escapeResourceHtml(document.content)}</code></pre>`;
+  return `<div class="resource-definition" data-resource-id="${escapeResourceHtml(entry.id)}">`
+    + renderResourceNavigation(options)
+    + `<header class="resource-toolbar"><h2>${escapeResourceHtml(entry.name)}</h2>`
+    + actions
+    + `</header>${apiDetails}${flow}${referenceDetails}${source}</div>${resourceClientScript(options.tabState)}`;
+}

@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentPayload,
   agentProcessEnvironment,
@@ -23,13 +23,15 @@ import {
   resolveCliCommand,
   runProcess,
   type AgentConversationRequest,
-  type AgentExecutionRequest
-} from "../src/core/agentRunner.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { AxAdapter } from "../src/core/axAdapter.js";
-import { serializeResultForAgent } from "../src/core/resultSerialization.js";
-import type { AgentProfile } from "../src/agentProfiles.js";
-import type { RegisteredCallable } from "../src/core/types.js";
+  type AgentExecutionRequest,
+  type AgentStructuredRequest
+} from "../src/features/agents/host/agentRunner.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
+import { serializeResultForAgent } from "../src/shared/protocol/resultSerialization.js";
+import { CodexConversationConnection } from "../src/features/agents/host/codexConversationConnection.js";
+import type { AgentProfile } from "../src/features/agents/contracts/agent.js";
+import type { AgentStreamEvent, RegisteredCallable } from "../src/shared/contracts/types.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -95,11 +97,11 @@ describe("CLI command resolution", () => {
   });
 
   it("wraps prior API results in a stable Agent CLI envelope", () => {
-    expect(serializeResultForAgent({ kind: "chat", text: "hello" } as const)).toEqual({
+    expect(serializeResultForAgent({ kind: "ask", text: "hello" } as const)).toEqual({
       kind: "dext-result",
       version: 1,
-      result_kind: "chat",
-      value: { kind: "chat", text: "hello" }
+      result_kind: "ask",
+      value: { kind: "ask", text: "hello" }
     });
   });
 
@@ -108,6 +110,31 @@ describe("CLI command resolution", () => {
       type: "item.completed",
       item: { id: "item_0", type: "agent_message", text: "I will inspect the target first." }
     }))).toMatchObject({ id: "item_0", phase: "message", text: "I will inspect the target first.", done: true });
+  });
+
+  it("does not show Codex request items as Process messages", () => {
+    for (const type of ["user_message", "developer_message"]) {
+      expect(parseCodexStreamLine(JSON.stringify({
+        type: "item.completed",
+        item: { id: `request-${type}`, type, content: "the complete Plan prompt and document" }
+      }))).toBeUndefined();
+      expect(parseCodexStreamLine(JSON.stringify({
+        type,
+        text: "the complete Plan prompt and document"
+      }))).toBeUndefined();
+      expect(parseCodexStreamLine(JSON.stringify({
+        type: `item.${type}`,
+        text: "the complete Plan prompt and document"
+      }))).toBeUndefined();
+    }
+  });
+
+  it("passes Codex message text through for the Process boundary to guard", () => {
+    const text = "已更新计划。\n<!-- dext-plan:start -->\n# 完整计划\n<!-- dext-plan:end -->";
+    expect(parseCodexStreamLine(JSON.stringify({
+      type: "item.completed",
+      item: { id: "plan-result", type: "agent_message", text }
+    }))).toMatchObject({ phase: "message", text, done: true });
   });
 
   it("captures provider-reported token usage from completed Codex and Claude turns", () => {
@@ -137,7 +164,7 @@ describe("CLI command resolution", () => {
     }))).toMatchObject({ id: "item_1", phase: "reasoning", text: "The implementation needs one focused change." });
     expect(parseCodexStreamLine(JSON.stringify({
       type: "item.completed",
-      item: { id: "item_2", type: "agent_message", text: '{"kind":"explain","text":"Done","files":[]}' }
+      item: { id: "item_2", type: "agent_message", text: '{"kind":"agent","text":"Done"}' }
     }))).toBeUndefined();
   });
 
@@ -153,12 +180,66 @@ describe("CLI command resolution", () => {
     expect(parseClaudeStreamLine(JSON.stringify({
       type: "result",
       subtype: "success",
-      structured_output: { kind: "explain", text: "Done", files: [] }
+      structured_output: { kind: "agent", text: "Done" }
     }))).toBeUndefined();
     expect(extractClaudeResult([
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Done" }] } }),
-      JSON.stringify({ type: "result", subtype: "success", structured_output: { kind: "explain", text: "Done", files: [] } })
-    ].join("\n"))).toEqual({ kind: "explain", text: "Done", files: [] });
+      JSON.stringify({ type: "result", subtype: "success", structured_output: { kind: "agent", text: "Done" } })
+    ].join("\n"))).toEqual({ kind: "agent", text: "Done" });
+  });
+
+  it("keeps interleaved Claude messages separate and replaces their streamed text", () => {
+    const messageIds = new Map<string, string>();
+    const parse = (event: unknown) => parseClaudeStreamLine(JSON.stringify(event), messageIds);
+    const stream = (event: unknown, parent_tool_use_id?: string) => parse({ type: "stream_event", event, parent_tool_use_id });
+    stream({ type: "message_start", message: { id: "parent" } });
+    stream({ type: "message_start", message: { id: "child" } }, "tool-agent");
+    expect(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Parent" } }))
+      .toMatchObject({ id: "parent", text: "Parent" });
+    expect(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Child" } }, "tool-agent"))
+      .toMatchObject({ id: "child", text: "Child" });
+    expect(stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: " text" } }))
+      .toMatchObject({ id: "parent", text: " text" });
+    stream({ type: "message_stop" });
+    expect(parse({ type: "assistant", message: { id: "parent", content: [{ type: "text", text: "Parent text" }] } }))
+      .toMatchObject({ id: "parent", text: "Parent text", replace: true, done: true });
+    stream({ type: "message_start", message: { id: "next" } });
+    expect(stream({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Parent text" } }))
+      .toMatchObject({ id: "next", text: "Parent text" });
+    expect(parse({ type: "assistant", message: { id: "snapshot-only", content: [{ type: "text", text: "No deltas" }] } }))
+      .toMatchObject({ id: "snapshot-only", text: "No deltas", done: true });
+  });
+
+  it.each(["api", "conversation"])("deduplicates Claude progress through the %s runner across stdout chunks", async (kind) => {
+    const events: AgentStreamEvent[] = [];
+    const transcript = [...["first", "second"].flatMap((id) => [
+      { type: "stream_event", event: { type: "message_start", message: { id } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Inspecting " } } },
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "files" } } },
+      { type: "stream_event", event: { type: "message_stop" } },
+      { type: "assistant", message: { id, content: [{ type: "text", text: "Inspecting files." }] } }
+    ]), { type: "result", result: "Done", ...(kind === "api" ? { structured_output: { kind: "ask", text: "Done" } } : {}) }];
+    const stdout = transcript.map((event) => JSON.stringify(event)).join("\n");
+    const runner = new CliAgentRunner(1_000, async (_command, _args, _input, _cwd, _signal, onStdout) => {
+      for (let offset = 0; offset < stdout.length; offset += 37) onStdout?.(stdout.slice(offset, offset + 37));
+      return { stdout, stderr: "", code: 0 };
+    });
+    const profile: AgentProfile = { id: "claude", label: "Claude", provider: "claude", command: process.execPath, models: [] };
+    const onEvent = (event: AgentStreamEvent) => events.push(event);
+    if (kind === "api") {
+      await expect(runner.run({ ...request(), profile, cwd: process.cwd(), onEvent })).resolves.toEqual({ kind: "ask", text: "Done" });
+    } else {
+      await expect(runner.runConversation({ ...conversationRequest("hello", "claude-dedup"), profile, onEvent }))
+        .resolves.toBe("Done");
+    }
+    // These are the append/replace semantics used by Process and history replay.
+    const messages = new Map<string, string>();
+    for (const event of events.filter((event) => event.phase === "message")) {
+      expect(event.id).toBeDefined();
+      messages.set(event.id!, event.replace ? event.text : (messages.get(event.id!) ?? "") + event.text);
+    }
+    expect([...messages]).toEqual([["first", "Inspecting files."], ["second", "Inspecting files."]]);
+    expect(events.filter((event) => event.done)).toHaveLength(2);
   });
 
   it("uses Claude Code's non-interactive structured streaming flags", () => {
@@ -178,7 +259,7 @@ describe("CLI command resolution", () => {
     const runner = new CliAgentRunner(1_000, async (_command, args, _input, _cwd, _signal, onStdout) => {
       if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
       invocations.push([...args]);
-      const text = args.includes("--output-schema") ? JSON.stringify({ kind: "chat", text: "done" }) : "done";
+      const text = args.includes("--output-schema") ? JSON.stringify({ kind: "ask", text: "done" }) : "done";
       const stdout = JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } });
       onStdout?.(`${stdout}\n`);
       return { stdout, stderr: "", code: 0 };
@@ -197,6 +278,47 @@ describe("CLI command resolution", () => {
     expect(invocations[0]).toEqual(expect.arrayContaining(["--model", "gpt-test", 'model_reasoning_effort="high"']));
   });
 
+  it("gates the Agent patch instruction on apply and patch", async () => {
+    const inputs: string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, args, input) => {
+      if (args[0] !== "login") inputs.push(input);
+      return {
+        stdout: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "done" } }),
+        stderr: "",
+        code: 0
+      };
+    });
+    const method: RegisteredCallable = {
+      ...BUILTIN_METHODS.find((candidate) => candidate.id === "agent")!,
+      source: "builtin"
+    };
+    const base: AgentExecutionRequest = {
+      ...request(),
+      profile: { id: "codex", label: "Codex", provider: "codex", command: process.execPath, models: [] },
+      cwd: process.cwd(),
+      method,
+      contract: new AxAdapter().compile(method),
+      resolved: {
+        ...request().resolved,
+        invocation: { kind: "invocation", method: "agent", arguments: [{ name: "input", value: "hello" }], source: "code" },
+        method,
+        arguments: { input: "hello" }
+      }
+    };
+
+    await runner.run({ ...base, allowWorkspaceWrite: true });
+    await runner.run({ ...base, allowWorkspaceWrite: true, includePatch: false });
+    await runner.run({ ...base, allowWorkspaceWrite: false });
+    await runner.run({ ...base, allowWorkspaceWrite: false, includePatch: false });
+
+    expect(inputs[0]).toContain("including an auditable patch whenever changes can be represented");
+    expect(inputs[1]).toContain("without a patch; report conclusions in text only");
+    expect(inputs[1]).not.toContain("auditable patch");
+    expect(inputs[2]).toContain("include a complete applicable patch with exact before and after content");
+    expect(inputs[3]).toContain("without a patch; report conclusions in text only");
+    expect(inputs[3]).not.toContain("complete applicable patch");
+  });
+
   it("uses normal provider prompts without an output schema for conversations", () => {
     expect(codexConversationArguments({ permission: "workspace-write" }, "priority"))
       .toEqual(expect.arrayContaining(["exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"]));
@@ -207,6 +329,20 @@ describe("CLI command resolution", () => {
     expect(claudeConversationArguments({ permission: "read-only" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "plan"]));
     expect(claudeConversationArguments({ permission: "workspace-write" })).not.toContain("--json-schema");
+  });
+
+  it("injects host-owned tool servers without a user MCP manifest", () => {
+    const server = { name: "dext_structure", command: "C:\\Program Files\\Dext\\Code.exe", args: ["C:\\Dext\\structureMcp.js", "--cache", "C:\\cache.json"], env: { ELECTRON_RUN_AS_NODE: "1" } };
+    const claude = claudeConversationArguments({ permission: "read-only", mcpServers: [server] });
+    const config = JSON.parse(claude[claude.indexOf("--mcp-config") + 1]!) as { mcpServers: Record<string, unknown> };
+    expect(config.mcpServers.dext_structure).toMatchObject({ type: "stdio", command: server.command, args: server.args, env: server.env });
+    const codex = codexConversationArguments({ permission: "read-only" }, undefined, [], { persist: true, mcpServers: [server] });
+    expect(codex).toEqual(expect.arrayContaining([
+      "--config", expect.stringContaining("mcp_servers.dext_structure.command="),
+      "--config", expect.stringContaining("mcp_servers.dext_structure.args="),
+      "--config", 'mcp_servers.dext_structure.env.ELECTRON_RUN_AS_NODE="1"'
+    ]));
+    expect(codex.join(" ")).not.toContain("--mcp-config");
   });
 
   it("uses native fork arguments for Codex and Claude sessions", () => {
@@ -334,9 +470,12 @@ describe("CLI command resolution", () => {
       .toEqual(expect.arrayContaining(["--sandbox", "danger-full-access", "--skip-git-repo-check"]));
     expect(claudeConversationArguments({ permission: "full-access" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "bypassPermissions"]));
-    // The DSL only ever knows about writing or not, so it can never reach the
-    // top tier however the composer is configured.
+    // The apply flag remains the hard gate, while an explicit composer tier
+    // can now reach the provider's top sandbox.
     expect(permissionForWrite(true)).toBe("workspace-write");
+    expect(permissionForWrite(true, "full-access")).toBe("full-access");
+    expect(permissionForWrite(true, "read-only")).toBe("workspace-write");
+    expect(permissionForWrite(false, "full-access")).toBe("read-only");
     expect(permissionForWrite(false)).toBe("read-only");
     expect(permissionForWrite(undefined)).toBe("read-only");
   });
@@ -360,7 +499,7 @@ describe("CLI command resolution", () => {
   });
 
   it("keeps ordinary conversation replies as raw text", () => {
-    const text = '{"kind":"chat","text":"this is ordinary model text"}';
+    const text = '{"kind":"ask","text":"this is ordinary model text"}';
     expect(extractConversationText(JSON.stringify({
       type: "item.completed",
       item: { type: "agent_message", text }
@@ -373,6 +512,9 @@ describe("CLI command resolution", () => {
     ]));
     expect(codexCliArguments({}, "output-schema.json", "workspace-write")).toEqual(expect.arrayContaining([
       "--sandbox", "workspace-write", "--skip-git-repo-check"
+    ]));
+    expect(codexCliArguments({}, "output-schema.json", "full-access")).toEqual(expect.arrayContaining([
+      "--sandbox", "danger-full-access", "--skip-git-repo-check"
     ]));
     expect(claudeCliArguments({ permission: "workspace-write" }, { type: "object" }))
       .toEqual(expect.arrayContaining(["--permission-mode", "acceptEdits"]));
@@ -423,68 +565,30 @@ describe("CLI command resolution", () => {
     expect(resolveCliCommand("codex", "codex", {
       platform: "win32",
       env: { Path: directory, PATHEXT: ".CMD;.EXE" },
-      home: directory
     })).toBe(join(directory, "codex.cmd"));
   });
 
-  it("prefers a Windows extension over a same-named Volta shell shim", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-volta-command-test-"));
-    temporaryDirectories.push(directory);
-    await writeFile(join(directory, "dsh"), "#!/bin/bash", "utf8");
-    await writeFile(join(directory, "dsh.cmd"), "@echo off", "utf8");
 
-    expect(resolveCliCommand("dsh", "deepseek-harness", {
-      platform: "win32",
-      env: { Path: directory, PATHEXT: ".CMD;.EXE" },
-      home: directory
-    })).toBe(join(directory, "dsh.cmd"));
-  });
-
-  it("finds the Codex desktop CLI under CODEX_HOME when PATH is missing", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-test-"));
-    temporaryDirectories.push(directory);
-    const bin = join(directory, ".sandbox-bin");
-    await mkdir(bin, { recursive: true });
-    await writeFile(join(bin, "codex.exe"), "binary", "utf8");
-
+  it("returns no command when Codex is not on PATH", () => {
     expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { CODEX_HOME: directory, Path: "" },
-      home: directory
-    })).toBe(join(bin, "codex.exe"));
+      platform: "win32", env: { Path: "", CODEX_CLI_PATH: "C:\\stale\\codex.exe" }
+    })).toBeUndefined();
   });
 
-  it("prefers CODEX_CLI_PATH from the Codex config over an older sandbox binary", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-codex-config-test-"));
+  it("returns no command when Claude is not on PATH", () => {
+    expect(resolveCliCommand("claude", "claude", { platform: "win32", env: { Path: "" } })).toBeUndefined();
+  });
+
+  it("returns no command when a non-Windows CLI is not on PATH", () => {
+    expect(resolveCliCommand("codex", "codex", { platform: "linux", env: {} })).toBeUndefined();
+  });
+
+  it("resolves a non-Windows CLI from PATH", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dext-agent-unix-test-"));
     temporaryDirectories.push(directory);
-    const configured = join(directory, "codex.exe");
-    await writeFile(configured, "binary", "utf8");
-    await writeFile(join(directory, "config.toml"), `CODEX_CLI_PATH = '${configured.replace(/\\/g, "\\\\")}'\n`, "utf8");
+    await writeFile(join(directory, "codex"), "#!/bin/sh", "utf8");
 
-    expect(resolveCliCommand("codex", "codex", {
-      platform: "win32",
-      env: { CODEX_HOME: directory, Path: "" },
-      home: directory
-    })).toBe(configured);
-  });
-
-  it("finds Claude Code's native Windows installation when PATH is missing", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "dext-claude-test-"));
-    temporaryDirectories.push(directory);
-    const bin = join(directory, ".local", "bin");
-    await mkdir(bin, { recursive: true });
-    const executable = join(bin, "claude.exe");
-    await writeFile(executable, "binary", "utf8");
-
-    expect(resolveCliCommand("claude", "claude", {
-      platform: "win32",
-      env: { Path: "" },
-      home: directory
-    })).toBe(executable);
-  });
-
-  it("returns a configured non-Windows command without probing the local filesystem", () => {
-    expect(resolveCliCommand("codex", "codex", { platform: "linux", env: {}, home: "/tmp" })).toBe("codex");
+    expect(resolveCliCommand("codex", "codex", { platform: "linux", env: { PATH: directory } })).toBe(join(directory, "codex"));
   });
 
   it("terminates a running CLI process when its execution signal is aborted", async () => {
@@ -500,4 +604,209 @@ describe("CLI command resolution", () => {
 
     await expect(running).rejects.toMatchObject({ name: "ExecutionCancelledError" });
   });
+
+  it.skipIf(process.platform === "win32")("stops the processes a cancelled CLI started", async () => {
+    const controller = new AbortController();
+    let command: number | undefined;
+    const script = 'const {spawn}=require("node:child_process");'
+      + 'console.log("child:"+spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}).pid);'
+      + "setInterval(()=>{},1000);";
+    const running = runProcess(process.execPath, ["-e", script], "", process.cwd(), controller.signal, (chunk) => {
+      const match = /child:(\d+)/.exec(chunk);
+      if (match) command = Number(match[1]);
+    });
+    // A cold macOS/Linux start spawns two node processes; the default 1s is tight.
+    await vi.waitFor(() => expect(command).toBeDefined(), { timeout: 5000 });
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ name: "ExecutionCancelledError" });
+    await vi.waitFor(() => expect(() => process.kill(command!, 0)).toThrow(), { timeout: 5000 });
+  });
+
+  it.each(["stdout", "stderr"])("counts %s output as activity even without a rendered event", async (stream) => {
+    const activity = vi.fn();
+    const result = await runProcess(process.execPath,
+      ["-e", `process.${stream}.write('partial output')`], "", process.cwd(),
+      undefined, undefined, undefined, undefined, activity);
+    expect(result[stream as "stdout" | "stderr"]).toBe("partial output");
+    expect(activity).toHaveBeenCalled();
+  });
+
+  it.each(["conversation", "api"])("keeps an active %s and its silent tools running beyond the idle interval", async (kind) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    let activity!: () => void;
+    let emit!: (chunk: string) => void;
+    let finish!: () => void;
+    let executionSignal: AbortSignal | undefined;
+    const runner = new CliAgentRunner(0, async (_command, args, _input, _cwd, signal, onStdout, _env, _completion, onActivity) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      executionSignal = signal;
+      activity = onActivity!;
+      emit = onStdout!;
+      await new Promise<void>((resolve) => { finish = resolve; started(); });
+      return { stdout: JSON.stringify({ type: "item.completed", item: {
+        type: "agent_message", text: kind === "api" ? JSON.stringify({ kind: "ask", text: "done" }) : "done"
+      } }), stderr: "", code: 0 };
+    }, 1000);
+    try {
+      const req = request();
+      req.profile.command = process.execPath;
+      req.cwd = process.cwd();
+      const result = kind === "api" ? runner.run(req) : runner.runConversation(conversationRequest("hello", "timeout-test"));
+      await ready;
+      for (let index = 0; index < 6; index++) {
+        vi.advanceTimersByTime(750);
+        activity();
+        expect(executionSignal?.aborted).toBe(false);
+      }
+      emit('{"type":"item.started","item":');
+      emit('{"id":"command","type":"command_execution"}}\n');
+      vi.advanceTimersByTime(5000);
+      expect(executionSignal?.aborted).toBe(false);
+      emit('{"type":"item.completed","item":{"id":"command","type":"command_execution","aggregated_output":""}}\n');
+      vi.advanceTimersByTime(999);
+      expect(executionSignal?.aborted).toBe(false);
+      finish();
+      expect(await result).toEqual(kind === "api" ? JSON.stringify({ kind: "ask", text: "done" }) : "done");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
 });
+
+describe("native structured output", () => {
+  const outlineSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      title: { type: "string" },
+      note: { type: "string" },
+      nodes: { type: "array", items: { type: "object", additionalProperties: false, properties: { id: { type: "string" } }, required: ["id"] } }
+    },
+    required: ["title"]
+  };
+
+  function structuredRequest(overrides: Partial<AgentStructuredRequest> = {}): AgentStructuredRequest {
+    return {
+      profile: { id: "codex", label: "Codex", provider: "codex", command: process.execPath, models: [] },
+      cwd: process.cwd(),
+      input: "Generate the outline.",
+      outputSchema: outlineSchema,
+      ...overrides
+    };
+  }
+
+  it("carries the schema through Codex's own output-schema channel and makes optionals nullable", async () => {
+    let schemaDocument = "";
+    let stdin = "";
+    let args: readonly string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, received, input) => {
+      if (received[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      args = received;
+      stdin = input;
+      schemaDocument = await readFile(received[received.indexOf("--output-schema") + 1]!, "utf8");
+      const text = JSON.stringify({ title: "One", note: null, nodes: [{ id: "n1" }] });
+      return { stdout: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }), stderr: "", code: 0 };
+    });
+
+    const text = await runner.runStructured(structuredRequest());
+
+    // The prompt reaches the CLI unchanged: the schema travels out of band.
+    expect(stdin).toBe("Generate the outline.");
+    expect(args).toContain("--output-schema");
+    // Codex strict structured output requires every object property, so the
+    // optional ones are sent required-but-nullable.
+    const schema = JSON.parse(schemaDocument) as { required: string[]; properties: Record<string, { type: unknown }> };
+    expect(schema.required).toEqual(["title", "note", "nodes"]);
+    expect(schema.properties.note!.type).toEqual(["string", "null"]);
+    expect(schema.properties.nodes!.type).toEqual(["array", "null"]);
+    // ...and the null the model answers with is restored to "absent" for zod.
+    expect(JSON.parse(text)).toEqual({ title: "One", nodes: [{ id: "n1" }] });
+  });
+
+  it("sends Claude the schema unchanged and normalizes its structured_output", async () => {
+    let args: readonly string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, received) => {
+      args = received;
+      return {
+        stdout: `${JSON.stringify({ type: "result", subtype: "success", structured_output: { title: "Two", note: null } })}\n`,
+        stderr: "",
+        code: 0
+      };
+    });
+
+    const text = await runner.runStructured(structuredRequest({
+      profile: { id: "claude", label: "Claude Code", provider: "claude", command: process.execPath, models: [] }
+    }));
+
+    expect(args).toContain("--json-schema");
+    expect(args[args.indexOf("--json-schema") + 1]).toBe(JSON.stringify(outlineSchema));
+    // Claude is not told every property is required, so the schema document is
+    // the caller's; only the answer is normalized.
+    expect(JSON.parse(text)).toEqual({ title: "Two" });
+  });
+
+  it("passes the model, reasoning effort and speed tier to the provider", async () => {
+    let args: readonly string[] = [];
+    const runner = new CliAgentRunner(1_000, async (_command, received) => {
+      if (received[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      args = received;
+      return {
+        stdout: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ title: "T" }) } }),
+        stderr: "", code: 0
+      };
+    });
+    await runner.runStructured(structuredRequest({ model: "gpt-test", reasoningEffort: "high", speed: "fast" }));
+    expect(args).toEqual(expect.arrayContaining(["--model", "gpt-test", 'model_reasoning_effort="high"', "--config", 'service_tier="priority"']));
+  });
+
+  it("reports a provider that fails as a provider failure, not as an invalid answer", async () => {
+    const runner = new CliAgentRunner(1_000, async (_command, args) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      return { stdout: "", stderr: "Unknown schema keyword: $schema", code: 2 };
+    });
+    await expect(runner.runStructured(structuredRequest())).rejects.toThrow(/Codex exited with code 2[\s\S]*Unknown schema keyword/);
+  });
+
+  it("preserves Codex JSONL failure diagnostics", async () => {
+    const runner = new CliAgentRunner(1_000, async (_command, args) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      return {
+        stdout: JSON.stringify({ type: "turn.failed", error: {
+          message: "Selected model is at capacity. Please try a different model.",
+          codexErrorInfo: { httpStatusCode: 503 }, additionalDetails: "request=req-jsonl"
+        } }), stderr: "", code: 2
+      };
+    });
+    await expect(runner.runStructured(structuredRequest())).rejects.toThrow(/Selected model is at capacity[\s\S]*httpStatusCode[\s\S]*503[\s\S]*request=req-jsonl/);
+  });
+
+
+  it("serializes Codex app-server turns for one conversation", async () => {
+    // Reuse the deterministic app-server fixture while measuring the runner's
+    // ordering contract rather than the provider implementation.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    const originalStart = CodexConversationConnection.prototype.start;
+    vi.spyOn(CodexConversationConnection.prototype, "start").mockImplementation(function (this: CodexConversationConnection, _command, _args, cwd) {
+      return originalStart.call(this, process.execPath, [join("test", "fixtures", "codexConversationServer.mjs")], cwd, { ...process.env, DEXT_QUESTION_TEST: "slow" });
+    });
+    const runner = new CliAgentRunner(10_000, async () => ({ stdout: "", stderr: "", code: 1 }));
+    const base = { ...conversationRequest("first", "same-conversation"), metadata: {
+      agentSessionId: "same-conversation",
+      requestAgentInput: async () => ({})
+    } };
+    const started = Date.now();
+    const first = runner.runConversation(base);
+    const second = runner.runConversation({ ...base, input: "second" });
+    await expect(Promise.all([first, second])).resolves.toEqual(["Received: slow", "Received: slow"]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(200);
+  });
+
+  it("refuses a provider that has no native output-schema channel", async () => {
+    const runner = new CliAgentRunner(1_000, async () => ({ stdout: "", stderr: "", code: 0 }));
+    await expect(runner.runStructured(structuredRequest({
+      profile: { id: "deepseek-harness", label: "DeepSeek Harness", provider: "deepseek-harness", command: process.execPath, models: [] }
+    }))).rejects.toThrow(/native structured output/);
+  });
+});
+

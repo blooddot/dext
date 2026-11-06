@@ -1,0 +1,223 @@
+/** Pixel space of the original attachment, origin top-left. Marks and the text
+ * an Agent reads are both expressed in these coordinates. */
+export interface ImagePixels {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+}
+
+export interface ImageBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ImagePoint {
+  x: number;
+  y: number;
+}
+
+export type ImageMark =
+  | { kind: "region"; box: ImageBox; note: string }
+  | { kind: "point"; point: ImagePoint; note: string };
+
+/** Where the picture is drawn, in whatever pixel space the caller renders in. */
+export interface DisplayRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface Size {
+  width: number;
+  height: number;
+}
+
+export interface ScrollOffset {
+  left: number;
+  top: number;
+}
+
+/** Display pixels per image pixel: 1 is the original size. */
+export const MIN_ZOOM = 0.05;
+export const MAX_ZOOM = 8;
+
+export const clampZoom = (scale: number): number => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+
+/** "Fit the window" shrinks a big screenshot but never enlarges a small picture
+ * past its own pixels, where it could only get blurry. */
+export function fitScale(natural: Size, available: Size): number {
+  if (natural.width <= 0 || natural.height <= 0 || available.width <= 0 || available.height <= 0) return 1;
+  return clampZoom(Math.min(1, available.width / natural.width, available.height / natural.height));
+}
+
+/** The scroll offsets that keep the pixel under `anchor` (a client point) under
+ * the pointer after the picture changed size. */
+export function keepAnchor(
+  before: DisplayRect, after: DisplayRect, anchor: ImagePoint, scroll: ScrollOffset
+): ScrollOffset {
+  const fraction = (rect: DisplayRect, point: ImagePoint): ImagePoint => ({
+    x: rect.width > 0 ? (point.x - rect.left) / rect.width : 0,
+    y: rect.height > 0 ? (point.y - rect.top) / rect.height : 0
+  });
+  const at = fraction(before, anchor);
+  return {
+    left: scroll.left + (after.left + at.x * after.width) - (before.left + at.x * before.width),
+    top: scroll.top + (after.top + at.y * after.height) - (before.top + at.y * before.height)
+  };
+}
+
+/** Channel difference that still counts as one flat UI block. Only affects how
+ * well hover-select fits; typing a note never depends on it. */
+const COLOR_TOLERANCE = 18;
+const MIN_BLOCK_RATIO = 0.002;
+/** The page background is one huge flat region, and hovering it should select
+ * nothing rather than the whole screenshot. It usually wraps the content, so its
+ * pixel count stays small while its box is the whole picture: measure the box. */
+const MAX_BLOCK_RATIO = 0.55;
+const MAX_BLOCKS = 1500;
+
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+export function displayToImage(display: DisplayRect, natural: Size, point: ImagePoint): ImagePoint {
+  if (display.width <= 0 || display.height <= 0) return { x: 0, y: 0 };
+  return {
+    x: clamp(Math.round(((point.x - display.left) / display.width) * natural.width), 0, natural.width - 1),
+    y: clamp(Math.round(((point.y - display.top) / display.height) * natural.height), 0, natural.height - 1)
+  };
+}
+
+export function imageBoxToDisplay(display: DisplayRect, natural: Size, box: ImageBox): DisplayRect {
+  const scaleX = display.width / natural.width;
+  const scaleY = display.height / natural.height;
+  const left = clamp(box.x, 0, natural.width);
+  const top = clamp(box.y, 0, natural.height);
+  const right = clamp(box.x + box.width, left, natural.width);
+  const bottom = clamp(box.y + box.height, top, natural.height);
+  return {
+    left: display.left + left * scaleX,
+    top: display.top + top * scaleY,
+    width: (right - left) * scaleX,
+    height: (bottom - top) * scaleY
+  };
+}
+
+/** Bounding boxes of flat colour regions, so hovering a button selects the
+ * button instead of the pixel under the cursor. */
+export function detectBlocks(pixels: ImagePixels): ImageBox[] {
+  const { width, height, data } = pixels;
+  const total = width * height;
+  if (!width || !height || data.length < total * 4) return [];
+  const visited = new Uint8Array(total);
+  const stack = new Int32Array(total);
+  const minArea = Math.max(1, Math.floor(total * MIN_BLOCK_RATIO));
+  const maxArea = Math.floor(total * MAX_BLOCK_RATIO);
+  const blocks: ImageBox[] = [];
+  for (let start = 0; start < total; start++) {
+    if (visited[start]) continue;
+    const seed = start << 2;
+    const red = data[seed] ?? 0;
+    const green = data[seed + 1] ?? 0;
+    const blue = data[seed + 2] ?? 0;
+    const same = (index: number): boolean => {
+      const at = index << 2;
+      return Math.abs((data[at] ?? 0) - red) <= COLOR_TOLERANCE
+        && Math.abs((data[at + 1] ?? 0) - green) <= COLOR_TOLERANCE
+        && Math.abs((data[at + 2] ?? 0) - blue) <= COLOR_TOLERANCE;
+    };
+    let top = 0;
+    stack[top++] = start;
+    visited[start] = 1;
+    let count = 0;
+    let minX = width;
+    let maxX = -1;
+    let minY = height;
+    let maxY = -1;
+    while (top) {
+      const index = stack[--top]!;
+      const x = index % width;
+      const y = (index - x) / width;
+      count++;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (x > 0 && !visited[index - 1] && same(index - 1)) { visited[index - 1] = 1; stack[top++] = index - 1; }
+      if (x + 1 < width && !visited[index + 1] && same(index + 1)) { visited[index + 1] = 1; stack[top++] = index + 1; }
+      if (y > 0 && !visited[index - width] && same(index - width)) { visited[index - width] = 1; stack[top++] = index - width; }
+      if (y + 1 < height && !visited[index + width] && same(index + width)) { visited[index + width] = 1; stack[top++] = index + width; }
+    }
+    const boxArea = (maxX - minX + 1) * (maxY - minY + 1);
+    if (count < minArea || boxArea > maxArea) continue;
+    blocks.push({ x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 });
+    if (blocks.length >= MAX_BLOCKS) break;
+  }
+  return blocks;
+}
+
+/** The smallest block under the cursor: a button inside a card wins over the card. */
+export function pickBlock(blocks: readonly ImageBox[], point: ImagePoint): ImageBox | undefined {
+  let best: ImageBox | undefined;
+  for (const block of blocks) {
+    if (point.x < block.x || point.y < block.y) continue;
+    if (point.x >= block.x + block.width || point.y >= block.y + block.height) continue;
+    if (!best || block.width * block.height < best.width * best.height) best = block;
+  }
+  return best;
+}
+
+/** The box a drag spans. Pure and tested: a zero-size box here is what silently
+ * drops hand-drawn regions. */
+export function boxFromPoints(from: ImagePoint, to: ImagePoint): ImageBox {
+  return {
+    x: Math.min(from.x, to.x),
+    y: Math.min(from.y, to.y),
+    width: Math.abs(to.x - from.x),
+    height: Math.abs(to.y - from.y)
+  };
+}
+
+/** Marks kept from an earlier visit to the same attachment. A stored value is
+ * checked for shape before it is drawn, so a stale entry cannot break the list. */
+export function parseMarks(json: string): ImageMark[] {
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  const point = (value: unknown): ImagePoint | undefined => {
+    const record = value as Record<string, unknown> | undefined;
+    return record && finite(record.x) && finite(record.y) ? { x: record.x, y: record.y } : undefined;
+  };
+  const box = (value: unknown): ImageBox | undefined => {
+    const record = value as Record<string, unknown> | undefined;
+    return record && finite(record.x) && finite(record.y) && finite(record.width) && finite(record.height)
+      ? { x: record.x, y: record.y, width: record.width, height: record.height }
+      : undefined;
+  };
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const marks: ImageMark[] = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const record = entry as Record<string, unknown> | undefined;
+    const note = typeof record?.note === "string" ? record.note : "";
+    const region = record?.kind === "region" ? box(record.box) : undefined;
+    const at = record?.kind === "point" ? point(record.point) : undefined;
+    if (region) marks.push({ kind: "region", box: region, note });
+    else if (at) marks.push({ kind: "point", point: at, note });
+  }
+  return marks;
+}
+
+export function composeAnnotationText(imagePath: string, marks: readonly ImageMark[]): string {
+  const lines = marks.map((mark, index) => {
+    const where = mark.kind === "region"
+      ? `region (${mark.box.x},${mark.box.y})-(${mark.box.x + mark.box.width},${mark.box.y + mark.box.height})`
+      : `point (${mark.point.x},${mark.point.y})`;
+    const note = mark.note.trim();
+    return `${index + 1}. ${where}${note ? `: ${note}` : ""}`;
+  });
+  return [`Image annotations for @${imagePath} (pixel coordinates, origin top-left):`, ...lines].join("\n");
+}

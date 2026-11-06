@@ -10,7 +10,7 @@
 
 ## 开发
 
-使用 `package.json` 中 `volta` 固定的 Node.js 版本（目前为 **22.23.2**）以及 VS Code 1.105 或更新版本。
+使用 `mise.toml` 固定的 Node.js、DeepSeek Harness 桌面版（Harness 轮次），以及 VS Code 1.105 或更新版本。
 
 ```bash
 git clone https://github.com/blooddot/dext.git
@@ -31,7 +31,29 @@ npm run package
 
 此命令先执行 lint、类型检查、单元测试、构建和 Webview 资源检查，再生成 `release/dext-<版本号>.vsix`。版本号来自 `package.json`。
 
+打包会校验随扩展发布的类型声明和 API 参考。工作区 `.dext/` 不会进入 VSIX，且可能被已安装的扩展重新生成，因此其声明是否最新通过 `npm run check:workspace-types` 单独检查。需要按当前源码刷新时，运行 `npm run generate:dext-types -- --workspace .`。
+
 `release/` 会自动创建，已被 Git 忽略，也不会包含在 VSIX 中。不同版本的安装包会保留；重新打包同一版本会覆盖对应文件。例如 `0.1.1` 的输出为 `release/dext-0.1.1.vsix`。
+
+### 包体为什么这么大
+
+VSIX 压缩后约 **5 MB**（解压约 20 MB），几乎全部来自 Webview：
+
+| 资源 | 原始 | 压缩后 | 原因 |
+|---|---|---|---|
+| `dist/webview/main.js` | ~7.7 MB | ~2.1 MB | Monaco、mermaid、markdown-it 与 Webview 代码 |
+| `dist/webview/ts.worker.js` | ~6.7 MB | ~1.5 MB | Monaco 的 TypeScript worker，内嵌整个 TypeScript 编译器 |
+| `dist/extension.js` | ~2.7 MB | ~0.7 MB | 扩展宿主 bundle、kernel host 与 Agent CLI 适配 |
+
+这个 TypeScript worker 是**有意为之**：composer 的补全、悬停、F12 与诊断由 Monaco 自带的 TypeScript 服务提供，而 Webview 无法使用 VS Code 为工作区文件运行的 TypeScript 服务。把该入口从 `esbuild.mjs` 去掉可省约 1.5 MB（压缩后），代价是 composer 只剩语法高亮，而 `.dext/api/*.ts` 仍由 VS Code 提供完整语言支持。`dist/extensionHostTest.js`、source map、`node_modules/**` 与 devDependency `typescript` 已被 `.vscodeignore` 排除；`npm run check` 的资源检查会证明进入 VSIX 的新增运行时资源只有 kernel 的 `.mjs` 与随包发布的 `dist/dext.d.ts`。
+
+输入区的配色不来自这个 worker：Monaco 用 `src/webview/monacoTheme.ts` 里定义的 `dext` 主题着色，它**继承** Monaco 自带主题（按 Webview 的主题 class 选 `vs`/`vs-dark`/`hc-*`），再用 `src/vscodeTheme.ts` 读到的当前 VS Code 主题覆盖。这层桥接不是重复劳动：VS Code 主题是按 TextMate scope（`tokenColors`）写的，而 Monaco 的 Monarch 语法产出的是 Monaco token 类型（`identifier`、`delimiter.bracket`、`type.identifier`…），并且没有任何 VS Code API 能给出"解析后的 token 颜色"——只有主题*文件*里有，所以只能解析文件并按 TextMate 的 specificity 归纳成 14 个槽位。`src/webview/monacoThemeRules.ts` 再把这些槽位映射到 Monaco TypeScript 语法能产出的每一个 token 类型（含 `fontStyle`）；某个槽位没有规则时才会落回 Monaco 自己的颜色——这正是之前"名字和标点没跟着主题走"的原因。另一条路是打包 `vscode-textmate` 与 Oniguruma wasm，用真正的 TextMate 语法着色，代价是几 MB 体积和更慢的编辑器，而语言能力并不会变多。
+
+### API 执行流程包的取舍
+
+API 详情页还有第二个小型 Webview 入口 `src/features/resources/browser/apiFlow.ts`，构建为 `dist/webview/apiFlow.js`。扩展宿主从不渲染 Mermaid：`src/features/resources/presentation/apiFlowDiagram.ts` 只生成 Mermaid `flowchart LR` 源文本和普通 HTML 外壳，`extension.ts` 仅在页面正文包含 `data-api-flow` 时为它添加 `apiFlow.js` 的 `scriptUri`。没有流程图的页面因此既不会加载该脚本，也不会加载 Mermaid。
+
+该入口复用 `src/platform/browser/markdownDiagrams.ts` 的 `renderMermaidSvg`，所以 `securityLevel: "strict"`、`htmlLabels: false`、light/dark 主题检测和串行渲染队列都与会话 Markdown 共用，而不是再复制一套初始化逻辑。由于每个 Webview 入口都是独立的 IIFE，`apiFlow.js` 会再打包一份 Mermaid，无法复用 `main.js` 里的实例；代价是只在 API 详情页加载的第二份 Mermaid。`scripts/assertWebviewAssets.mjs` 会在构建产物和 VSIX 中都要求这个 bundle 存在且非空。
 
 发布到 GitHub 的步骤：
 
@@ -48,14 +70,58 @@ npm run package
 
 MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分别维护在 `dext.mcpProtocolVersions.stdio` 和 `dext.mcpProtocolVersions.http`，HTTP 请求头复用 HTTP 协议版本。这些值会在构建时打包进扩展。只有对应传输实现支持该协议修订版时才应修改日期，并重新构建；它们不是面向用户的设置项。
 
-- `src/core/workflow.ts`：遍历 Lezer Python 语法树，限制语法、检查类型并生成诊断。
-- `src/core/workflowRuntime.ts`：顺序执行、结果组合和分支状态管理。
-- `src/core/languageService.ts`：Dext 补全、悬停、参数提示和诊断。
-- `src/core/contextResolver.ts`：不可变上下文快照。
-- `src/core/axAdapter.ts`：Ax / Zod / JSON Schema 契约适配。
-- `src/core/runtime.ts`：确定性执行器白名单。
-- `src/core/customApi.ts`：`.dx` API 加载、导入、签名和自定义计划。
-- `src/core/agentRunner.ts`：Codex / Claude CLI 的结构化执行适配。
-- `src/core/completionProvider.ts`：FIM 补全后端、缓存和密钥管理。
-- `src/core/workflowRecorder.ts`：从对话生成 `.dx` 工作流骨架。
-- `src/webview/codeEditor.ts`：基于 CodeMirror 的 Python 语法编辑器。
+- `src/features/workflow/host/contextResolver.ts` 与 `src/shared/contracts/context.ts`：不可变上下文快照及其宿主端口。
+- `src/features/agents/domain/axAdapter.ts`：Ax / Zod / JSON Schema 契约适配。
+- `src/features/workflow/host/runtime.ts`：确定性执行器白名单。
+- `src/features/workflow/domain/dextApiTypes.ts`：由注册表推导的 `dext` 声明与 `.dext/tsconfig.json` 工程。
+- `src/features/agents/host/agentRunner.ts`：Codex / Claude CLI 的结构化执行适配。
+- `src/features/workflow/domain/workflowRecorder.ts`：从对话生成 TypeScript API 骨架。
+- `src/shared/` 是跨 feature 的公共内核（`contracts/`、`protocol/`、`lib/`）；`src/platform/` 是按环境分区的适配层（`vscode/`、`node/`、`browser/`、`editor-tabs/`、`webviewProtocol.ts`）。`src/core/` 已不存在。
+- `src/webview/codeEditor.ts`：Code 编辑器（Monaco、引用投影与文件拖放）。
+
+### 层级词表
+
+- `src/app/` 是组合根（`application.ts`、`sidebarProvider.ts` 与两个 setup 模块），除浏览器入口外可以依赖其余层。
+- `src/features/<slice>/` 拥有产品职责，并按环境分区：`contracts/`、`domain/`、`knowledge/`、`presentation/` 不依赖环境；`host/` 面向 Node/VS Code；`browser/` 面向 DOM。feature 之间只通过 `contracts`/`domain` 协作，跨 feature 的 host 耦合必须登记在 `crossFeatureHostCouplings`。
+- `src/platform/` 只放环境适配器：`vscode/`、`node/`、`browser/`、`editor-tabs/` 与线协议聚合 `webviewProtocol.ts`。它不是“所有共享代码”的同义词。
+- `src/shared/` 是跨 feature 的公共内核，只允许 `contracts/`、`protocol/`、`lib/`。本仓库不设 `core`、`common`、`base`、`modules`、`utils` 根目录：`core` 是已解散的旧目录，`common`/`base` 会与 `shared`、`platform` 重叠，`utils` 容易变成无结构堆放。
+- 每个 feature 契约都是目录内的主题文件（`agents/contracts/agent.ts`、`workspace/contracts/fileSearch.ts`、`workflow/contracts/runtime.ts`、`mcp/contracts/mcp.ts`）。禁止 `contracts.ts` 与 `contracts/index.ts`；消费者显式导入具体文件。
+
+`src/runner/` 是 Node 工作流内核，只依赖 `shared/`、Node 内置模块和自身模块。`src/app/application.ts` 负责构造内核宿主；依赖是单向的，内核不会反向导入上层。
+
+### TypeScript kernel
+
+`.dext/api/**/*.ts` 与 composer 的 Code 模式不再由扩展宿主里的解释器执行，而是在一个常驻 Node 子进程（kernel）里当作普通 TypeScript 运行：
+
+- `src/runner/dextHost.ts` 负责子进程：启动、握手、派发队列（`dext.workflow.maxConcurrency`）、崩溃重启与取消（取消即 kill），以及报告是否有 run 在跑的 `busy()`。它还把输入区的缓冲区落盘——内核 import 的是真实文件：扩展把它指向自己的存储（`runs/<工作区>/`），因此跑 Code 不会在仓库里留下任何文件，且只保留最新 20 个缓冲区。一个 host 绑定一个工作区，所以切换文件夹时扩展会替换缓存的那个——但只在 `busy()` 为 false 时，因为 reload 绝不能杀掉正在跑的 run。
+- `src/runner/dextKernel.mjs` 是子进程本身：每次 run 都以新的 generation 重新注册 loader，导入入口模块（导出了 `main` 就 await 它），并把 `console.log` / `console.error` 记为进程输出步骤——对象参数会在 Node 自己拼接之前按缩进 JSON 渲染，所以打印出来的载荷会完整到达 Output，而不是 `util.inspect` 那种限深的 `[Object]`。
+- `src/runner/dextLoader.mjs` 把 `dext` 映射到运行时模块、把 `dext/api/<id>` 映射到 `<workspace>/.dext/api/<id>.ts`，解析工作区内省略扩展名的 `.ts` 导入，并擦除 TypeScript 类型。
+- `src/runner/dextRuntime.mjs` 就是 `dext` 模块：每次调用记录一个步骤，并请求扩展宿主通过原有 runtime 执行。
+- `src/runner/dextSerialization.mjs` 定义跨进程值的规则。
+- `src/runner/dextResumeCache.ts` 记录 run 期间的 API 调用，并在用户继续失败 run 时重放。
+
+以下运行时事实在本仓库（2026-09）由 `test/dextHost.test.ts`、`scripts/dextSmoke.mjs` 与直接探测确认。本机开发使用 Node 22.23.2；`.vscode-test` 中的 VS Code 归档为 1.132.0 与 1.138.0。
+
+| 问题 | 实测结果 |
+|---|---|
+| `process.execPath` 能否当 Node 用？ | 可以。在扩展宿主里它是 VS Code 的 Electron 二进制，需要 `ELECTRON_RUN_AS_NODE=1`；1.138.0 归档下报 Node 24.18.1（Electron 42.10.0）。 |
+| `--import` + `module.register()` 可用吗？ | 可用，Node 22.23.2 与 Electron 二进制的 Node 24.18.1 都支持。 |
+| 有 TypeScript 支持吗？ | 有：两者都是 `process.features.typescript === "strip"`，且存在 `module.stripTypeScriptTypes()`。`enum` 会被拒绝并给出 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`（"TypeScript enum is not supported in strip-only mode"），这也是生成的 `.dext/tsconfig.json` 设置 `erasableSyntaxOnly` 的原因。 |
+| 需要 `--experimental-strip-types` 吗？ | 不需要。loader 自己擦除类型，既不传该参数也不依赖它；`--experimental-transform-types` 可用但未采用。 |
+| Electron 二进制能直接跑 `.ts` **入口**吗？ | 不能，会在 CJS 加载器里报 `Cannot find module`。因此入口是 `dextKernel.mjs`，用户 `.ts` 文件由它导入。 |
+| 相对 `.ts` 导入（带扩展名）？ | 原生可用。 |
+| 省略扩展名的相对导入？ | Node 不解析；`dextLoader.mjs` 为工作区内文件解析 `.ts`、`.mts` 与 `/index.ts`。 |
+| `--import <Windows 绝对路径>`？ | 报 `ERR_UNSUPPORTED_ESM_URL_SCHEME`；宿主传 `file://` URL。 |
+| 同一个 kernel 能连跑两次同一文件吗？ | 能：kernel 以新的 generation 重新注册 loader，工作区 URL 会带上 `?dextRun=`，因此所有工作区模块都会重新求值，模块级状态不会跨 run 泄漏。 |
+| 类型擦除会有警告吗？ | 会，每个线程一次（`ExperimentalWarning`）。`src/runner/dextWarnings.mjs` 在 kernel 与 loader 线程里丢弃该警告，避免 Dext 自己的工具链出现在步骤里。 |
+
+类型擦除是原生能力，不需要额外依赖。只有当宿主运行时自身完全不支持 TypeScript 时，`dextLoader.mjs` 才会回退到 esbuild 转换；正因为这种回退很少见，esbuild 仍留在 devDependencies。
+
+
+### 对话运行与编辑器 Tab
+
+- `src/app/sidebarProvider.ts` 只保留 Webview 生命周期与本轮范围外的功能。会话状态位于 `src/features/conversations/host/`（`conversationController.ts`、`turnExecutionCoordinator.ts`、`agentEventStream.ts`、`planController.ts`、`interactionController.ts`），由 `src/app/conversationSetup.ts` 统一装配一次。Plan 完成判定保留独立的自动验证轮次。参见 [conversation-development.zh-CN.md](conversation-development.zh-CN.md)。
+- `src/platform/editor-tabs/editorTabManager.ts` 统一管理所有编辑器 Tab 的创建、复用、销毁和消息路由。`editorTabSerializer.ts` 对恢复去重，避免 serializer 回调与主动恢复重复打开同一页面。
+- Resources 使用只读取文件的数据源：`src/features/resources/host/resourceEditorProvider.ts` 枚举与读取资源但不执行，`src/features/resources/presentation/resourceDocuments.ts` 负责渲染。API 列表也会通过 `src/features/workflow/host/apiSource.ts` 静态提取源码信息，复用 `src/platform/node/syntaxParser.ts` 的 Tree-sitter 加载器。Resources 与 APIs 共用签名、参数、返回类型和源码预览组件。类型来自显式标注或简单参数默认值；无法确定的类型显示为 `unknown`，不执行模块，也不运行 TypeScript 编译器。APIs 页面单独组合可调用契约、Node/JavaScript 参考和文件 API。Resources 不再读取运行时注册表或侧栏资源缓存；注册表继续负责执行分发和参数契约。
+
+导入直接指向符号所属的契约或实现。第一轮和第二轮遗留的转发文件、`src/core/`、根目录 `application.ts`/`sidebarProvider.ts` 都已删除；一旦被恢复或被引用（包括测试、脚本、注释和内嵌构建入口字符串），`scripts/checkModuleBoundaries.mjs` 会直接失败。

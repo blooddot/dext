@@ -1,8 +1,8 @@
 {
   "name": "dext",
   "displayName": "Dext",
-  "description": "AI coding with Codex, Claude, and DeepSeek. Chat, plan, and automate tasks with reusable workflows.",
-  "version": "0.1.1",
+  "description": "AI coding with Codex, Claude, DeepSeek, and optional Pi CLI. Chat, plan, and automate tasks with reusable workflows.",
+  "version": "0.1.2",
   "publisher": "blooddot",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
@@ -29,7 +29,7 @@
   },
   "homepage": "https://github.com/blooddot/dext#readme",
   "engines": {
-    "vscode": "^1.105.0"
+    "vscode": "^1.106.0"
   },
   "dext": {
     "mcpProtocolVersions": {
@@ -101,6 +101,14 @@
         "title": "Copy This Turn as Markdown"
       },
       {
+        "command": "dext.history.copyTurnInput",
+        "title": "Copy This Turn's Input"
+      },
+      {
+        "command": "dext.history.addTurnToDext",
+        "title": "Add This Turn to Dext Input"
+      },
+      {
         "command": "dext.history.retryTurn",
         "title": "Retry This Turn"
       },
@@ -115,6 +123,10 @@
       {
         "command": "dext.history.copyConversation",
         "title": "Copy Conversation as Markdown"
+      },
+      {
+        "command": "dext.history.addConversationToDext",
+        "title": "Add Conversation to Dext Input"
       },
       {
         "command": "dext.history.deleteConversation",
@@ -147,12 +159,12 @@
       {
         "command": "dext.history.showNewestFirst",
         "title": "Dext History: Show Newest First",
-        "icon": "$(arrow-down)"
+        "icon": "$(sort-precedence)"
       },
       {
         "command": "dext.history.showOldestFirst",
         "title": "Dext History: Show Oldest First",
-        "icon": "$(arrow-up)"
+        "icon": "$(sort-precedence)"
       },
       {
         "command": "dext.history.showFavoritesOnly",
@@ -192,14 +204,24 @@
         "icon": "$(symbol-method)"
       },
       {
-        "command": "dext.viewMcp",
-        "title": "Dext: View Global Resources",
+        "command": "dext.viewResources",
+        "title": "Dext: View Resources",
         "icon": "$(server)"
+      },
+      {
+        "command": "dext.chooseAppearance",
+        "title": "Dext: Switch Theme",
+        "icon": "$(color-mode)"
       },
       {
         "command": "dext.addMcp",
         "title": "Dext: Add MCP Server",
         "icon": "$(add)"
+      },
+      {
+        "command": "dext.editResource",
+        "title": "Dext: Edit Resource",
+        "icon": "$(edit)"
       },
       {
         "command": "dext.openWorkspaceTrust",
@@ -248,6 +270,16 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "dext.copyFilePathWithFiles",
+        "title": "Dext: Copy File Path",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dext.copyFilePathWithLine",
+        "title": "Dext: Copy File Path with Line",
+        "icon": "$(copy)"
+      },
+      {
         "command": "dext.addFileToChat",
         "title": "Add to Dext",
         "icon": "$(files)"
@@ -268,37 +300,6 @@
         "icon": "$(key)"
       },
       {
-        "command": "dext.configureCompletionModel",
-        "title": "Dext: Configure Completion Model",
-        "icon": "$(gear)"
-      },
-      {
-        "command": "dext.completionMenu",
-        "title": "Dext: Inline Completion Options"
-      },
-      {
-        "command": "dext.testCompletionModel",
-        "title": "Dext: Test Completion Model"
-      },
-      {
-        "command": "dext.diagnoseCompletion",
-        "title": "Dext: Diagnose Inline Completion"
-      },
-      {
-        "command": "dext.setCompletionApiKey",
-        "title": "Dext: Set Completion API Key",
-        "icon": "$(key)"
-      },
-      {
-        "command": "dext.clearCompletionApiKey",
-        "title": "Dext: Clear Completion API Key",
-        "icon": "$(key)"
-      },
-      {
-        "command": "dext.toggleCompletion",
-        "title": "Dext: Toggle Inline Completion"
-      },
-      {
         "command": "dext.clearMcpAccessToken",
         "title": "Dext: Clear MCP Access Token",
         "icon": "$(key)"
@@ -311,20 +312,32 @@
     ],
     "keybindings": [
       {
-        "command": "copyFilePath",
+        "command": "dext.copyFilePathWithFiles",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "config.dext.copyFilePathOnCopy && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && filesExplorerFocus"
+      },
+      {
+        "command": "dext.copyFilePathWithLine",
+        "key": "ctrl+c",
+        "mac": "cmd+c",
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
       },
       {
         "command": "copyFilePath",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "config.dext.copyFilePathOnCopy && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+        "when": "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled && resourceScheme != webview-panel))"
       },
       {
         "command": "dext.triggerSuggest",
-        "key": "alt+/"
+        "key": "alt+/",
+        "when": "focusedView == dext.sidebar"
+      },
+      {
+        "command": "editor.action.triggerSuggest",
+        "key": "alt+/",
+        "when": "editorTextFocus && !editorReadonly"
       },
       {
         "command": "dext.focus",
@@ -346,44 +359,31 @@
         "command": "dext.copySelectionWithContext",
         "key": "ctrl+c",
         "mac": "cmd+c",
-        "when": "editorTextFocus && editorHasSelection && config.dext.captureSelectionOnCopy"
-      },
-      {
-        "command": "dext.copyTerminalSelectionWithContext",
-        "key": "ctrl+c",
-        "mac": "cmd+c",
-        "when": "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+        "when": "editorTextFocus && editorHasSelection && !editorHasMultipleSelections && config.dext.captureSelectionOnCopy"
       },
       {
         "command": "dext.copyTerminalSelectionWithContext",
         "key": "ctrl+shift+c",
-        "when": "isWindows && terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+        "mac": "cmd+c",
+        "when": "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
       }
     ],
     "menus": {
       "commandPalette": [
-        {
-          "command": "dext.setCompletionApiKey",
-          "when": "false"
-        },
-        {
-          "command": "dext.clearCompletionApiKey",
-          "when": "false"
-        },
-        {
-          "command": "dext.testCompletionModel",
-          "when": "false"
-        },
-        {
-          "command": "dext.toggleCompletion",
-          "when": "false"
-        },
         {
           "command": "dext.triggerSuggest",
           "when": "false"
         },
         {
           "command": "dext.triggerParameterHints",
+          "when": "false"
+        },
+        {
+          "command": "dext.copyFilePathWithFiles",
+          "when": "false"
+        },
+        {
+          "command": "dext.copyFilePathWithLine",
           "when": "false"
         },
         {
@@ -423,6 +423,14 @@
           "when": "false"
         },
         {
+          "command": "dext.history.copyTurnInput",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.addTurnToDext",
+          "when": "false"
+        },
+        {
           "command": "dext.history.retryTurn",
           "when": "false"
         },
@@ -436,6 +444,10 @@
         },
         {
           "command": "dext.history.copyConversation",
+          "when": "false"
+        },
+        {
+          "command": "dext.history.addConversationToDext",
           "when": "false"
         },
         {
@@ -511,10 +523,6 @@
           "when": "false"
         },
         {
-          "command": "dext.viewMcp",
-          "when": "false"
-        },
-        {
           "command": "dext.addMcp",
           "when": "false"
         },
@@ -532,14 +540,6 @@
         },
         {
           "command": "dext.verifyMcpServer",
-          "when": "false"
-        },
-        {
-          "command": "dext.completionMenu",
-          "when": "false"
-        },
-        {
-          "command": "dext.diagnoseCompletion",
           "when": "false"
         },
         {
@@ -658,9 +658,14 @@
           "group": "navigation@3"
         },
         {
-          "command": "dext.viewMcp",
+          "command": "dext.viewResources",
           "when": "view == dext.sidebar",
           "group": "navigation@4"
+        },
+        {
+          "command": "dext.chooseAppearance",
+          "when": "view == dext.sidebar",
+          "group": "navigation@5"
         }
       ],
       "webview/context": [
@@ -685,9 +690,19 @@
           "group": "1_turn@3"
         },
         {
-          "command": "dext.history.copyTurn",
+          "command": "dext.history.copyTurnInput",
           "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
           "group": "1_turn@4"
+        },
+        {
+          "command": "dext.history.copyTurn",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
+          "group": "1_turn@5"
+        },
+        {
+          "command": "dext.history.addTurnToDext",
+          "when": "webviewId == 'dext.sidebar' && webviewSection == 'conversationTurn' && !dextTurnRunning",
+          "group": "1_turn@6"
         },
         {
           "command": "dext.history.deleteTurn",
@@ -705,9 +720,19 @@
           "group": "1_turn@2"
         },
         {
-          "command": "dext.history.copyTurn",
+          "command": "dext.history.copyTurnInput",
           "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
           "group": "1_turn@3"
+        },
+        {
+          "command": "dext.history.copyTurn",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "1_turn@4"
+        },
+        {
+          "command": "dext.history.addTurnToDext",
+          "when": "webviewId == 'dext.history' && webviewSection == 'turn'",
+          "group": "1_turn@5"
         },
         {
           "command": "dext.history.deleteTurn",
@@ -727,12 +752,17 @@
         {
           "command": "dext.history.recordWorkflow",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && dext.workspaceTrusted",
-          "group": "2_conversation@6"
+          "group": "2_conversation@7"
         },
         {
           "command": "dext.history.copyConversation",
           "when": "webviewId == 'dext.history' && webviewSection == 'session'",
           "group": "2_conversation@3"
+        },
+        {
+          "command": "dext.history.addConversationToDext",
+          "when": "webviewId == 'dext.history' && webviewSection == 'session'",
+          "group": "2_conversation@4"
         },
         {
           "command": "dext.history.renameConversation",
@@ -742,12 +772,12 @@
         {
           "command": "dext.history.addFavorite",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && !dextFavorite",
-          "group": "2_conversation@4"
+          "group": "2_conversation@5"
         },
         {
           "command": "dext.history.removeFavorite",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && dextFavorite",
-          "group": "2_conversation@4"
+          "group": "2_conversation@5"
         },
         {
           "command": "dext.history.deleteConversation",
@@ -762,7 +792,7 @@
         {
           "command": "dext.history.unarchiveConversation",
           "when": "webviewId == 'dext.history' && webviewSection == 'session' && dextArchived",
-          "group": "2_conversation@5"
+          "group": "2_conversation@6"
         },
         {
           "command": "dext.tab.renameConversation",
@@ -787,7 +817,7 @@
       ]
     },
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "dext",
           "title": "Dext",
@@ -805,24 +835,11 @@
         }
       ]
     },
-    "languages": [
-      {
-        "id": "dext-api",
-        "extensions": [
-          ".dx"
-        ],
-        "aliases": [
-          "Dext API"
-        ]
-      }
-    ],
-    "grammars": [
-      {
-        "language": "dext-api",
-        "scopeName": "source.dext-api",
-        "path": "./syntaxes/dext-api.tmLanguage.json"
-      }
-    ],
+    "configurationDefaults": {
+      "terminal.integrated.commandsToSkipShell": [
+        "dext.copyTerminalSelectionWithContext"
+      ]
+    },
     "configuration": {
       "title": "Dext",
       "properties": {
@@ -834,28 +851,49 @@
         "dext.copyFilePathOnCopy": {
           "type": "boolean",
           "default": true,
-          "description": "Copy file paths with Ctrl+C or Cmd+C in Explorer, Open Editors, editor tabs, or a file editor without a text selection. Paste into Dext Input to insert references to the original files, including images. This replaces Explorer's file copy and the editor's copy-line behavior; disable it to restore those native shortcuts."
+          "description": "Copy file paths with Ctrl+C or Cmd+C in Explorer, Open Editors, editor tabs, or a file editor without a text selection, then paste into Dext Input to insert references to the original files, including images. VS Code's own copy still happens wherever it has one: Explorer keeps its files pasteable and a file editor without a selection keeps its copy-line behavior. A visible editor hover keeps VS Code's content-copy shortcut. Disable this to stop staging file paths on copy."
         },
         "dext.captureSelectionOnCopy": {
           "type": "boolean",
           "default": true,
-          "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text. Disable this to use VS Code's native copy behavior."
+          "description": "Capture selections from any workspace text file, including Markdown, plain text, logs, and CSV, as Dext file references when copying with Ctrl+C or Cmd+C. The clipboard still receives the exact selected text, and a multi-cursor copy is left entirely to VS Code. Disable this to use VS Code's native copy behavior."
         },
-        "dext.skillDirs": {
+        "dext.apiDirectories": {
           "type": "array",
-          "default": [],
           "items": {
             "type": "string"
           },
-          "description": "Additional skill directories. Relative paths resolve from the current workspace; earlier directories take priority for duplicate skill names."
-        },
-        "dext.apiDirs": {
-          "type": "array",
           "default": [],
+          "markdownDescription": "Additional workspace-relative directories to discover Dext APIs in, for example `tools/api`. `.dext/api` is always searched first and Dext's global storage last, so a directory listed here never shadows a `.dext/api` module with the same id."
+        },
+        "dext.skillDirectories": {
+          "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Additional directories searched for .dx API files. Relative paths resolve from the current workspace. The workspace's own .dext/api is always searched first, so a configured directory cannot shadow a project API."
+          "default": [],
+          "markdownDescription": "Additional workspace-relative directories to discover Skills in, for example `tools/skills`. `.dext/skills` and Dext's global Skill storage are always searched too."
+        },
+        "dext.hiddenSkills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Skill ids kept out of the Input skills menu while staying installed, so an API or a stored selection can still load them. The Dext Resources page writes this setting when you toggle a Skill's eye button."
+        },
+        "dext.mcpDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Additional workspace-relative directories to read MCP manifests from, for example `tools/mcp`. `.dext/mcp` and Dext's global manifest storage are always searched too."
+        },
+        "dext.planDirectory": {
+          "type": "string",
+          "default": ".dext/plans",
+          "markdownDescription": "Workspace-relative directory saved plans go in when `dext.storage.location` is `workspace`."
         },
         "dext.storage.location": {
           "type": "string",
@@ -884,28 +922,32 @@
           "maximum": 52428800,
           "description": "Maximum size in bytes for a pasted image, copied terminal output, or clipboard context that Dext stores. Workspace @file references are not size-limited."
         },
-        "dext.plan.directory": {
-          "type": "string",
-          "default": ".dext/plans",
-          "description": "Workspace-relative directory where Plan mode saves its documents when dext.storage.location is workspace. Must stay inside the workspace."
-        },
         "dext.submitOnEnter": {
           "type": "boolean",
           "default": true,
           "description": "Send the message with Enter in Agent, Ask, and Plan modes, using Shift+Enter for a newline. Turn this off to require Ctrl+Enter to send. Code mode always runs with Ctrl+Enter."
         },
-        "dext.diff.defaultView": {
+        "dext.outputLanguage": {
           "type": "string",
-          "default": "inline",
+          "scope": "window",
+          "default": "auto",
           "enum": [
-            "inline",
-            "split"
+            "auto",
+            "zh-CN",
+            "zh-TW",
+            "en",
+            "ja",
+            "ko"
           ],
           "enumDescriptions": [
-            "Show removed and added lines in one column.",
-            "Show before and after side by side."
+            "Follow the VS Code display language: Simplified Chinese, Traditional Chinese, English, Japanese, or Korean. Other display languages leave the choice to the model.",
+            "Reply in Simplified Chinese.",
+            "Reply in Traditional Chinese.",
+            "Reply in English.",
+            "Reply in Japanese.",
+            "Reply in Korean."
           ],
-          "description": "Layout a file change opens in. Each change can still be switched individually after it is shown."
+          "description": "Language for Dext replies, progress updates, visible reasoning summaries, and plan bodies. Auto follows the VS Code display language, not the operating system language. A workspace value overrides the user value, and changes apply to the next turn. Section headings, task syntax, code, commands, paths, identifiers, quoted text, and delimiters are not translated. The language of hidden model reasoning is controlled by the model and cannot be guaranteed."
         },
         "dext.history.maxTurns": {
           "type": "integer",
@@ -915,9 +957,9 @@
         },
         "dext.history.maxOutputLength": {
           "type": "integer",
-          "default": 200000,
+          "default": 64000,
           "minimum": 1000,
-          "description": "Characters kept per stored input, process event, and serialized output before history truncates it."
+          "description": "Characters kept per stored input, process event, and serialized output before history truncates it. A longer value keeps its first and last half; text removed when a turn is stored is written to an overflow file inside the conversation storage that the turn can open. The same value also caps one live Process row as it streams, so a process row clipped in memory carries only its first and last half into that file."
         },
         "dext.agentPermission": {
           "type": "string",
@@ -950,6 +992,11 @@
               },
               "description": "Extra arguments appended to every Claude Code invocation."
             },
+            "pi": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Arguments for the associated Pi CLI. Only repeated --append-system-prompt value pairs are supported; Dext manages RPC, sessions, resources, tools, and permissions."
+            },
             "deepseek-harness": {
               "type": "array",
               "items": {
@@ -966,116 +1013,49 @@
           "default": [
             "codex",
             "claude",
-            "deepseek-harness"
+            "deepseek-harness",
+            "pi"
           ],
           "items": {
             "type": "string"
           },
-          "markdownDescription": "Agent backend IDs shown in the Dext composer: `codex`, `claude`, `deepseek-harness`. Unsupported IDs are rejected."
+          "markdownDescription": "Agent backend IDs shown in the Dext composer: `codex`, `claude`, `deepseek-harness`, and `pi`. For Pi, run Dext: Configure Agent to associate an already installed CLI. Unsupported IDs are rejected."
         },
         "dext.agent.timeoutMs": {
           "type": "integer",
-          "default": 3600000,
-          "minimum": 1000,
-          "description": "How long a single CLI agent turn may run before Dext aborts it. Raise this when long refactors are being cut off mid-run."
+          "default": 0,
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "Maximum total duration of a Codex, Claude, DeepSeek Harness, or Pi turn in milliseconds, even while it is producing output. The same limit bounds supported one-shot result repair calls. 0 disables this limit. Use dext.agent.idleTimeoutMs to stop stalled turns. Changes apply to new turns."
+        },
+        "dext.agent.idleTimeoutMs": {
+          "type": "integer",
+          "default": 600000,
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "How long a turn may receive no process output while no tool is reported active before Dext aborts it. Output restarts this timer; tool start pauses it, and the last tool result starts a fresh interval. A tool that reports no result is separately cut off after thirty minutes without output from the turn, and any output restarts that interval; thirty minutes is Dext's fixed ceiling, not a setting. Default: ten minutes. 0 disables this limit. Changes apply to new turns."
         },
         "dext.terminal.defaultTimeoutMs": {
           "type": "integer",
-          "default": 1800000,
+          "default": 120000,
           "minimum": 1000,
-          "maximum": 3600000,
-          "description": "Timeout applied to terminal() calls that do not pass timeout_ms. Values are capped at 600000 milliseconds, which is also the hard ceiling for an explicit timeout_ms."
-        },
-        "dext.completion": {
-          "type": "object",
-          "default": {},
-          "markdownDeprecationMessage": "Replaced by the individual `dext.completion.*` settings, which the Settings UI can render as a dropdown and text boxes rather than an untyped table. Dext moves any values across on startup and then removes this entry, so nothing needs to be done by hand.",
-          "description": "Superseded by the individual dext.completion.* settings."
-        },
-        "dext.completion.enabled": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Offer inline completions while typing. Stays off until `#dext.completion.endpoint#` and `#dext.completion.model#` are both set.\n\n**Fastest way in:** [Configure completion model](command:dext.configureCompletionModel) asks for the API format, the request URL, the model ID and the API key in one pass, then offers to test the connection. It is also on the Dext status bar item.\n\n**API key:** there is deliberately no API key box on this page. A key in `settings.json` ends up in source control or a synced profile sooner or later, so it is kept in VS Code's encrypted secret storage: [Set API key](command:dext.setCompletionApiKey) · [Clear API key](command:dext.clearCompletionApiKey)"
-        },
-        "dext.completion.api": {
-          "type": "string",
-          "default": "openai",
-          "enum": [
-            "openai",
-            "openai-chat",
-            "anthropic",
-            "ollama"
-          ],
-          "enumDescriptions": [
-            "POST <base>/completions. A dedicated fill-in-the-middle model that accepts a prompt and a suffix. Fastest and most exact, but a chat model answered through this format returns a body it cannot read.",
-            "POST <base>/chat/completions. What most providers actually expose, DeepSeek and Qwen included. There is no suffix field, so the code around the cursor is sent as a chat prompt.",
-            "POST <base>/messages. Claude has no fill-in-the-middle endpoint, so the code around the cursor is sent as a chat prompt instead, which is slower and less exact.",
-            "POST <base>/api/generate. A local Ollama server using its own fill-in-the-middle fields."
-          ],
-          "description": "API format the completion model speaks. This has to match what the endpoint serves: the wrong choice returns a valid response that no completion can be read out of."
-        },
-        "dext.completion.endpoint": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Base URL of the completion model, with no trailing slash. The API path for the chosen format is appended if it is not already there, so `https://api.openai.com/v1` reaches `/v1/completions`.\n\nUsual values: `https://api.openai.com/v1`, `https://api.anthropic.com/v1`, `http://localhost:11434`."
-        },
-        "dext.completion.model": {
-          "type": "string",
-          "default": "",
-          "description": "Model ID to complete with. For the openai and ollama formats it must support fill-in-the-middle, since Dext sends both a prefix and a suffix. The anthropic format emulates that with a chat prompt, so pick the fastest Claude model available."
-        },
-        "dext.completion.maxTokens": {
-          "type": "integer",
-          "default": 64,
-          "minimum": 1,
-          "maximum": 2048,
-          "description": "Longest completion to request. This is the main thing deciding how long a suggestion takes to appear, because generation time scales with it. A completion is a continuation of a line or two, not a whole function, so raise it only if suggestions are being cut short."
-        },
-        "dext.completion.debounceMs": {
-          "type": "integer",
-          "default": 80,
-          "minimum": 1,
-          "maximum": 5000,
-          "description": "Idle time after the last keystroke before a completion is requested. Only the first keystroke of a burst waits: once a request is in flight the following keystrokes wait on that same answer rather than starting another. Keeping under the provider's requests-per-second limit is handled separately, by spacing requests out once the provider says they are arriving too quickly, so this does not need raising for that."
-        },
-        "dext.completion.prefixChars": {
-          "type": "integer",
-          "default": 4000,
-          "minimum": 1,
-          "maximum": 32000,
-          "description": "Characters before the cursor sent as context. Measured in characters rather than lines so one long generated line cannot exhaust the budget."
-        },
-        "dext.completion.suffixChars": {
-          "type": "integer",
-          "default": 1000,
-          "minimum": 1,
-          "maximum": 32000,
-          "description": "Characters after the cursor sent as context."
-        },
-        "dext.completion.timeoutMs": {
-          "type": "integer",
-          "default": 10000,
-          "minimum": 1,
-          "maximum": 30000,
-          "description": "How long a completion request may take before it is abandoned. Hosted gateways routinely need several seconds to emit maxTokens tokens, and a request abandoned at that point has burned them without showing anything. Waiting longer costs little, because the editor cancels the request as soon as the next key is pressed."
-        },
-        "dext.completion.ignoreGitignore": {
-          "type": "boolean",
-          "default": true,
-          "description": "Do not complete in files excluded by .gitignore. A .dextignore file in the workspace root adds further exclusions and is honored either way."
+          "maximum": 600000,
+          "description": "Timeout applied to terminal() calls that do not pass timeout_ms. Default: 120000 milliseconds (two minutes). Invalid values or values above 600000 milliseconds fall back to the default; 600000 is also the hard ceiling for an explicit timeout_ms."
         },
         "dext.workflow.maxConcurrency": {
           "type": "integer",
           "default": 4,
           "minimum": 1,
           "maximum": 16,
-          "description": "Branches a list comprehension runs at once in Code mode. Each branch can start its own agent process, so raising this multiplies both throughput and machine load. Everything outside a comprehension stays sequential."
+          "description": "API dispatch concurrency for Code mode. A run may call Dext APIs concurrently (for example with Promise.all), so this caps how many of those calls are in flight at once to bound throughput and machine load. Calls beyond the limit wait in a queue."
         }
       }
     }
   },
   "scripts": {
     "build": "node esbuild.mjs",
+    "generate:dext-types": "node scripts/generateDextTypes.mjs",
+    "generate:api-reference": "node scripts/generateApiReference.mjs",
     "test:build-assets": "node scripts/assertWebviewAssets.mjs",
     "watch": "node esbuild.mjs --watch",
     "lint": "eslint src test",
@@ -1083,7 +1063,10 @@
     "test:host": "npm run build && node scripts/runExtensionTest.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:build-assets",
+    "check:ui": "node scripts/checkComposerLayoutUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkEditorTabsUi.mjs && node scripts/checkImageAnnotatorUi.mjs",
+    "check:ui:conversations": "node scripts/checkConversationTabsUi.mjs && node scripts/checkConversationScrollUi.mjs && node scripts/checkStreamJumpUi.mjs && node scripts/checkQuestionVisibilityUi.mjs && node scripts/checkStructuredOutputUi.mjs && node scripts/checkInteractionUi.mjs && node scripts/checkPatchApplicationUi.mjs",
+    "check": "node scripts/checkModuleBoundaries.mjs && npm run lint && npm run typecheck && npm run test && npm run build && npm run generate:dext-types -- --check && node scripts/generateApiReference.mjs --check && npm run test:build-assets",
+    "check:workspace-types": "node scripts/generateDextTypes.mjs --workspace . --check",
     "package": "node -e \"require('node:fs').mkdirSync('release', { recursive: true })\" && vsce package --out release/",
     "vscode:prepublish": "npm run check"
   },
@@ -1092,35 +1075,32 @@
     "@ax-llm/ax": "23.0.11",
     "jsonc-parser": "^3.3.1",
     "markdown-it": "^14.1.0",
+    "mermaid": "11.17.2",
+    "smol-toml": "1.8.0",
+    "web-tree-sitter": "0.27.1",
     "yaml": "2.8.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@codemirror/autocomplete": "^6.20.3",
-    "@codemirror/commands": "^6.10.4",
-    "@codemirror/lang-python": "^6.2.1",
-    "@codemirror/language": "^6.12.4",
-    "@codemirror/lint": "^6.9.7",
-    "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.8",
     "@eslint/js": "9.39.1",
-    "@lezer/common": "^1.2.3",
-    "@lezer/highlight": "^1.2.1",
-    "@lezer/python": "^1.1.18",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "24.10.1",
     "@types/vscode": "1.105.0",
     "@vscode/codicons": "0.0.46-24",
     "@vscode/test-electron": "3.1.0",
-    "@vscode/vsce": "3.9.2",
+    "@vscode/vsce": "^3.9.2",
+    "acorn": "8.18.0",
     "esbuild": "0.25.12",
     "eslint": "9.39.1",
+    "eslint-scope": "8.4.0",
     "github-markdown-css": "5.9.0",
+    "monaco-editor": "0.56.0",
+    "tree-sitter-javascript": "0.25.0",
+    "tree-sitter-python": "0.25.0",
+    "tree-sitter-rust": "0.24.0",
+    "tree-sitter-typescript": "0.23.2",
     "typescript": "5.9.3",
     "typescript-eslint": "8.48.1",
     "vitest": "4.1.10"
-  },
-  "volta": {
-    "node": "22.23.2"
   }
 }

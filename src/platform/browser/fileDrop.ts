@@ -1,0 +1,115 @@
+const uriListTypes = ["application/vnd.code.uri-list", "text/uri-list"];
+
+/** The browser rejects drops whose effect is not allowed by the source.
+ * Explorer commonly offers copyMove, which explicitly excludes link. */
+export function fileSelectionDropEffect(allowed: DataTransfer["effectAllowed"]): DataTransfer["dropEffect"] {
+  switch (allowed) {
+    case "none": return "none";
+    case "move": case "linkMove": return "move";
+    case "link": return "link";
+    default: return "copy";
+  }
+}
+
+/** Capture drops on a dedicated target control before child controls consume
+ * them. Returning true lets the caller claim the event. */
+export function bindFileDropTarget(target: HTMLElement, handlers: {
+  dragover(event: DragEvent): boolean;
+  drop(event: DragEvent): boolean;
+  leave: () => void;
+}): () => void {
+  const over = (event: DragEvent) => {
+    if (handlers.dragover(event)) event.stopPropagation();
+  };
+  const drop = (event: DragEvent) => {
+    if (handlers.drop(event)) event.stopPropagation();
+  };
+  const leave = (event: DragEvent) => {
+    if (!event.relatedTarget || !target.contains(event.relatedTarget as Node)) handlers.leave();
+  };
+  const window = target.ownerDocument.defaultView;
+  target.addEventListener("dragenter", over, true);
+  target.addEventListener("dragover", over, true);
+  target.addEventListener("drop", drop, true);
+  target.addEventListener("dragleave", leave, true);
+  window?.addEventListener("dragend", handlers.leave);
+  window?.addEventListener("blur", handlers.leave);
+  return () => {
+    target.removeEventListener("dragenter", over, { capture: true });
+    target.removeEventListener("dragover", over, { capture: true });
+    target.removeEventListener("drop", drop, { capture: true });
+    target.removeEventListener("dragleave", leave, { capture: true });
+    window?.removeEventListener("dragend", handlers.leave);
+    window?.removeEventListener("blur", handlers.leave);
+    handlers.leave();
+  };
+}
+
+function read(data: DataTransfer, type: string): string {
+  const actual = [...data.types].find((candidate) => candidate.toLowerCase() === type);
+  try {
+    return actual ? data.getData(actual) : "";
+  } catch { return ""; } // A protected format must not prevent other formats from resolving.
+}
+
+function paths(text: string, uriList = false): string[] {
+  const lines = text.split(/\r\n|\r|\n/).map((line) => line.trim())
+    .filter((line) => line && !(uriList && line.startsWith("#")))
+    .map((line) => line.replace(/^"(.*)"$/, "$1"));
+  return lines.length && lines.every((line) => /^(?:(?:file|vscode-remote):\/\/|[a-z]:[\\/]|\\\\[^\\]+\\[^\\]+|\/)/i.test(line))
+    ? [...new Set(lines)] : [];
+}
+
+/** During dragover the browser exposes types, but keeps payloads protected.
+ * A path-bearing transfer is unambiguously a file drop; ordinary text drops
+ * do not match these types and remain available to Monaco. */
+export function isFileDrag(event: Pick<DragEvent, "dataTransfer">): boolean {
+  return !!event.dataTransfer && [...event.dataTransfer.types].some((type) =>
+    [...uriListTypes, "resourceurls", "text/plain", "files"].includes(type.toLowerCase()));
+}
+
+/** VS Code's standard URI list can contain only the first selected file.
+ * Prefer its full internal list, then resource URLs, before standard formats. */
+export function droppedFilePaths(data: DataTransfer | null): string[] {
+  if (!data) return [];
+  const internal = paths(read(data, uriListTypes[0]!), true);
+  if (internal.length) return internal;
+  try {
+    const resources: unknown = JSON.parse(read(data, "resourceurls") || "null");
+    if (Array.isArray(resources) && resources.every((item) => typeof item === "string" && !/[\r\n]/.test(item))) {
+      const result = paths(resources.join("\n"));
+      if (result.length) return result;
+    }
+  } catch { /* Fall back to the standard transfer formats. */ }
+  const standard = paths(read(data, uriListTypes[1]!), true);
+  return standard.length ? standard : paths(read(data, "text/plain"));
+}
+
+/** The first image in a paste or drop; everything else in it is text or files. */
+export function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
+  if (!data) return undefined;
+  for (const item of data.items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) return item;
+  }
+  return undefined;
+}
+
+/** Inserts @ references into a plain-text field, separated from the words they
+ * land between so the caret never becomes part of a neighbouring reference. */
+export function referenceInsertion(
+  value: string,
+  from: number,
+  to: number,
+  expressions: readonly string[]
+): { value: string; caret: number } {
+  const text = expressions.join(" ");
+  const space = (character: string | undefined): string => character === undefined || /\s/.test(character) ? "" : " ";
+  const prefix = space(value[from - 1]);
+  // A ref that ends the field still gets a trailing space, so the next typed
+  // character never reads as part of the path.
+  const suffix = to === value.length ? " " : space(value[to]);
+  return {
+    value: `${value.slice(0, from)}${prefix}${text}${suffix}${value.slice(to)}`,
+    caret: from + prefix.length + text.length + suffix.length
+  };
+}

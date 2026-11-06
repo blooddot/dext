@@ -1,4 +1,4 @@
-import type { WebviewRequest, WebviewResponse } from "../webviewProtocol.js";
+import type { WebviewRequest, WebviewResponse } from "../platform/webviewProtocol.js";
 
 export interface ClipboardReadResult {
   text: string;

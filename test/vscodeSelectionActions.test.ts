@@ -83,8 +83,8 @@ vi.mock("vscode", () => {
 });
 
 import * as vscode from "vscode";
-import { DextSelectionActions } from "../src/vscodeSelectionActions.js";
-import { selectionAttachment, type SelectionTarget } from "../src/vscodeAttachments.js";
+import { DextSelectionActions } from "../src/platform/vscode/selectionActions.js";
+import { selectionAttachment, type SelectionTarget } from "../src/platform/vscode/attachments.js";
 
 function document(languageId = "typescript", version = 3): VSCode.TextDocument {
   return {

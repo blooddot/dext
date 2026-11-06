@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { COMPLETION_APIS, COMPLETION_FIELDS } from "../src/core/completionProvider.js";
+import { OUTPUT_LANGUAGES } from "../src/features/agents/domain/outputLanguage.js";
 
 interface PackageManifest {
   activationEvents?: string[];
@@ -9,9 +9,11 @@ interface PackageManifest {
     commands?: Array<{ command?: string; title?: string }>;
     menus?: Record<string, Array<{ command?: string; when?: string; group?: string }>>;
     keybindings?: Array<{ command?: string; key?: string; mac?: string; when?: string }>;
+    configurationDefaults?: Record<string, unknown>;
     configuration?: {
       properties?: Record<string, {
         type?: string;
+        scope?: string;
         default?: unknown;
         enum?: string[];
         minimum?: number;
@@ -40,43 +42,59 @@ describe("Dext package manifest", () => {
   it("copies file paths only in resource views or file editors without a selection", async () => {
     const value = await manifest();
     const bindings = value.contributes?.keybindings?.filter((item) => item.command === "copyFilePath");
+    // Open Editors and the editor tab area have no copy shortcut of their own,
+    // so the path text replaces nothing there. An editor tab that is a webview
+    // panel does have one: VS Code forwards its Ctrl+C to the workbench, so
+    // claiming it here would copy the virtual `webview-panel:` path instead of
+    // the user's selection.
     expect(bindings).toEqual([
       {
         command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
-        when: "config.dext.copyFilePathOnCopy && !inputFocus && (filesExplorerFocus || openEditorsFocus || (editorAreaFocus && resourceScheme != untitled))"
-      },
-      {
-        command: "copyFilePath", key: "ctrl+c", mac: "cmd+c",
-        when: "config.dext.copyFilePathOnCopy && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+        when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && !filesExplorerFocus && (openEditorsFocus || (editorAreaFocus && resourceScheme != untitled && resourceScheme != webview-panel))"
       }
     ]);
+    // The two copies VS Code owns: an Explorer copy keeps its file list, so the
+    // files stay pasteable, and a file editor with nothing selected keeps its
+    // copy-line behavior. Both only hand the paths to Dext.
+    expect(value.contributes?.keybindings).toContainEqual({
+      command: "dext.copyFilePathWithFiles", key: "ctrl+c", mac: "cmd+c",
+      when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && !inputFocus && filesExplorerFocus"
+    });
+    expect(value.contributes?.keybindings).toContainEqual({
+      command: "dext.copyFilePathWithLine", key: "ctrl+c", mac: "cmd+c",
+      when: "config.dext.copyFilePathOnCopy && !editorHoverVisible && editorTextFocus && !editorHasSelection && resourceScheme != untitled"
+    });
     expect(value.contributes?.configuration?.properties?.["dext.copyFilePathOnCopy"])
       .toMatchObject({ type: "boolean", default: true });
   });
 
-  it("captures normal editor copy only for nonempty selections when enabled", async () => {
+  it("captures normal editor copy only for nonempty single selections when enabled", async () => {
     const value = await manifest();
     expect(value.contributes?.commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: "dext.copySelectionWithContext" }),
       expect.objectContaining({ command: "dext.copyTerminalSelectionWithContext" })
     ]));
+    // A multi-cursor copy never reaches Dext: VS Code joins every selection, and
+    // Dext can only stage one range.
     expect(value.contributes?.keybindings).toContainEqual({
       command: "dext.copySelectionWithContext",
       key: "ctrl+c",
       mac: "cmd+c",
-      when: "editorTextFocus && editorHasSelection && config.dext.captureSelectionOnCopy"
+      when: "editorTextFocus && editorHasSelection && !editorHasMultipleSelections && config.dext.captureSelectionOnCopy"
     });
-    expect(value.contributes?.keybindings).toContainEqual({
-      command: "dext.copyTerminalSelectionWithContext",
-      key: "ctrl+c",
-      mac: "cmd+c",
-      when: "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
-    });
+    // Ctrl+Shift+C (Cmd+C on macOS) is VS Code's own terminal copy; taking it
+    // over would instead send the key to the shell, so the command that runs in
+    // a terminal has to be one the terminal skips the shell for.
     expect(value.contributes?.keybindings).toContainEqual({
       command: "dext.copyTerminalSelectionWithContext",
       key: "ctrl+shift+c",
-      when: "isWindows && terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
+      mac: "cmd+c",
+      when: "terminalFocus && terminalTextSelected && config.dext.captureSelectionOnCopy"
     });
+    expect(value.contributes?.keybindings?.filter((item) => item.command === "dext.copyTerminalSelectionWithContext"))
+      .toHaveLength(1);
+    expect(value.contributes?.configurationDefaults?.["terminal.integrated.commandsToSkipShell"])
+      .toEqual(["dext.copyTerminalSelectionWithContext"]);
   });
 
   it("binds the everyday conversation commands and scopes stop to a running turn", async () => {
@@ -143,7 +161,8 @@ describe("Dext package manifest", () => {
       ["dext.newConversation", "navigation@1"],
       ["dext.openHistory", "navigation@2"],
       ["dext.viewApis", "navigation@3"],
-      ["dext.viewMcp", "navigation@4"]
+      ["dext.viewResources", "navigation@4"],
+      ["dext.chooseAppearance", "navigation@5"]
     ]);
     // Reloading APIs belongs with the API list it refreshes, and History is the
     // single place that reopens a past conversation.
@@ -160,11 +179,12 @@ describe("Dext package manifest", () => {
     const menu = value.contributes?.menus?.["webview/context"] ?? [];
     const palette = value.contributes?.menus?.commandPalette ?? [];
     expect(menu.filter((item) => item.when?.includes("webviewSection == 'turn'")).map((item) => item.command))
-      .toEqual(["dext.history.renameTurn", "dext.history.forkFromTurn", "dext.history.copyTurn", "dext.history.deleteTurn"]);
+      .toEqual(["dext.history.renameTurn", "dext.history.forkFromTurn", "dext.history.copyTurnInput", "dext.history.copyTurn", "dext.history.addTurnToDext", "dext.history.deleteTurn"]);
     for (const command of [
       "dext.history.continueConversation",
       "dext.history.forkConversation",
       "dext.history.copyConversation",
+      "dext.history.addConversationToDext",
       "dext.history.deleteConversation"
     ]) {
       const item = menu.find((entry) => entry.command === command);
@@ -233,80 +253,13 @@ describe("Dext package manifest", () => {
     expect(titles.get("dext.history.recordWorkflow")).toBe("Record Conversation as Dext Workflow");
   });
 
-  it("configures the completion backend without ever asking for the key in settings", async () => {
+  it("does not contribute retired inline completion settings or commands", async () => {
     const value = await manifest();
     const properties = value.contributes?.configuration?.properties ?? {};
-    // One object setting renders in the Settings UI as an untyped key/value
-    // table with an Add Item button: no dropdown, and nowhere to type the URL.
-    // Each field is its own setting so the UI can draw a real control for it.
-    // The object form stays declared but deprecated: the Settings UI hides it,
-    // and a registered key is the only kind Dext is allowed to delete when it
-    // migrates the values across.
-    expect(properties["dext.completion"]?.markdownDeprecationMessage).toContain("Replaced by");
-    expect(properties["dext.completion.endpoint"]).toMatchObject({ type: "string", default: "" });
-    expect(properties["dext.completion.model"]).toMatchObject({ type: "string", default: "" });
-    expect(properties["dext.completion.ignoreGitignore"]).toMatchObject({ type: "boolean", default: true });
-    // Every field the backend reads has to be contributed, or it can only ever
-    // hold its default.
-    for (const field of COMPLETION_FIELDS) {
-      expect(properties).toHaveProperty(`dext.completion.${field}`);
-    }
-    // Every format the backend can speak has to be offered here too, or the
-    // wizard would write a value settings.json rejects.
-    const api = properties["dext.completion.api"];
-    expect(api?.enum).toEqual([...COMPLETION_APIS]);
-    expect(api?.enumDescriptions).toHaveLength(COMPLETION_APIS.length);
-    // The provider has to exist before the sidebar is ever opened, or inline
-    // completion silently does nothing until something else activates Dext.
-    expect(value.activationEvents).toContain("onStartupFinished");
-    // A key in settings.json ends up in source control, so there is no box for
-    // one; the description says where it goes and links to the command.
-    expect(JSON.stringify(properties["dext.completion.apiKey"])).toBe(undefined);
-    const enabled = properties["dext.completion.enabled"];
-    expect(enabled?.markdownDescription).toContain("secret storage");
-    expect(enabled?.markdownDescription).toContain("(command:dext.setCompletionApiKey)");
-    expect(enabled?.markdownDescription).toContain("(command:dext.configureCompletionModel)");
-    const commands = (value.contributes?.commands ?? []).map((item) => item.command);
-    for (const command of [
-      "dext.configureCompletionModel",
-      "dext.completionMenu",
-      "dext.testCompletionModel",
-      "dext.setCompletionApiKey",
-      "dext.clearCompletionApiKey",
-      "dext.toggleCompletion"
-    ]) {
-      expect(commands).toContain(command);
-    }
-  });
-
-  it("keeps the command palette down to the completion entries with nowhere else to be", async () => {
-    const value = await manifest();
-    const hidden = new Set(
-      (value.contributes?.menus?.commandPalette ?? [])
-        .filter((item) => item.when === "false")
-        .map((item) => item.command)
-    );
-    // Every one of these is a line in the status bar menu, and the two key
-    // commands are also linked from the settings page. Registered, so those
-    // links and that menu keep working; hidden, so searching "dext" is not
-    // seven ways into the same place.
-    for (const command of [
-      "dext.setCompletionApiKey",
-      "dext.clearCompletionApiKey",
-      "dext.testCompletionModel",
-      "dext.toggleCompletion"
-    ]) {
-      expect(hidden).toContain(command);
-    }
-    // Completion configuration stays searchable; the status-bar menu and
-    // diagnostic helpers do not duplicate it in the command palette.
-    for (const command of [
-      "dext.completionMenu",
-      "dext.diagnoseCompletion"
-    ]) {
-      expect(hidden).toContain(command);
-    }
-    expect(hidden).not.toContain("dext.configureCompletionModel");
+    expect(Object.keys(properties).filter((key) => key === "dext.completion" || key.startsWith("dext.completion."))).toEqual([]);
+    const retired = /completion/i;
+    expect((value.contributes?.commands ?? []).filter((item) => retired.test(item.command ?? ""))).toEqual([]);
+    expect((value.contributes?.menus?.commandPalette ?? []).filter((item) => retired.test(item.command ?? ""))).toEqual([]);
   });
 
   it("hides the commands that only exist for a keybinding or a duplicate of one", async () => {
@@ -320,6 +273,10 @@ describe("Dext package manifest", () => {
     // is currently covering. These exist for alt+/ and the parameter hint chord.
     expect(hidden).toContain("dext.triggerSuggest");
     expect(hidden).toContain("dext.triggerParameterHints");
+    // Explorer Copy Path is a shortcut, not a command anyone looks up: it only
+    // makes sense while a file is selected in the Explorer.
+    expect(hidden).toContain("dext.copyFilePathWithFiles");
+    expect(hidden).toContain("dext.copyFilePathWithLine");
     // The view contributes an automatic focus command whose generated title has
     // a gap where the unnamed view should be. `dext.focus` does the same thing
     // and then puts the cursor in the input.
@@ -329,9 +286,10 @@ describe("Dext package manifest", () => {
 
   it("exposes every timeout that can cut a turn off", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
-    expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 3600000 });
+    expect(properties["dext.agent.timeoutMs"]).toMatchObject({ type: "integer", default: 0, minimum: 0 });
+    expect(properties["dext.agent.idleTimeoutMs"]).toMatchObject({ type: "integer", default: 600000, minimum: 0 });
     expect(properties["dext.terminal.defaultTimeoutMs"])
-      .toMatchObject({ type: "integer", default: 1800000 });
+      .toMatchObject({ type: "integer", default: 120000, minimum: 1000, maximum: 600000 });
     // The terminal ceiling stays a ceiling, so the setting cannot be used to
     // let a runaway command live longer than Dext allows.
     expect(properties["dext.terminal.defaultTimeoutMs"]?.description).toContain("600000");
@@ -342,11 +300,23 @@ describe("Dext package manifest", () => {
     }
   });
 
+  it("offers a window-scoped interaction language dropdown", async () => {
+    const properties = (await manifest()).contributes?.configuration?.properties ?? {};
+    const setting = properties["dext.outputLanguage"];
+    expect(setting).toMatchObject({ type: "string", scope: "window", default: "auto" });
+    expect(setting?.enum).toEqual([...OUTPUT_LANGUAGES]);
+    // VS Code renders one description per option, and every option needs one.
+    expect(setting?.enumDescriptions).toHaveLength(OUTPUT_LANGUAGES.length);
+    // Auto is the editor display language, not the OS locale, and the workspace
+    // value is the documented override.
+    expect(setting?.description).toContain("VS Code display language");
+    expect(setting?.description).toContain("not the operating system language");
+    expect(setting?.description).toContain("workspace value overrides");
+    expect(setting?.description).toContain("next turn");
+  });
+
   it("exposes the layout and history limits the UI reads at runtime", async () => {
     const properties = (await manifest()).contributes?.configuration?.properties ?? {};
-    expect(properties["dext.apiDirs"]).toMatchObject({ type: "array", default: [] });
-    // A configured directory must not be able to take over a project's own API.
-    expect(properties["dext.apiDirs"]?.description).toContain("cannot shadow a project API");
     expect(properties["dext.storage.location"]).toMatchObject({ type: "string", default: "global" });
     expect(properties["dext.storage.location"]?.enum).toEqual(["global", "workspace"]);
     expect(properties["dext.attachments.maxFiles"]).toMatchObject({ type: "integer", default: 200, minimum: 1, maximum: 1000 });
@@ -354,19 +324,24 @@ describe("Dext package manifest", () => {
     expect(properties["dext.attachments.maxBytes"])
       .toMatchObject({ type: "integer", default: 5 * 1024 * 1024, minimum: 64 * 1024, maximum: 50 * 1024 * 1024 });
     expect(properties["dext.attachments.maxBytes"]?.description).toContain("Workspace @file references are not size-limited");
-    expect(properties["dext.plan.directory"]).toMatchObject({ type: "string", default: ".dext/plans" });
-    expect(properties["dext.plan.directory"]?.description).toContain("inside the workspace");
     expect(properties["dext.submitOnEnter"]).toMatchObject({ type: "boolean", default: true });
     expect(properties["dext.submitOnEnter"]?.description).toContain("Shift+Enter");
-    expect(properties["dext.diff.defaultView"]).toMatchObject({ type: "string", default: "inline" });
-    expect(properties["dext.diff.defaultView"]?.enum).toEqual(["inline", "split"]);
+    expect(properties).not.toHaveProperty("dext.diff.defaultView");
     expect(properties["dext.history.maxTurns"]).toMatchObject({ type: "integer", default: 100 });
-    expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 200000 });
-    // Fan-out width has a ceiling because every branch can start its own process.
+    expect(properties["dext.history.maxOutputLength"]).toMatchObject({ type: "integer", default: 64000 });
+    // Dispatch concurrency has a ceiling because each call can start its own process.
     const concurrency = properties["dext.workflow.maxConcurrency"];
     expect(concurrency).toMatchObject({ type: "integer", default: 4, minimum: 1 });
     expect(concurrency?.maximum).toBeLessThanOrEqual(16);
-    expect(concurrency?.description).toContain("comprehension");
+    // Code mode dispatches Dext APIs concurrently and queues the overflow.
+    expect(concurrency?.description).toContain("concurrently");
+    expect(concurrency?.description).toContain("wait in a queue");
+  });
+
+  it("does not contribute retired resource directory settings", async () => {
+    const properties = (await manifest()).contributes?.configuration?.properties ?? {};
+    for (const setting of ["dext.apiDirs", "dext.skillDirs", "dext.plan.directory"])
+      expect(properties[setting]).toBeUndefined();
   });
 
   it("offers writable Agent and Plan permission tiers and a trusted-only CLI passthrough", async () => {
@@ -383,7 +358,7 @@ describe("Dext package manifest", () => {
     // A passthrough argument must not be a way around the tier.
     expect(passthrough?.markdownDescription).toContain("cannot loosen the permission tier");
     const agentCli = properties["dext.agentCli"];
-    expect(agentCli).toMatchObject({ type: "array", default: ["codex", "claude", "deepseek-harness"] });
+    expect(agentCli).toMatchObject({ type: "array", default: ["codex", "claude", "deepseek-harness", "pi"] });
     const agentCliItems = (agentCli as unknown as { items?: { type?: string; enum?: string[] } } | undefined)?.items;
     expect(agentCliItems).toMatchObject({ type: "string" });
     expect(agentCliItems?.enum).toBeUndefined();

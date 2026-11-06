@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { McpAccessTokenStore, type SecretStorageLike } from "../src/core/mcpSecrets.js";
+import { McpAccessTokenStore, type SecretStorageLike } from "../src/features/mcp/host/mcpSecrets.js";
 
 describe("McpAccessTokenStore", () => {
   it("derives distinct opaque SecretStorage keys for each workspace and server", async () => {
@@ -49,6 +49,23 @@ describe("McpAccessTokenStore", () => {
     await store.get("team", "workspace", "bearer");
 
     expect(requested[0]).toMatch(/^dext\.mcp\.token\.global\.[a-f0-9]{64}$/);
+    expect(requested[1]).toMatch(/^dext\.mcp\.bearer\.[a-f0-9]{64}$/);
+    expect(requested[0]).not.toEqual(requested[1]);
+  });
+
+  it("stores a query credential under its own kind without reusing a bearer entry", async () => {
+    const requested: string[] = [];
+    const secrets: SecretStorageLike = {
+      get: async (key) => { requested.push(key); return undefined; },
+      store: async () => {},
+      delete: async () => {}
+    };
+    const store = new McpAccessTokenStore(secrets, () => "file:///workspace");
+
+    await store.get("gateway", "workspace", "query");
+    await store.get("gateway", "workspace", "bearer");
+
+    expect(requested[0]).toMatch(/^dext\.mcp\.query\.[a-f0-9]{64}$/);
     expect(requested[1]).toMatch(/^dext\.mcp\.bearer\.[a-f0-9]{64}$/);
     expect(requested[0]).not.toEqual(requested[1]);
   });

@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolve } from "node:path";
-import { DeepSeekHarnessRunner } from "../src/core/deepseekHarnessRunner.js";
-import { DeepSeekHarnessTransport } from "../src/core/deepseekHarnessTransport.js";
-import type { AgentStreamEvent } from "../src/core/types.js";
-import { decodeHarnessSession } from "../src/core/deepseekHarnessPolicy.js";
-import type { AgentConversationRequest, AgentExecutionRequest } from "../src/core/agentRunner.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { AxAdapter } from "../src/core/axAdapter.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { DeepSeekHarnessRunner, acpMcpServers } from "../src/features/agents/host/deepseekHarnessRunner.js";
+import { DeepSeekHarnessTransport } from "../src/features/agents/host/deepseekHarnessTransport.js";
+import type { AgentInputRequest, AgentStreamEvent } from "../src/shared/contracts/types.js";
+import { decodeHarnessSession, encodeHarnessSession } from "../src/features/agents/host/deepseekHarnessPolicy.js";
+import type { AgentConversationRequest, AgentExecutionRequest } from "../src/features/agents/host/agentRunner.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
 
 const runners: DeepSeekHarnessRunner[] = [];
 const fixture = resolve("test/fixtures/acpAgent.mjs");
@@ -17,9 +20,21 @@ function runner(timeout = 15000) {
 function request(input = "hello", key = "conversation"): AgentConversationRequest {
   return { profile: { id: "deepseek-harness", provider: "deepseek-harness", label: "Harness", command: process.execPath, models: [] }, cwd: process.cwd(), input, mode: "ask", allowWorkspaceWrite: false, metadata: { agentSessionId: key } };
 }
+function executionRequest(input: string): AgentExecutionRequest {
+  const method = { ...BUILTIN_METHODS.find((item) => item.id === "ask")!, source: "builtin" as const };
+  return { profile: request().profile, cwd: process.cwd(), method, metadata: {}, contract: new AxAdapter().compile(method), resolved: {
+    method, arguments: { input }, context: [], metadata: {}, invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] }
+  } };
+}
 afterEach(async () => { await Promise.all(runners.splice(0).map((value) => value.dispose())); });
 
 describe("Harness runner", { timeout: 15000 }, () => {
+  it("maps host-owned tool servers to the ACP stdio shape", () => {
+    expect(acpMcpServers([{ name: "dext_structure", command: "C:\\Code.exe", args: ["server.js"], env: { ELECTRON_RUN_AS_NODE: "1" } }])).toEqual([
+      { type: "stdio", name: "dext_structure", command: "C:\\Code.exe", args: ["server.js"], env: [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }] }
+    ]);
+    expect(acpMcpServers(undefined)).toEqual([]);
+  });
   it("loads Harness settings once, unless an explicit refresh requests a new snapshot", async () => {
     const loader = vi.fn(async () => undefined);
     const value = new DeepSeekHarnessRunner(15000, (_command, _args, cwd, client) => new DeepSeekHarnessTransport(process.execPath, [fixture], cwd, client), loader);
@@ -48,6 +63,13 @@ describe("Harness runner", { timeout: 15000 }, () => {
     expect(await r.runConversation({ ...req, onEvent })).toBe("hello");
     expect(onEvent.mock.calls.map(([event]) => event).filter((event) => event.phase === "tool")).toMatchObject([{ done: false }, { done: true, replace: true, text: "done" }]);
   });
+  it("reports Harness context occupancy without presenting it as billed usage", async () => {
+    const events: AgentStreamEvent[] = [];
+    await runner().runConversation({ ...request("usage"), onEvent: (event) => events.push(event) });
+    const usage = events.flatMap((event) => event.usage ? [event.usage] : []);
+    expect(usage).toContainEqual({ contextTokens: 12345, contextWindowTokens: 1000000 });
+    expect(usage.every((item) => item.totalTokens === undefined)).toBe(true);
+  });
   it("serializes one conversation and isolates concurrent conversations", async () => {
     const r = runner();
     expect(await Promise.all([r.runConversation(request("slow")), r.runConversation(request("second")), r.runConversation(request("other", "other"))])).toEqual(["slow", "second", "other"]);
@@ -67,6 +89,21 @@ describe("Harness runner", { timeout: 15000 }, () => {
     const text = await runner().runConversation({ ...request("new task"), metadata: { agentSessionId: "fork", conversationForkFrom: "source", conversationContext: "earlier task" } });
     expect(text).toContain("earlier task"); expect(text).toContain("new task");
   });
+  it("continues in a new session when the Harness refuses to restore the stored one", async () => {
+    const first = runner(), save = vi.fn();
+    await first.runConversation({ ...request("first"), metadata: { agentSessionId: "restore", onAgentSessionId: save } });
+    const stored = decodeHarnessSession(save.mock.calls[0]![1] as string);
+    await first.dispose();
+    const events: AgentStreamEvent[] = [];
+    const text = await runner().runConversation({ ...request("second"), onEvent: (event) => events.push(event), metadata: {
+      agentSessionId: "restore", conversationContext: "earlier task", onAgentSessionId: save,
+      conversationProviderSessionId: encodeHarnessSession("missing", stored.binding)
+    } });
+    // The refused id is replaced and the turn still carries Dext's own context forward.
+    expect(text).toContain("second"); expect(text).toContain("earlier task");
+    expect(decodeHarnessSession(save.mock.calls[1]![1] as string).id).not.toBe("missing");
+    expect(events.map((event) => event.text).join("\n")).toContain("could not restore Harness session missing");
+  });
   it("discovers models and reasoning without submitting prompts", async () => {
     const options = await runner().discoverModels(request().profile, process.cwd());
     expect(options.map((item) => item.id)).toEqual(["model-a", "model-b"]);
@@ -83,10 +120,77 @@ describe("Harness runner", { timeout: 15000 }, () => {
     expect(await runner().runConversation(request("permission"))).toContain('"optionId":"reject"');
   });
   it("uses the existing UI for known full-access permission requests", async () => {
-    const confirm = vi.fn(async () => ({ kind: "ui" as const, type: "confirm" as const, confirmed: true }));
+    const confirm = vi.fn(async () => ({ kind: "ui" as const, type: "form" as const, status: "submitted" as const, answers: {} }));
     const req = request("permission");
-    const text = await runner().runConversation({ ...req, allowWorkspaceWrite: true, permission: "full-access", metadata: { ...req.metadata, ui: { confirm, choose: vi.fn(), input: vi.fn() } } });
+    const text = await runner().runConversation({ ...req, allowWorkspaceWrite: true, permission: "full-access", metadata: { ...req.metadata, ui: { form: confirm } } });
     expect(text).toContain('"optionId":"allow"'); expect(confirm).toHaveBeenCalledOnce();
+  });
+  it("renders an ACP elicitation in Dext's own card and answers it in the schema's values", async () => {
+    const asked: AgentInputRequest[] = [];
+    const requestAgentInput = vi.fn(async (input: AgentInputRequest) => {
+      asked.push(input);
+      return Object.fromEntries(input.questions.map((question) => [question.id, { answers: [question.options.at(-1)?.label ?? "typed"] }]));
+    });
+    const req = request("elicitation");
+    const text = await runner().runConversation({ ...req, onEvent: () => {}, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toEqual({ action: "accept", content: { scope: "user", notes: "typed" } });
+    expect(asked[0]?.questions.map((question) => question.id)).toEqual(["scope", "notes"]);
+    expect(asked[0]?.questions[0]?.options.map((option) => option.label)).toEqual(["Workspace", "User"]);
+    expect(asked[0]?.questions[0]?.detail).toBe("Where to apply it");
+  });
+  it("declines an elicitation schema Dext cannot render instead of half-rendering it", async () => {
+    const requestAgentInput = vi.fn();
+    const req = request("elicitation-unsupported");
+    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toEqual({ action: "decline" });
+    expect(requestAgentInput).not.toHaveBeenCalled();
+  });
+  it("answers the Harness user-questions bridge from the same Dext card", async () => {
+    const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
+    const req = request("bridge-question");
+    const text = await runner().runConversation({ ...req, onEvent: () => {}, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toEqual({ id: "fixture-call-1", status: "answered", answer: { answers: [{ id: "q", selected: ["B"] }] } });
+    expect(requestAgentInput).toHaveBeenCalledOnce();
+  });
+  it("publishes the Dext card a Harness question needs, then closes it with the answer", async () => {
+    const events: AgentStreamEvent[] = [];
+    const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
+    const req = request("bridge-question");
+    await runner().runConversation({ ...req, onEvent: (event) => events.push(event), metadata: { ...req.metadata, requestAgentInput } });
+    const inputs = events.filter((event) => event.userInput).map((event) => event.userInput!);
+    expect(inputs.map((input) => input.status)).toEqual(["waiting", "answered"]);
+    expect(inputs[0]?.blocking).toBe(true);
+    expect(inputs[0]?.questions.map((question) => question.question)).toEqual(["Which one?"]);
+    expect(inputs[1]?.answers).toEqual({ q: { answers: ["B"] } });
+  });
+  it("closes the Dext card when the user gives no answer", async () => {
+    const events: AgentStreamEvent[] = [];
+    const requestAgentInput = vi.fn(async () => null);
+    const req = request("bridge-question");
+    const text = await runner().runConversation({ ...req, onEvent: (event) => events.push(event), metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toMatchObject({ status: "cancelled" });
+    expect(events.filter((event) => event.userInput).map((event) => event.userInput!.status)).toEqual(["waiting", "dismissed"]);
+  });
+  it("publishes the card for an ACP elicitation too", async () => {
+    const events: AgentStreamEvent[] = [];
+    const requestAgentInput = vi.fn(async (input: AgentInputRequest) =>
+      Object.fromEntries(input.questions.map((question) => [question.id, { answers: [question.options.at(-1)?.label ?? "typed"] }])));
+    const req = request("elicitation");
+    await runner().runConversation({ ...req, onEvent: (event) => events.push(event), metadata: { ...req.metadata, requestAgentInput } });
+    expect(events.filter((event) => event.userInput).map((event) => event.userInput!.status)).toEqual(["waiting", "answered"]);
+  });
+  it("leaves a Harness question to the shipped fail-closed path when no card owns it", async () => {
+    const text = await runner().runConversation(request("bridge-question"));
+    expect(JSON.parse(text)).toMatchObject({ id: "fixture-call-1", status: "unavailable" });
+  });
+  it("refuses a question no Dext card can render instead of parking the turn", async () => {
+    // An answer callback with no event sink is exactly the shape that parks a
+    // turn forever: nothing renders the question, so nobody can ever answer it.
+    const requestAgentInput = vi.fn(async () => ({ q: { answers: ["B"] } }));
+    const req = request("bridge-question");
+    const text = await runner().runConversation({ ...req, metadata: { ...req.metadata, requestAgentInput } });
+    expect(JSON.parse(text)).toMatchObject({ id: "fixture-call-1", status: "unavailable" });
+    expect(requestAgentInput).not.toHaveBeenCalled();
   });
   it("cancels a running turn and rejects a timed-out turn", async () => {
     const r = runner(), controller = new AbortController(), onEvent = vi.fn();
@@ -99,13 +203,81 @@ describe("Harness runner", { timeout: 15000 }, () => {
   it("fails a crashed turn without retrying", async () => {
     await expect(runner().runConversation(request("crash"))).rejects.toThrow(/exited|closed/i);
   });
-  it("parses only final JSON and does not rerun invalid structured output", async () => {
-    const method = { ...BUILTIN_METHODS.find((item) => item.id === "ask")!, source: "builtin" as const };
-    const req: AgentExecutionRequest = { profile: request().profile, cwd: process.cwd(), method, metadata: {}, contract: new AxAdapter().compile(method), resolved: {
-      method, arguments: { input: "hello" }, context: [], metadata: {}, invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] }
-    } };
-    expect(await runner().run(req)).toEqual({ kind: "chat", text: "typed answer" });
-    req.resolved.arguments.input = "bad-json";
-    await expect(runner().run(req)).rejects.toThrow("not retried");
+  it("waits for silent ACP tools, then resumes idle detection after completion", async () => {
+    const r = runner(0);
+    await r.runConversation(request());
+    r.setIdleTimeoutMs(500);
+    await expect(r.runConversation(request("tool-silent"))).resolves.toBe("tool-silent");
+    await expect(r.runConversation(request("tool-silent-hang"))).rejects.toThrow("without process activity");
+  });
+  it.each(["stream", "stderr-stream"])("renews the idle timeout for %s activity", async (input) => {
+    const r = runner(0);
+    await r.runConversation(request());
+    r.setIdleTimeoutMs(500);
+    await expect(r.runConversation(request(input))).resolves.toBe(input);
+    await expect(r.runConversation(request("hang"))).rejects.toThrow("without process activity");
+  });
+  it("passes the final text through and does not rerun invalid structured output", async () => {
+    expect(await runner().run(executionRequest("hello"))).toBe(JSON.stringify({ kind: "ask", text: "typed answer" }));
+    // Invalid output is no longer retried or thrown here; the runtime boundary
+    // diagnoses it and may repair it through the predictor channel.
+    expect(await runner().run(executionRequest("bad-json"))).toBe("invalid");
+  });
+  it("passes wrapped results through for the shared boundary", async () => {
+    const raw = "分析完成（未修改任何文件）。\n\n```json\n" + JSON.stringify({ kind: "ask", text: "typed answer" }) + "\n```";
+    expect(await runner().run(executionRequest("wrapped-json"))).toBe(raw);
+  });
+  it("states the JSON envelope before and after the payload, with the escaping spelled out", async () => {
+    const prompt = String(await runner().run(executionRequest("echo-prompt")));
+    // The result tool is the primary channel; the envelope below stays as the
+    // fallback for a preset that restricts the tool away.
+    expect(prompt.startsWith("Submit the result by calling the `dext_submit_result` tool")).toBe(true);
+    expect(prompt).toContain("Your final message must be exactly one JSON object matching this schema:");
+    expect(prompt).toContain("Put your entire answer inside the object's \"text\" field");
+    expect(prompt).toContain("Escape every newline as \\n and every double quote as \\\"");
+    expect(prompt).toContain("Return only a JSON object matching this schema as your final message:");
+    expect(prompt.trimEnd().endsWith("No markdown fence, no text before or after the object.")).toBe(true);
+  });
+  it("passes a Markdown final message through for the runtime to wrap", async () => {
+    const markdown = String(await runner().run(executionRequest("plain-markdown")));
+    expect(markdown.startsWith("[DEV_PLAN_TASKLIST] T1,T2,T4")).toBe(true);
+    expect(markdown).toContain("| T1 | Load rules | pending |");
+  });
+  it("publishes the call's output contract as the result tool's argument schema", async () => {
+    const published = JSON.parse(String(await runner().run(executionRequest("received-tool")))) as {
+      name: string; description: string; parameters: Record<string, unknown>;
+    };
+    expect(published.name).toBe("dext_submit_result");
+    expect(published.parameters).toMatchObject({ type: "object", properties: { kind: { const: "ask" }, text: { type: "string" } } });
+    expect(published.parameters).not.toHaveProperty("$schema");
+  });
+  it("takes the validated submission over the prose the model writes afterwards", async () => {
+    const text = await runner().run(executionRequest("submit-result"));
+    expect(text).toBe(JSON.stringify({ kind: "ask", text: "submitted answer" }));
+  });
+  it("returns a rejected submission's diagnostics to the model and keeps the repaired value", async () => {
+    const events: AgentStreamEvent[] = [];
+    const text = await runner().run({ ...executionRequest("submit-repair"), onEvent: (event) => events.push(event) });
+    expect(text).toBe(JSON.stringify({ kind: "ask", text: "typed answer" }));
+    const verdict = events.map((event) => event.text).find((value) => value.includes("\"status\":\"rejected\""));
+    expect(verdict).toContain("kind");
+    expect(verdict).toContain("text");
+  });
+  it("withdraws the result tool with the turn that registered it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "dext-tool-log-"));
+    const log = join(directory, "tool.jsonl");
+    process.env.DEXT_TEST_HARNESS_TOOL_LOG = log;
+    let frames: { published: boolean }[];
+    try {
+      await runner().run(executionRequest("submit-result"));
+      frames = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { published: boolean });
+    } finally {
+      delete process.env.DEXT_TEST_HARNESS_TOOL_LOG;
+      await rm(directory, { recursive: true, force: true });
+    }
+    expect(frames).toEqual([{ published: true }, { published: false }]);
+  });
+  it("offers no result tool to a conversation turn, which carries no contract", async () => {
+    expect(await runner().runConversation(request("received-tool"))).toBe("null");
   });
 });

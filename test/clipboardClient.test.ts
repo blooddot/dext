@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WebviewRequest } from "../src/webviewProtocol.js";
+import type { WebviewRequest } from "../src/platform/webviewProtocol.js";
 import { ClipboardClient } from "../src/webview/clipboardClient.js";
 
 describe("ClipboardClient", () => {

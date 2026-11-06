@@ -1,19 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { AgentProfile } from "../src/agentProfiles.js";
-import { BUILTIN_METHODS } from "../src/core/builtins.js";
-import { ContextResolver } from "../src/core/contextResolver.js";
-import { DextLanguageService } from "../src/core/languageService.js";
-import { MethodRegistry } from "../src/core/registry.js";
-import { DextRuntime } from "../src/core/runtime.js";
-import { compileWorkflow } from "../src/core/workflow.js";
-import { WorkflowRuntime } from "../src/core/workflowRuntime.js";
-import type { AgentConversationRequest, AgentExecutionRequest } from "../src/core/agentRunner.js";
-import type { ExecutionMetadata, InvocationValue } from "../src/core/types.js";
+import type { AgentProfile } from "../src/features/agents/contracts/agent.js";
+import { builtinCliFields, CLI_BUILTIN_IDS, specializeBuiltinCli } from "../src/features/agents/domain/builtinCli.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
+import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
+import { DextRuntime } from "../src/features/workflow/host/runtime.js";
+import type { AgentExecutionRequest } from "../src/features/agents/host/agentRunner.js";
+import type { ExecutionMetadata, InvocationValue } from "../src/shared/contracts/types.js";
 
 const profiles: AgentProfile[] = [
   { id: "codex", provider: "codex", command: "codex", label: "Codex", models: ["gpt-test", "gpt-other"] },
   { id: "claude", provider: "claude", command: "claude", label: "Claude", models: ["sonnet", "opus"] },
-  { id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] }
+  { id: "deepseek-harness", provider: "deepseek-harness", command: "dsh", label: "Harness", models: [] },
+  { id: "pi", provider: "pi", command: "pi", label: "Pi", models: [] }
 ];
 
 function setup() {
@@ -35,18 +34,31 @@ function setup() {
     kind: "invocation", source: "code", method,
     arguments: Object.entries({ input: "test", ...args }).map(([name, value]) => ({ name, value }))
   }, [], metadata);
-  return { registry, runtime, requests, execute, language: new DextLanguageService(registry) };
+  return { registry, runtime, requests, execute };
 }
 
 describe("per-call built-in CLI options", () => {
+  it.each(["ask", "plan", "agent", "skill", "template", "create"])("specializes %s for Pi without inheriting Codex tiers", (id) => {
+    // `create` is a legacy specialization id; resource creation uses the host
+    // draft flow rather than a public Code callable in this checkout.
+    const definition = BUILTIN_METHODS.find((method) => method.id === id) ?? { ...BUILTIN_METHODS.find((method) => method.id === "ask")!, id };
+    expect(specializeBuiltinCli(definition, "pi").input.find((field) => field.name === "model")).toMatchObject({ type: "object", shapeType: "agent.PiModelOptions" });
+  });
+  it("routes Pi model identity and advertised reasoning without inherited speed", async () => {
+    const { execute, requests } = setup();
+    await execute({ cli: "pi", model: { model: "gateway/org/flash", reasoning: "off" } });
+    expect(requests[0]).toMatchObject({ profile: { provider: "pi" }, model: "gateway/org/flash", reasoningEffort: "off" });
+    expect(requests[0]?.speed).toBeUndefined();
+    await expect(execute({ cli: "pi", model: { model: "gateway/flash", speed: "fast" } })).rejects.toThrow();
+    await expect(execute({ cli: "pi", model: { model: "flash" } })).rejects.toThrow("provider/modelId");
+  });
   it("routes Harness object options without inherited Codex tiers", async () => {
-    const { execute, requests, language } = setup();
+    const { execute, requests } = setup();
     await execute({ cli: "deepseek-harness", model: { model: "opaque-id", reasoning: "off" } });
     expect(requests[0]).toMatchObject({ profile: { provider: "deepseek-harness" }, model: "opaque-id", reasoningEffort: "off" });
     expect(requests[0]?.speed).toBeUndefined();
     expect(requests[0]?.serviceTier).toBeUndefined();
     await expect(execute({ cli: "deepseek-harness", model: { model: "opaque-id", speed: "fast" } })).rejects.toThrow();
-    expect(language.documentCompletions('ask(cli="deepseek-harness", model={').map((item) => item.label)).toEqual(["model", "reasoning"]);
   });
   it.each(["ask", "plan", "agent", "skill"])("routes %s to Claude without inherited Codex settings", async (method) => {
     const { execute, requests } = setup();
@@ -103,25 +115,6 @@ describe("per-call built-in CLI options", () => {
     expect(requests).toHaveLength(0);
   });
 
-  it("passes create options to the host's subsequent conversation request", async () => {
-    const { execute, runtime } = setup();
-    const requests: AgentConversationRequest[] = [];
-    runtime.setAgentRunner({
-      run: async () => { throw new Error("create must use the host handler"); },
-      runConversation: async (request) => { requests.push(request); return "created"; }
-    });
-    runtime.setCreateHandler(async (request) => {
-      const input = request.arguments.input;
-      if (typeof input !== "string") throw new Error("create input must be a string");
-      return (await runtime.executeConversation("ask", input, request.metadata)).result;
-    });
-    await execute({ type: "rule", cli: "claude", model: "opus" }, "create");
-    expect(requests[0]).toMatchObject({ profile: { id: "claude" }, model: "opus", permission: "read-only" });
-    expect(requests[0]?.reasoningEffort).toBeUndefined();
-    expect(requests[0]?.speed).toBeUndefined();
-    expect(requests[0]?.serviceTier).toBeUndefined();
-  });
-
   it("does not borrow composer settings from a different decorator-selected CLI", async () => {
     const { execute, requests } = setup();
     await execute({ cli: "claude", model: "opus" }, "ask", { agent: "claude" });
@@ -130,50 +123,17 @@ describe("per-call built-in CLI options", () => {
     expect(requests[0]?.speed).toBeUndefined();
   });
 
-  it("compiles and runs dynamic CLI/model values in a workflow", async () => {
-    const { registry, runtime, requests } = setup();
-    const source = 'provider = "codex"\noptions = {"model": "gpt-test", "reasoning": "max", "speed": "fast"}\nask(input="test", cli=provider, model=options)';
-    const compiled = compileWorkflow(source, registry);
-    expect(compiled.diagnostics).toEqual([]);
-    await new WorkflowRuntime(runtime).execute(compiled.program!);
-    expect(requests[0]).toMatchObject({ model: "gpt-test", reasoningEffort: "max", speed: "fast" });
-  });
-
-  it("checks literal options regardless of argument order", () => {
-    const { registry } = setup();
-    expect(compileWorkflow('ask(input="x", model="sonnet", cli="claude")', registry).diagnostics).toEqual([]);
-    for (const source of [
-      'ask(input="x", model="sonnet", cli="codex")',
-      'ask(input="x", cli="claude", model="gpt-test")',
-      'ask(input="x", cli="codex", model={"model":"gpt-test", "speed":"turbo"})'
-    ]) expect(compileWorkflow(source, registry).diagnostics.some((item) => item.severity === "error")).toBe(true);
-  });
-
-  it.each(["ask", "plan", "agent", "skill", "create"])("uses CLI defaults when only cli is provided to %s", async (method) => {
-    const { registry, runtime, execute, requests } = setup();
-    const conversations: AgentConversationRequest[] = [];
-    if (method === "create") {
-      runtime.setAgentRunner({
-        run: async () => { throw new Error("create must use the host handler"); },
-        runConversation: async (request) => { conversations.push(request); return "created"; }
-      });
-      runtime.setCreateHandler(async (request) => (await runtime.executeConversation("ask", "create", request.metadata)).result);
-    }
-    const extra = method === "skill" ? ', skill="test"' : method === "create" ? ', type="rule"' : "";
-    expect(compileWorkflow(`${method}(input="x"${extra})`, registry).diagnostics).toEqual([]);
+  it.each(["ask", "plan", "agent", "skill"])("uses CLI defaults when only cli is provided to %s", async (method) => {
+    const { execute, requests } = setup();
     for (const cli of ["codex", "claude"]) {
-      await execute({ cli, ...(method === "agent" ? { apply: false } : {}), ...(method === "skill" ? { skill: "test" } : {}), ...(method === "create" ? { type: "rule" } : {}) }, method,
+      await execute({ cli, ...(method === "agent" ? { apply: false } : {}), ...(method === "skill" ? { skill: "test" } : {}) }, method,
         { agent: "codex", model: "decorator-model", reasoningEffort: "ultra", speed: "fast", serviceTier: "priority" });
-      const request = method === "create" ? conversations.at(-1) : requests.at(-1);
+      const request = requests.at(-1);
       expect(request?.profile.id).toBe(cli);
       expect(request?.model || undefined).toBeUndefined();
       expect(request?.reasoningEffort).toBeUndefined();
       expect(request?.speed).toBeUndefined();
       expect(request?.serviceTier).toBeUndefined();
-      for (const source of [
-        `${method}(input="x", cli="${cli}"${extra})`,
-        `provider = "${cli}"\n${method}(input="x", cli=provider${extra})`
-      ]) expect(compileWorkflow(source, registry).diagnostics).toEqual([]);
     }
   });
 
@@ -195,41 +155,56 @@ describe("per-call built-in CLI options", () => {
     await execute({ model: { model: "gpt-test", reasoning: "low" } }, "ask", { agent: "claude", model: "opus" });
     expect(requests[0]).toMatchObject({ profile: { id: "codex" }, model: "gpt-test", reasoningEffort: "low", speed: "fast" });
   });
+});
 
-  it("evaluates a dynamic CLI-only call without inheriting Input settings", async () => {
-    const { registry, runtime, requests, execute } = setup();
-    const compiled = compileWorkflow('provider = "codex"\nask(input="x", cli=provider)', registry);
-    expect(compiled.diagnostics).toEqual([]);
-    await new WorkflowRuntime(runtime).execute(compiled.program!);
-    expect(requests[0]?.model || undefined).toBeUndefined();
-    expect(requests[0]?.reasoningEffort).toBeUndefined();
-    expect(requests[0]?.speed).toBeUndefined();
-    await execute({});
-    expect(requests[1]).toMatchObject({ model: "gpt-test", reasoningEffort: "high", speed: "fast" });
+describe("built-in CLI contract", () => {
+  const modelField = (source: readonly AgentProfile[]) => builtinCliFields(source).find((field) => field.name === "model")!;
+
+  it("lists exactly the built-in ids that accept CLI overrides", () => {
+    expect([...CLI_BUILTIN_IDS].sort()).toEqual(["agent", "ask", "create", "plan", "skill", "template"]);
+    for (const id of ["ask", "plan", "agent", "template", "skill"]) expect(CLI_BUILTIN_IDS.has(id)).toBe(true);
+    expect(CLI_BUILTIN_IDS.has("terminal")).toBe(false);
+    expect(CLI_BUILTIN_IDS.has("ui.select")).toBe(false);
   });
 
-  it("offers CLI-dependent enum values, Codex dictionary keys, and signatures", () => {
-    const { language } = setup();
-    const labels = (source: string) => language.documentCompletions(source).map((item) => item.label);
-    expect(labels('ask(cli=')).toEqual(["codex", "claude", "deepseek-harness"]);
-    expect(labels('ask(cli="claude", model=')).toEqual(["sonnet", "opus"]);
-    expect(labels('ask(cli="codex", model={')).toEqual(["model", "reasoning", "speed"]);
-    expect(labels('ask(cli="codex", model={"model": ')).toEqual(["gpt-test", "gpt-other"]);
-    expect(labels('ask(cli="codex", model={"model": "gpt-test", "reasoning": ')).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
-    expect(labels('ask(cli="codex", model={"model": "gpt-test", "speed": ')).toEqual(["standard", "fast"]);
-    expect(labels('ask(input="pretend cli=codex", cli="claude", model=')).toEqual(["sonnet", "opus"]);
-    expect(language.documentSignature('ask(cli="claude", model=')?.parameters.at(-1)?.label).toBe('model?: "sonnet" | "opus"');
-    expect(language.documentSignature('ask(cli="codex", model=')?.parameters.at(-1)?.label).toContain('model?: { model: "gpt-test" | "gpt-other"');
+  it("declares the cli enum and the Codex model dictionary", () => {
+    const fields = builtinCliFields(profiles);
+    expect(fields.map((field) => field.name)).toEqual(["cli", "model"]);
+    expect(fields[0]).toMatchObject({ type: "enum", values: ["codex", "claude", "deepseek-harness", "pi"] });
+    expect(modelField(profiles)).toMatchObject({
+      type: "enum",
+      accepts: ["object"],
+      values: ["sonnet", "opus"],
+      shapeType: "agent.ModelOptions | agent.PiModelOptions"
+    });
+    expect(modelField(profiles).properties?.find((field) => field.name === "model"))
+      .toMatchObject({ type: "enum", values: ["gpt-test", "gpt-other"], required: true });
+    expect(modelField(profiles).properties?.map((field) => field.name)).toEqual(["model", "reasoning", "speed"]);
+    // Without a configured Codex profile the model id stays a free string.
+    expect(modelField(profiles.slice(1)).properties?.find((field) => field.name === "model")?.type).toBe("string");
   });
 
-  it("refreshes model choices when configured profiles change", () => {
-    const { runtime, language } = setup();
-    const source = 'ask(input="x", cli="codex", model={"model":"new-model"})';
-    expect(language.inputDocument(source).kind).toBe("invalid");
-    runtime.setAgentProfiles([{ ...profiles[0]!, models: ["new-model"] }]);
-    expect(language.documentCompletions('ask(cli="codex", model={"model": ').map((item) => item.label)).toEqual(["new-model"]);
-    expect(language.inputDocument(source).kind).toBe("workflow");
-    runtime.setAgentProfiles(profiles);
-    expect(language.inputDocument(source).kind).toBe("invalid");
+  it("specializes the model contract to the selected CLI", () => {
+    const ask = BUILTIN_METHODS.find((method) => method.id === "ask")!;
+    const model = (method: typeof ask) => method.input.find((field) => field.name === "model")!;
+
+    expect(model(specializeBuiltinCli(ask, "deepseek-harness"))).toMatchObject({
+      type: "object",
+      accepts: [],
+      properties: [
+        expect.objectContaining({ name: "model", type: "string", required: true }),
+        expect.objectContaining({ name: "reasoning", type: "string" })
+      ]
+    });
+    expect(model(specializeBuiltinCli(ask, "codex"))).toMatchObject({ type: "object", accepts: [] });
+    expect(model(specializeBuiltinCli(ask, "claude"))).toMatchObject({ type: "enum", accepts: [] });
+    expect(model(specializeBuiltinCli(ask, "claude")).properties).toBeUndefined();
+
+    // An unknown or absent CLI keeps the shared union until runtime.
+    expect(specializeBuiltinCli(ask, undefined)).toBe(ask);
+    expect(specializeBuiltinCli(ask, "unsupported")).toBe(ask);
+    // A built-in that takes no CLI override is returned untouched.
+    const terminal = BUILTIN_METHODS.find((method) => method.id === "terminal")!;
+    expect(specializeBuiltinCli(terminal, "codex")).toBe(terminal);
   });
 });
