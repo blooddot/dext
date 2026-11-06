@@ -130,6 +130,8 @@ Dext generates the `dext` type declaration into your project — `.dext/api/dext
 | [Workflows and APIs](docs/workflows.md) | TypeScript Code mode, built-in and custom APIs, context, Skills, rules, and History |
 | [Agent configuration](docs/agents.md) | CLI setup, model overrides, and DeepSeek Harness presets and permissions |
 | [MCP configuration](docs/mcp.md) | Tool manifests, typed results, transports, and credentials |
+| [Settings](docs/settings.md) | Composer, history, storage, permissions and execution limits |
+| [Conversation development](docs/conversation-development.md) | Module ownership, dependency boundaries, and the migration record |
 | [Development and releases](docs/development.md) | Local development, checks, packaging, publishing, and architecture |
 
 ## Plan and editor tabs

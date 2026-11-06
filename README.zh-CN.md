@@ -128,6 +128,8 @@ Dext 会把 `dext` 类型声明生成到你的项目里——`.dext/api/dext.d.t
 | [工作流与 API](docs/workflows.zh-CN.md) | TypeScript Code 模式、内置与自定义 API、上下文、Skills、规则和 History |
 | [Agent 配置](docs/agents.zh-CN.md) | CLI 配置、模型覆盖、DeepSeek Harness 预设与权限 |
 | [MCP 配置](docs/mcp.zh-CN.md) | 工具清单、类型化结果、传输方式和凭据 |
+| [设置](docs/settings.zh-CN.md) | 发送、历史、存储、权限与执行限制 |
+| [会话开发](docs/conversation-development.zh-CN.md) | 模块所有权、依赖边界与迁移记录 |
 | [开发与发布](docs/development.zh-CN.md) | 本地开发、检查、打包、发布和架构 |
 
 ## 计划与编辑器标签
