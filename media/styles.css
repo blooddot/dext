@@ -2922,6 +2922,10 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .history-record > su
   flex: 0 0 12px;
   width: 12px;
   font-size: 12px;
+  /* An empty icon box lands on the baseline, which puts the glyph above the
+     eye line of the 13px label, so it drops to the text's optical center. */
+  position: relative;
+  top: 2.5px;
   color: var(--vscode-progressBar-background, var(--vscode-focusBorder));
 }
 
