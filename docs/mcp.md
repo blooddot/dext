@@ -25,6 +25,8 @@ Project manifests take precedence when a server name collides, and the
 file over 256 KB, because a repository ships these files and an untrusted
 workspace still has them read; both limits are reported in the diagnostics.
 
+A server also accepts `scope` and `timeoutMs`. `scope` is `"project"` or `"global"`, but the directory a manifest is read from decides the effective scope, so a copied manifest cannot change it. `timeoutMs` must be an integer from 1000 to 120000 and defaults to 30000. Any other field is reported as a diagnostic instead of being ignored.
+
 A project's own manifests also shape the committed `dext` declaration, so those
 tools are named with the result their manifest declares, whether or not Dext is
 installed. The declaration nests by the id's own segments, which is exactly how the
