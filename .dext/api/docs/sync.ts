@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import {
   agent,
@@ -18,6 +19,49 @@ const AUDIT_RULES = ["docs/audit.md", "docs/style.md"];
 const UPDATE_RULES = ["docs/update.md", "docs/style.md"];
 const LINK_PATTERN = /\]\(([^)\s]+)\)/gu;
 const EXTERNAL_TARGET = /^(?:[a-z][a-z0-9+.-]*:|#|\/)/iu;
+/** 与 .gitignore 对齐：只有构建产物的目录与文件不参与工作区比较。 */
+const ARTIFACT_DIRECTORIES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "release",
+  "coverage",
+  ".vscode-test",
+  ".npm-cache",
+]);
+const ARTIFACT_DIRECTORY_PREFIX = ".tmp-";
+const ARTIFACT_SUFFIX = ".vsix";
+const ARTIFACT_FILES = new Set([".taste-skill"]);
+const MAX_REPORTED_FILES = 40;
+
+/** 工作区里一份文件的状态：只留哈希，够判断新增、改写与删除。 */
+interface WorkspaceEntry {
+  hash: string;
+}
+
+type WorkspaceState = Map<string, WorkspaceEntry>;
+
+interface WorkspaceDiff {
+  added: string[];
+  modified: string[];
+  removed: string[];
+  total: number;
+}
+
+/** patch 落地结果：只有草稿自己没改盘时才需要它。 */
+interface PatchOutcome {
+  status: ApplyResult["status"];
+  summary: string;
+}
+
+export interface SyncReport {
+  directory: string;
+  approved: boolean;
+  unchanged: boolean;
+  files: string[];
+  patch: PatchOutcome | null;
+  problems: string[];
+}
 
 /** 目录既是唯一参数也是范围，两段 prompt 共用这一句。 */
 function describeRequest(directory: string): string {
@@ -40,31 +84,115 @@ async function draftDocs(input: string): Promise<AgentResult> {
   return agent({ input, patch: true, rules: UPDATE_RULES });
 }
 
-async function confirmDraft(message: string): Promise<UiConfirmResult> {
-  return ui.confirm({ message, confirm_label: "应用文档改动", cancel_label: "取消" });
+/** 草稿会直接写盘，所以确认必须发生在写之前：取消时工作区还是干净的。 */
+function confirmWrite(directory: string): Promise<UiConfirmResult> {
+  return ui.confirm({
+    message: [
+      describeRequest(directory),
+      "按上面的审计结论更新 docs/ 与 README 指南表格？草稿会直接写入工作区内的文件，可能新增、改写或删除页面。",
+      "取消则不会写入任何文件。",
+    ].join("\n\n"),
+    confirm_label: "开始更新文档",
+    cancel_label: "取消",
+  });
 }
 
 async function commitDraft(draft: AgentResult): Promise<ApplyResult> {
   return apply({ result: draft });
 }
 
-function changedFiles(draft: AgentResult): PatchChange[] {
+function patchChanges(draft: AgentResult): PatchChange[] {
   return draft.patch?.changes ?? [];
 }
 
-function describeDraft(draft: AgentResult, changes: PatchChange[]): string {
-  const title = draft.patch?.title ?? draft.summary ?? "文档更新";
-  const lines = changes.map((change) => `- ${change.uri.replace(/^file:\/\//iu, "")}`);
-  return [`${title}（${changes.length} 个文件）`, ...lines].join("\n");
+function sha256(content: Uint8Array): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
-/** 写入草稿并汇报；返回值就是入口要判的「是否冲突」。 */
+function relativeToWorkspace(target: string): string {
+  return path.relative(process.cwd(), target).split(path.sep).join("/");
+}
+
+function artifact(name: string, directory: boolean): boolean {
+  const artifactDirectory = directory && (ARTIFACT_DIRECTORIES.has(name) || name.startsWith(ARTIFACT_DIRECTORY_PREFIX));
+  const artifactFile = !directory && (name.endsWith(ARTIFACT_SUFFIX) || ARTIFACT_FILES.has(name));
+  return artifactDirectory || artifactFile;
+}
+
+/** 草稿写盘前后各拍一张快照：真正的改动以磁盘为准，不以 patch.changes 为准。 */
+async function snapshotWorkspace(): Promise<WorkspaceState> {
+  const state: WorkspaceState = new Map();
+  await collectWorkspace(".", state);
+  return state;
+}
+
+async function collectWorkspace(directory: string, state: WorkspaceState): Promise<void> {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => null);
+  const missing = entries === null;
+  if (missing) return;
+  for (const entry of entries) {
+    const nested = entry.isDirectory();
+    const skipped = artifact(entry.name, nested);
+    if (skipped) continue;
+    const target = path.join(directory, entry.name);
+    if (nested) {
+      await collectWorkspace(target, state);
+      continue;
+    }
+    const regular = entry.isFile();
+    if (!regular) continue;
+    const content = await readFile(target).catch(() => null);
+    const unreadable = content === null;
+    if (unreadable) continue;
+    state.set(relativeToWorkspace(target), { hash: sha256(content) });
+  }
+}
+
+function diffWorkspace(before: WorkspaceState, after: WorkspaceState): WorkspaceDiff {
+  const added: string[] = [];
+  const modified: string[] = [];
+  for (const [file, entry] of after) {
+    const previous = before.get(file);
+    const created = previous === undefined;
+    if (created) {
+      added.push(file);
+      continue;
+    }
+    const changed = previous.hash !== entry.hash;
+    if (changed) modified.push(file);
+  }
+  const removed = [...before.keys()].filter((file) => !after.has(file));
+  return {
+    added: added.sort(),
+    modified: modified.sort(),
+    removed: removed.sort(),
+    total: added.length + modified.length + removed.length,
+  };
+}
+
+function describeDiffLines(diff: WorkspaceDiff): string[] {
+  const entries = [
+    ...diff.added.map((file) => `+ ${file}`),
+    ...diff.modified.map((file) => `~ ${file}`),
+    ...diff.removed.map((file) => `- ${file}`),
+  ];
+  const reported = entries.slice(0, MAX_REPORTED_FILES);
+  const hidden = entries.length - reported.length;
+  return hidden > 0 ? [...reported, `…另有 ${hidden} 个文件未列出`] : reported;
+}
+
+function describeChangeSet(draft: AgentResult, diff: WorkspaceDiff): string {
+  const title = draft.patch?.title ?? draft.summary ?? "文档更新";
+  return [`${title}（${diff.total} 个文件）`, ...describeDiffLines(diff)].join("\n");
+}
+
+/** 写入 patch 并汇报；返回值就是入口要判的「是否冲突」。 */
 function reportApply(applied: ApplyResult): boolean {
   const conflicted = applied.status === "conflict";
   if (conflicted) {
-    console.error(`文档改动写入冲突，未修改任何文件：${applied.summary}`);
+    console.error(`patch 写入冲突，未修改任何文件：${applied.summary}`);
   } else {
-    console.log(`文档改动已写入（${applied.status}）：${applied.summary}`);
+    console.log(`patch 已写入（${applied.status}）：${applied.summary}`);
   }
   return conflicted;
 }
@@ -79,6 +207,18 @@ function reportProblems(problems: string[]): void {
   for (const problem of problems) {
     console.error(`- ${problem}`);
   }
+}
+
+/** 改动来自磁盘还是 patch，报出来的必须是同一个结论。 */
+function reportDiff(draft: AgentResult, diff: WorkspaceDiff, applied: ApplyResult | null): void {
+  if (diff.total === 0) {
+    console.log("草稿没有改盘，改动来自它返回的 patch。");
+  } else {
+    console.log(describeChangeSet(draft, diff));
+    const alsoPatched = patchChanges(draft).length > 0;
+    if (alsoPatched) console.log("草稿已把改动写入工作区，跳过 apply：磁盘上的改动就是结果。");
+  }
+  if (applied !== null) reportApply(applied);
 }
 
 async function markdownFiles(directory: string): Promise<string[]> {
@@ -128,31 +268,45 @@ async function verifyDocLinks(): Promise<string[]> {
   return problems;
 }
 
-export async function sync(directory: string): Promise<AgentResult> {
+export async function sync(directory: string): Promise<SyncReport> {
   const present = await exists(directory);
   if (present === false) {
     throw new Error(`目录不存在：${directory}。传入要同步的目录路径，例如 "src/mcp" 或 "docs/guide"。`);
   }
   const audit = await auditDocs(composeAuditInput(directory));
+  console.log(audit.text);
+  const approval = await confirmWrite(directory);
+  const approved = approval.confirmed;
+  if (!approved) {
+    console.log("已取消，未写入任何文档改动。");
+    return { directory, approved: false, unchanged: false, files: [], patch: null, problems: [] };
+  }
+  const before = await snapshotWorkspace();
   const draft = await draftDocs(composeDraftInput(directory, audit.text));
-  const changes = changedFiles(draft);
-  const unchanged = changes.length === 0;
+  const after = await snapshotWorkspace();
+  const diff = diffWorkspace(before, after);
+  const changes = patchChanges(draft);
+  const written = diff.total > 0;
+  const patchPresent = changes.length > 0;
+  const unchanged = !written && !patchPresent;
   if (unchanged) {
     console.log("文档已与代码一致，本次未生成改动。");
-    return draft;
-  }
-  const approval = await confirmDraft(`确认写入以下文档改动？\n\n${describeDraft(draft, changes)}`);
-  const approved = approval.confirmed;
-  if (approved) {
-    const applied = await commitDraft(draft);
-    const conflicted = reportApply(applied);
-    if (conflicted) {
-      return draft;
-    }
     const problems = await verifyDocLinks();
     reportProblems(problems);
-    return draft;
+    return { directory, approved: true, unchanged: true, files: [], patch: null, problems };
   }
-  console.log("已取消，未写入任何文档改动。");
-  return draft;
+  // 草稿要么自己改了盘，要么只回了一个 patch；两种都按实际结果汇报，
+  // 已经落在磁盘上的改动不再走 apply，否则必然被判成冲突。
+  const applied = written ? null : await commitDraft(draft);
+  reportDiff(draft, diff, applied);
+  const problems = await verifyDocLinks();
+  reportProblems(problems);
+  return {
+    directory,
+    approved: true,
+    unchanged: false,
+    files: [...diff.added, ...diff.modified, ...diff.removed],
+    patch: applied === null ? null : { status: applied.status, summary: applied.summary },
+    problems,
+  };
 }
