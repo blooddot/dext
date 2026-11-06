@@ -35,7 +35,8 @@ All notable changes to Dext are documented in this file.
 - Every Resources category groups by directory, and discovery reads file-based APIs, rules, skills and MCP manifests without executing them.
 - MCP tools are filed under **MCP** on the Resources page with per-node counts, and `dext.viewMcp` is now `dext.viewResources`.
 - The API directory and Global Resources open as editor tabs like History, and each panel key restores its own page and target after a reload.
-- **Breaking:** `dext.apiDirs`, `dext.skillDirs` and `dext.plan.directory` are renamed to `dext.apiDirectories`, `dext.skillDirectories` and `dext.planDirectory`, and `dext.mcpDirectories` is new.
+- **Breaking:** `dext.apiDirs`, `dext.skillDirs` and `dext.plan.directory` become `dext.apiDirectories`, `dext.skillDirectories` and `dext.planDirectory`. Replace them in `settings.json`.
+- `dext.mcpDirectories` is new: it adds workspace-relative directories to search for MCP manifests beside `.dext/mcp`.
 - **Breaking:** source-file inline completion, its settings, evaluation commands and stored feedback are removed; remove the `dext.completion*` entries from `settings.json`.
 - **Breaking:** `ui.choose` and `UiChoiceResult` are removed; use `ui.radio`, `ui.checkbox` or `ui.select`. `ui.alert` and `ui.form` are new, and `ui.form` takes `actions`.
 - A settled question card keeps every option it offered, marks the picked rows, shows a typed reply as its own `Other` row and accepts a multi-select answer.
