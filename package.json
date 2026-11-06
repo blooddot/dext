@@ -4,7 +4,7 @@
   "description": "AI coding with Codex, Claude, DeepSeek, and optional Pi CLI. Chat, plan, and automate tasks with reusable workflows.",
   "version": "0.1.2",
   "publisher": "blooddot",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#131519",

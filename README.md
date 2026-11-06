@@ -144,6 +144,4 @@ APIs, Global Resources, and History all open as editor tabs that reuse one page 
 
 Report bugs or request features in [GitHub Issues](https://github.com/blooddot/dext/issues). Include the Dext and VS Code versions, reproduction steps, and relevant logs with credentials removed.
 
-Dext is source-available under the [PolyForm Perimeter License 1.0.1](LICENSE), with separate commercial licensing available by agreement. Ordinary use, including internal business use, is permitted subject to the license. Using Dext to provide a competing product or service to others requires separate authorization, even if that offering is free.
-
-See [commercial licensing](COMMERCIAL-LICENSING.md) for the scope and how to request an agreement. This is a source-available license, not an OSI-approved open-source license. Third-party components retain their own licenses. See [CHANGELOG.md](CHANGELOG.md) for version notes.
+Dext is released under the [MIT License](LICENSE). Third-party components retain their own licenses. See [CHANGELOG.md](CHANGELOG.md) for version notes.
