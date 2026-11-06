@@ -441,6 +441,8 @@ describe("resource documents", () => {
     expect(prompt).toContain("if (round.approved)");
     expect(prompt).toContain("confirmPlan");
     expect(prompt).toContain("Entry functions only compose named wrappers and ordinary helpers");
+    expect(prompt).toContain("render it with template() from a template file");
+    expect(prompt).toContain("instead of hand-assembling headings");
     expect(prompt).toContain("askForPlan");
     expect(prompt).toContain("runAgent");
     expect(prompt).toContain("export async function <leaf>");

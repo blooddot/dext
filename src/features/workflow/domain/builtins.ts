@@ -70,7 +70,7 @@ const METHODS: readonly CallableDefinition[] = [
   {
     id: "template",
     title: "Render Template",
-    description: "Render text from a Dext template. The template declares the fields and the model only supplies their values, so the structure, section order and list markers always come from the template; the rendered output is validated as markdown, text, json, toml or yaml. It returns text only and writes nothing: import Node's fs and write it yourself.",
+    description: "Render text from a Dext template. The template declares the fields and the model only supplies their values, so the structure, section order and list markers always come from the template; the rendered output is validated as markdown, text, json, toml or yaml. Use it whenever an API emits a document — notes, reports, changelog entries, scaffolds — instead of concatenating text around an ask result. It returns text only and writes nothing: import Node's fs and write it yourself.",
     kind: "command",
     version: "1.0.0",
     input: [

@@ -132,6 +132,8 @@ To replace this template, create `.dext/rules/plan.md` in the workspace. Its con
 
 A rule can only ask a model to follow a template, so a model that drifts changes the output's structure. `template` removes that: the model fills the template's fields, and Dext renders the headings, the section order and the list markers from the template file itself. A model can therefore never add, rename, reorder or drop a section.
 
+Use it whenever an API emits a document — release notes, reports, changelog entries, generated scaffolds — rather than asking for prose and assembling markdown around the result: the skeleton belongs in the template file, so a later edit to the layout never touches the API code.
+
 A template is a text file whose YAML front matter declares the required `format` and one entry per field, followed by the body that places those fields with `{{field}}` placeholders. A field entry is either a description string or a mapping:
 
 ```markdown
