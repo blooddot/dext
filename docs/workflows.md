@@ -77,20 +77,20 @@ Expressions are ordinary TypeScript. Dext is not involved: the kernel evaluates 
 
 `Math`, `JSON`, `Number`, `String`, `Array`, `Object` and `Date` are the standard built-ins, and there is no Dext-specific list of methods or helpers to learn. A few forms from the removed language have no direct equivalent: use a template literal instead of an f-string or `%` formatting, `Math.floor` instead of `//`, an array instead of a tuple, and `Number(value)` instead of `int(value)` or `float(value)`.
 
-A plain assignment is not a workflow step. Output shows one step per Dext API call; `console.log` and `console.error` add process-output steps that carry text only, with no invocation and no duration.
+A plain assignment is not a workflow step. `ask`, `plan`, `agent`, `template` and `skill` accept `echo`: without `echo: true` their step stays out of Output, while the caller still receives the result. The other calls — `ui.*`, `terminal`, `apply` and `mcp.*` — declare no `echo` field, so they never produce an Output card. `console.log` and `console.error` add process-output steps that carry text only, with no invocation and no duration.
 
 The old interpreter's resource limits (`while` iteration count, `range` size, folded items, import depth) went with the interpreter. Standard Node and TypeScript limits apply.
 
 ## Built-in API
 
 - **New API / New MCP / New Rule / New Skill** in the Resources panel opens a dedicated tab using the same Conversation and Input layout. Choose **API / MCP / Rule / Skill**, then **Project / Global** (the menu shows the destination directory). Select **New resource** or an existing resource, describe your changes, and review the draft or diff before saving. A new Skill also offers **Describe | Import**: Import installs a GitHub Skill pack deterministically, using the Agent only to choose among ambiguous candidates, and still requires an explicit Create. Drafts can include separate rules, templates, and skill support files, with APIs referencing rules by filename. Preview lets you choose a file; saving checks every file for conflicts before writing the bundle. Saving keeps the tab open for further revisions; changing an existing resource's destination copies its supporting files too. Resource targets, supporting files, drafts, and conversations are restored from History.
-- `ask({ input, workspace?, cli?, model? }) -> AskResult`
-- `plan({ input, workspace?, cli?, model? }) -> PlanResult`
-- `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.
-- `template({ input, source, values={}, workspace?, cli?, model? }) -> TemplateResult` — renders text from a template file ([templates](#templates)).
+- `ask({ input, workspace?, cli?, model?, echo? }) -> AskResult`
+- `plan({ input, workspace?, cli?, model?, echo? }) -> PlanResult`
+- `agent({ input, apply=true, patch=true, workspace?, cli?, model?, echo? }) -> AgentResult` — `patch=false` reports conclusions as text without producing a patch.
+- `template({ input, source, values={}, workspace?, cli?, model?, echo? }) -> TemplateResult` — renders text from a template file ([templates](#templates)).
 - `apply({ result }) -> ApplyResult` — an `AgentResult` without a patch returns `unchanged`; a malformed patch still throws.
 - `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
-- `skill({ skill, input, workspace?, cli?, model? }) -> SkillResult`
+- `skill({ skill, input, workspace?, cli?, model?, echo? }) -> SkillResult`
 - `mcp.<server>.<tool>({...})` — calls a configured MCP tool.
 - `ui.select | ui.radio | ui.checkbox | ui.input | ui.confirm | ui.alert | ui.form` — see [UI interactions and forms](#ui-interactions-and-forms).
 

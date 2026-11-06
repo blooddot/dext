@@ -68,20 +68,20 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 
 `Math`、`JSON`、`Number`、`String`、`Array`、`Object`、`Date` 都是标准内置对象，Dext 不再维护自己的字符串方法或纯函数清单。旧语言的部分写法没有直接对应：f-string 和 `%` 格式化改用模板字符串，`//` 改用 `Math.floor`，元组改用数组，`int(value)` / `float(value)` 改用 `Number(value)`。
 
-普通赋值不是工作流步骤。Output 中每次 Dext API 调用对应一个步骤；`console.log`、`console.error` 会额外产生进程输出步骤，只携带文本，没有调用信息，也没有耗时。
+普通赋值不是工作流步骤。`ask`、`plan`、`agent`、`template`、`skill` 接受 `echo`：未传 `echo: true` 时该步骤不进入 Output，结果仍返回给调用方。其他调用——`ui.*`、`terminal`、`apply`、`mcp.*`——没有 `echo` 字段，因此不会产生 Output 卡片。`console.log`、`console.error` 会额外产生进程输出步骤，只携带文本，没有调用信息，也没有耗时。
 
 旧解释器的资源上限（`while` 迭代次数、`range` 大小、折叠元素数量、导入深度）随解释器一起移除，改用 Node 和 TypeScript 自身的限制。
 
 ## 内置 API
 
 - 点击侧栏 Resources 面板中的 **New API / New MCP / New Rule / New Skill**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿或差异后保存。新建 Skill 时还提供 **Describe | Import**：Import 以确定性方式安装 GitHub Skill 包，仅在候选有歧义时调用 Agent，并且仍需显式 Create。草稿可包含独立的 rules、模板和 skill 支持文件；API 通过文件名引用规则。预览时可选择文件，保存会检查所有文件的冲突并一起写入。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示连同关联文件另存一份。资源目标、关联文件、草稿和对话会随历史记录恢复。
-- `ask({ input, workspace?, cli?, model? }) -> AskResult`：只读解释和分析。
-- `plan({ input, workspace?, cli?, model? }) -> PlanResult`：创建、维护和执行实施计划。
-- `agent({ input, apply=true, patch=true, workspace?, cli?, model? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
-- `template({ input, source, values={}, workspace?, cli?, model? }) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
+- `ask({ input, workspace?, cli?, model?, echo? }) -> AskResult`：只读解释和分析。
+- `plan({ input, workspace?, cli?, model?, echo? }) -> PlanResult`：创建、维护和执行实施计划。
+- `agent({ input, apply=true, patch=true, workspace?, cli?, model?, echo? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
+- `template({ input, source, values={}, workspace?, cli?, model?, echo? }) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
 - `apply({ result }) -> ApplyResult`：`AgentResult` 没有 patch 时返回 unchanged；非法 patch 仍然报错。
 - `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
-- `skill({ skill, input, workspace?, cli?, model? }) -> SkillResult`：使用指定 Skill 执行任务。
+- `skill({ skill, input, workspace?, cli?, model?, echo? }) -> SkillResult`：使用指定 Skill 执行任务。
 - `mcp.<server>.<tool>({...})`：调用已配置的 MCP 工具。
 - `ui.select | ui.radio | ui.checkbox | ui.input | ui.confirm | ui.alert | ui.form`：见 [UI 交互与表单](#ui-交互与表单)。
 
