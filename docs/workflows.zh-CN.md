@@ -103,7 +103,7 @@ Node 内置模块和工作区依赖可以直接使用，因为代码运行在真
 
 `print` 已移除。`console.log(...)`、`console.error(...)` 会被捕获为进程输出步骤并转发到真实输出流，但它们不是 Dext 结果：没有调用信息，也没有耗时。需要类型化结果时请返回值或调用 API。
 
-跨 Dext API 边界的值必须可 JSON 序列化，因为内核与扩展宿主之间通过 JSON 通信。函数、Symbol、`Map`、`Set`、`Buffer`、类型化数组、类实例（除非实现了 `toJSON()`）和循环引用都无法传递，`Date` 会转换为 ISO 字符串。报错会指出具体路径和替代写法：`{ createdAt: new Date() }` 会变成 ISO 字符串，而 `{ cache: new Map() }` 会在 `cache` 处报错。用户代码内部可以使用任意值——只有交给 Dext API 的值、以及 API 模块返回的值会被检查。
+跨 Dext API 边界的值必须可 JSON 序列化，因为内核与扩展宿主之间通过 JSON 通信。函数、Symbol、`bigint`、非有限数字（`NaN` 与 `±Infinity`）、`undefined`、`Map`、`Set`、`Buffer`、类型化数组、类实例（除非实现了 `toJSON()`）和循环引用都无法传递，`Date` 会转换为 ISO 字符串，嵌套超过 64 层的值也会被拒绝。报错会指出具体路径和替代写法：`{ createdAt: new Date() }` 会变成 ISO 字符串，`{ cache: new Map() }` 会在 `cache` 处报错，`bigint` 会提示先用 `String()` 或 `Number()` 转换。用户代码内部可以使用任意值——只有交给 Dext API 的值、以及 API 模块返回的值会被检查。
 
 ### 计划文档
 

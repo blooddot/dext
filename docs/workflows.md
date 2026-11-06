@@ -112,7 +112,7 @@ Node built-ins and workspace packages work directly, because the code runs in a 
 
 `print` is gone. `console.log(...)` and `console.error(...)` are captured as process-output steps and forwarded to the real streams, but they are not Dext results: they carry no invocation and no duration. Return a value, or call an API, when the run needs a typed result.
 
-Values that cross a Dext API boundary must be JSON-serializable, because the kernel and the extension host exchange JSON. Functions, symbols, `Map`, `Set`, `Buffer`, typed arrays, class instances (unless they have a `toJSON()` method) and circular references cannot be sent, and a `Date` is converted to an ISO string. The error names the path and the replacement, so `{ createdAt: new Date() }` becomes an ISO string while `{ cache: new Map() }` is reported at `cache`. User code may use anything inside itself — only what it hands to a Dext API, or returns from an API module, is checked.
+Values that cross a Dext API boundary must be JSON-serializable, because the kernel and the extension host exchange JSON. Functions, symbols, `bigint` values, non-finite numbers (`NaN` and `±Infinity`), `undefined`, `Map`, `Set`, `Buffer`, typed arrays, class instances (unless they have a `toJSON()` method) and circular references cannot be sent, a `Date` is converted to an ISO string, and a value nested more than 64 levels deep is refused. The error names the path and the replacement, so `{ createdAt: new Date() }` becomes an ISO string, `{ cache: new Map() }` is reported at `cache`, and a `bigint` is reported with the suggestion to convert it with `String()` or `Number()`. User code may use anything inside itself — only what it hands to a Dext API, or returns from an API module, is checked.
 
 ### Plan documents
 
