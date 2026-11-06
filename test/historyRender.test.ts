@@ -784,7 +784,7 @@ it("renders unknown historical UI results as bounded escaped JSON without an exe
   expect(html).not.toContain("x".repeat(21000));
 });
 
-it("renders process output steps as text rather than as API cards", () => {
+it("renders process output steps as Markdown rather than as API cards", () => {
   const execution: RuntimeResponse = {
     invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] },
     method: { id: "ask", title: "Ask", source: "builtin", kind: "command" },
@@ -807,8 +807,8 @@ it("renders process output steps as text rather than as API cards", () => {
       ]
     }
   });
-  expect(html).toContain('<pre class="history-process-output process-output-stdout">x\n</pre>');
-  expect(html).toContain('<pre class="history-process-output process-output-stderr">&lt;boom&gt;\n</pre>');
+  expect(html).toContain('<div class="markdown-body history-process-output process-output-stdout"><p>x</p>');
+  expect(html).toContain('<div class="markdown-body history-process-output process-output-stderr"><p>&lt;boom&gt;</p>');
   // A stream step never renders the disclosure an API step without a response gets.
   expect(html).not.toContain("<span>stdout</span>");
   expect(html).toContain('<section class="history-execution execution-result">');

@@ -1703,10 +1703,12 @@ function renderResult(response: InputExecutionResponse): void {  const target = 
     if (step.response) item.append(renderExecution(step.response));
     else if (step.stream) {
       // Process output is not an API call, so it gets no card of its own.
-      const output = document.createElement("pre");
-      output.className = `process-output process-output-${step.stream.channel}`;
+      const output = document.createElement("div");
+      output.className = `markdown-body process-output process-output-${step.stream.channel}`;
       output.dataset.channel = step.stream.channel;
-      output.textContent = step.stream.text;
+      output.innerHTML = markdown.render(step.stream.text);
+      renderMarkdownDiagrams(output);
+      colorizeCodeBlocks(output);
       item.append(output);
     } else {
       const disclosure = document.createElement("details");

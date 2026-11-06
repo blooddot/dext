@@ -1811,22 +1811,11 @@ body.image-page {
 }
 
 /* console.log / console.error output: process output, not an API card. It grows
-   to its full length; Output already scrolls, and the API chose to print it. */
-.process-output {
-  margin: 0 0 8px;
-  padding: 6px 8px;
-  border-left: 2px solid var(--vscode-widget-border, #454545);
-  color: var(--vscode-editor-foreground);
-  background: var(--vscode-textCodeBlock-background, transparent);
-  font-family: var(--vscode-editor-font-family, monospace);
-  font-size: var(--vscode-editor-font-size, 12px);
-  line-height: 1.4;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.process-output-stderr {
-  border-left-color: color-mix(in srgb, var(--vscode-errorForeground) 70%, transparent);
+   to its full length; Output already scrolls, and the API chose to print it.
+   The text is Markdown, so typography and line breaks come from .markdown-body.
+   No panel rule and no border: a left rule next to prose reads as a quote bar
+   and cuts the transcript's left edge, so only stderr keeps a tint. */
+.markdown-body.process-output-stderr {
   color: var(--vscode-errorForeground);
 }
 
@@ -3399,6 +3388,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
   color: inherit;
   border-radius: 0;
 }
+/* github-markdown-css hides `code br`, but the colorizer keeps line breaks as
+   <br>, so multi-line blocks would collapse into one line. */
+.markdown-body pre code br { display: initial; }
 .markdown-body code,
 .markdown-body pre {
   font-family: var(--vscode-editor-font-family);

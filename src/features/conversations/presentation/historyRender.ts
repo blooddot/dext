@@ -165,7 +165,7 @@ function output(response: InputExecutionResponse): string {
   return steps(response).map((step) => {
     if (step.quiet) return "";
     if (step.stream) {
-      return `<pre class="history-process-output process-output-${step.stream.channel}">${escapeHtml(step.stream.text)}</pre>`;
+      return `<div class="markdown-body history-process-output process-output-${step.stream.channel}">${renderProcessMarkdown(step.stream.text)}</div>`;
     }
     return step.response
       ? execution(step.response)
