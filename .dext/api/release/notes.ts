@@ -118,19 +118,19 @@ function assertSafeSince(since: string): void {
 /** 一条命令拿两个 commit：第一个参数无法解析时 && 短路，stdout 为空。 */
 function composeResolveCommand(since: string): string {
   assertSafeSince(since);
-  return `git rev-parse --verify --quiet '${since}^{commit}' && git rev-parse HEAD`;
+  return `git rev-parse --verify --quiet "${since}^{commit}" && git rev-parse HEAD`;
 }
 
 function composeKindCommand(since: string): string {
-  return `git rev-parse --symbolic-full-name '${since}'`;
+  return `git rev-parse --symbolic-full-name "${since}"`;
 }
 
 function composeStatCommand(commit: string): string {
-  return `git --no-pager diff --stat --no-color '${commit}...HEAD'`;
+  return `git --no-pager diff --stat --no-color "${commit}...HEAD"`;
 }
 
 function composePatchCommand(commit: string): string {
-  return `git --no-pager diff --no-color --unified=3 '${commit}...HEAD'`;
+  return `git --no-pager diff --no-color --unified=3 "${commit}...HEAD"`;
 }
 
 async function resolveSource(command: string): Promise<TerminalResult> {
