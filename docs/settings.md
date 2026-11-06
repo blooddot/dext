@@ -32,3 +32,5 @@ English | [简体中文](settings.zh-CN.md)
 
 - `dext.terminal.defaultTimeoutMs` (integer, default `120000`, range 1000–600000) — timeout applied to `terminal()` calls that do not pass `timeout_ms`. An invalid value, or one above 600000, falls back to the default, and 600000 is also the hard ceiling for an explicit `timeout_ms`.
 - `dext.workflow.maxConcurrency` (integer, default `4`, range 1–16) — how many Dext API calls one Code run may have in flight at once. Calls beyond the limit wait in a queue.
+
+Agent, language and directory-discovery settings are documented where they apply: `dext.outputLanguage`, `dext.agentCli`, `dext.agentCliArgs`, `dext.agent.timeoutMs` and `dext.agent.idleTimeoutMs` in [Agent configuration](agents.md); `dext.selectionActions.enabled`, `dext.copyFilePathOnCopy`, `dext.apiDirectories` and `dext.skillDirectories` in [Workflows and APIs](workflows.md).

@@ -32,3 +32,5 @@
 
 - `dext.terminal.defaultTimeoutMs`（整数，默认 `120000`，范围 1000–600000）— 未传 `timeout_ms` 的 `terminal()` 调用使用的超时。取值非法或大于 600000 时回退到默认值；600000 同时是显式 `timeout_ms` 的硬上限。
 - `dext.workflow.maxConcurrency`（整数，默认 `4`，范围 1–16）— 一次 Code 运行中同时在途的 Dext API 调用数上限。超出的调用排队等待。
+
+Agent、语言与目录发现相关的设置在各自主页说明：`dext.outputLanguage`、`dext.agentCli`、`dext.agentCliArgs`、`dext.agent.timeoutMs`、`dext.agent.idleTimeoutMs` 见 [Agent 配置](agents.zh-CN.md)；`dext.selectionActions.enabled`、`dext.copyFilePathOnCopy`、`dext.apiDirectories`、`dext.skillDirectories` 见 [工作流与 API](workflows.zh-CN.md)。
