@@ -109,7 +109,7 @@ Node 内置模块和工作区依赖可以直接使用，因为代码运行在真
 
 Plan（包括 `plan()`）是统一的规划入口。Plan 回合先调研工作区再写出计划文档；Build 会重新读取该文件，因此执行的是用户在编辑器里改过的内容。任务进度通过计划任务列表上报，完成判定依赖这些上报而不是文字声明。自定义 `.dext/rules/plan.md` 只改变表达方式。没有新增 Spec 模式、`spec()` API 或执行引擎。
 
-Plan 轮次同时返回一段对话回复和一份 Markdown 计划文档，Dext 将它保存为 `.plan.md`。默认指令要求按顺序包含 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Risks`，以及可选的 `## Out of scope`。`## Design` 下可以有 `### Before / After`、`### Execution flow` 和 `### Decisions`；它们是条件式的，没有结构性影响的改动不应画空图。
+Plan 轮次同时返回一段对话回复和一份 Markdown 计划文档，Dext 将它保存为 `.plan.md`。默认指令要求按顺序包含 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Risks`，以及可选的 `## Out of scope`。`## Context` 之后固定包含 `### Assumptions and open questions` 子节。`## Design` 下可以有 `### Before / After`、`### Execution flow` 和 `### Decisions`；这三个子节是条件式的，没有结构性影响的改动不应画空图。
 
 计划正文采用 `dext.outputLanguage`；`auto` 跟随 VS Code 显示语言，而非操作系统语言。未配置语言时，正文跟随用户使用的语言。章节标题和任务语法保持格式自身的语言，以保证计划仍可解析；代码、命令、路径、标识符、引用原文和响应分隔符不会被翻译。设置入口、工作区覆盖关系和隐藏思考语言的限制见 [Agent 配置](agents.zh-CN.md#交互语言)。
 
