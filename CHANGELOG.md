@@ -7,13 +7,13 @@ All notable changes to Dext are documented in this file.
 - Pi runs the packages installed with `pi install`: the composer's **Plugins** row picks them per conversation, and a read-only turn blocks `write`, `edit`, `bash` and `powershell`.
 - A Plan turn's Todo panel is driven by Pi's `dext_update_todos` tool, and each task is reported as soon as its verify step passes.
 - `dext_fetch` gives read-only turns a web reader that refuses credential-bearing, loopback, private and link-local targets, follows at most 5 redirects and returns at most 512 KiB.
-- Pi's shipped `agent_before_settle` hook asks once for a `dext_submit_result` call, and a read-only Harness turn that answers in Markdown is wrapped as the `agent` result instead of aborting.
+- Pi's shipped `agent_before_settle` hook asks once for `dext_submit_result`, and a read-only Harness turn that answers in Markdown returns the `agent` result instead of aborting.
 - Pi appears in the composer by default: `dext.agentCli` now offers `codex`, `claude`, `deepseek-harness` and `pi`.
 - A tool call that never reports a result stops the turn after thirty minutes, and an active Codex, Claude or Harness turn runs past one hour while it keeps working.
 - DeepSeek Harness desktop starts through its own launcher with `--expose-internals`, keeps its startup log as stderr, and lists presets from the shipped `presets/*.patch.yml`.
 - Models added in the DeepSeek Harness app now appear in Dext: `llm-pi-ai`, `llm-deepseek` and `agent-default-model` merge from `cordis.patch.yml`, with `settings.yaml` winning per field.
 - A new turn starts with **Process** collapsed like stored History, its summary keeps the live `Thinking for …` duration with token and command counts, and Harness adds `12k/1M context`.
-- **Breaking:** DeepSeek Harness 0.1.x and its preset package are gone, so **Manage presets** offers only **Refresh presets**. Replace presets in `$DSH_HOME/.agent-presets` with app-created ones.
+- **Breaking:** DeepSeek Harness 0.1.x is gone, so **Manage presets** offers only **Refresh presets**. Replace presets in `$DSH_HOME/.agent-presets` with app-created ones.
 - A Harness `Internal error` reports the ACP data payload and the stderr tail, and Codex `config.toml` is parsed with `smol-toml` so comments and escapes no longer break defaults.
 - Codex conversation questions render as inline Dext cards above Process, the Harness `ask_user_question` and ACP elicitation reuse it, and a question Dext cannot render is answered as unavailable.
 - Conversation history lives in files under `<storageUri>/conversation-history/`, imported once from `dext.history*`, and `dext.history.maxOutputLength` now defaults to `64000`.
@@ -25,11 +25,11 @@ All notable changes to Dext are documented in this file.
 - A Code run stays open while it waits for a Dext API, and after a failure it resumes at the call boundary: a call whose fingerprint still matches returns its recorded response.
 - Functions, symbols, bigints, non-finite numbers, `Map`, `Set`, `Buffer` and cycles are refused at the kernel boundary with the path named, and a `Date` becomes an ISO string.
 - The generated `dext` project is committed: commit `.dext/api/dext.d.ts`, `.dext/tsconfig.json` and `.dext/package.json`.
-- An API reload rewrites `.dext/api/dext.d.ts`, `.dext/tsconfig.json` and `.dext/package.json` with `@types/node`, and the declaration lists `skills`/`rules` and types each project MCP tool.
+- An API reload rewrites `dext.d.ts`, `tsconfig.json` and `package.json` under `.dext/` with `@types/node`, and the declaration lists `skills`/`rules` and types each project MCP tool.
 - `dext/api/<id>` imports resolve in the generated project, the directories in `dext.apiDirectories` are mapped from `.dext/`, and the composer resolves them through virtual files.
 - The composer uses real TypeScript, so completion, hover, diagnostics and go to definition work in Code mode, and completion is offered in Code mode only.
 - **Dext: View APIs** lists the Node and JavaScript API reference generated from the declarations, and a Code turn's input is colorized by the composer's grammar and theme.
-- A result whose contract declares a string array is repaired instead of failing, because ax's output field cannot hold such a contract.
+- A result whose contract declares a string array is repaired instead of failing, so a workflow no longer aborts on that result shape.
 - `template(input, source, values)` renders text from a Dext template whose front matter declares its fields, so no section can be added or reordered, and it writes nothing.
 - **Breaking:** an Agent patch is applied before the result returns; Accept/Reject cards, diff views and `dext.diff.defaultView` are gone. `agent(patch=false)` still returns text-only.
 - Every Resources category groups by directory, and discovery reads file-based APIs, rules, skills and MCP manifests without executing them.
