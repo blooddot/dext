@@ -66,14 +66,14 @@ p { overflow-wrap: anywhere; }
 .resource-toolbar h2 { flex: 1 1 100%; margin: 0; overflow-wrap: anywhere; }
 .resource-group { margin: 0 0 8px; border-bottom: 1px solid color-mix(in srgb, var(--vscode-panel-border) 70%, transparent); }
 .resource-group > summary { display: flex; align-items: center; gap: 8px; padding: 8px 4px; cursor: pointer; list-style: none; color: var(--resource-accent, var(--vscode-foreground)); font-weight: 600; }
+.resource-group > summary:hover { background: var(--vscode-list-hoverBackground); }
 .resource-group > summary::-webkit-details-marker { display: none; }
 .resource-group-toggle { flex: 1; }
 .resource-group-actions { display: inline-flex; margin-left: auto; }
-.resource-pack > summary .resource-pack-actions { opacity: 0; pointer-events: none; }
-.resource-pack > summary:hover .resource-pack-actions, .resource-pack > summary:focus-within .resource-pack-actions { opacity: 1; pointer-events: auto; }
 .resource-pack-version { color: var(--vscode-descriptionForeground); font-size: 12px; font-weight: 400; }
-@media (hover: none) { .resource-pack > summary .resource-pack-actions { opacity: 1; pointer-events: auto; } }
-.resource-group-chevron { transition: transform 120ms ease; }
+/* Flex centering + a fixed width keeps the icon on the count badge's line and the
+   pack checkbox column aligned with the entry checkboxes. */
+.resource-group-chevron { display: inline-flex; align-items: center; justify-content: center; width: 16px; transition: transform 120ms ease; }
 .resource-group:not([open]) .resource-group-chevron { transform: rotate(-90deg); }
 .resource-tree-actions { display: inline-flex; gap: 4px; margin-left: auto; }
 .resource-icon-button { width: 26px; height: 26px; padding: 0; border: 0; background: transparent; display: inline-flex; align-items: center; justify-content: center; color: var(--vscode-foreground); flex-shrink: 0; }

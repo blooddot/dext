@@ -187,7 +187,7 @@ function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[
   const node = `Skill/${pack.id}`;
   const version = resourcePackVersion(pack);
   const action = pack.updatable
-    ? `<span class="resource-group-actions resource-pack-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("cloud-download")}</button></span>`
+    ? `<span class="resource-group-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("cloud-download")}</button></span>`
     : "";
   const skills = entries.flatMap((entry) => (skillEntryId(entry) ? [entry] : []));
   const shown = skills.filter((entry) => !entry.hidden).length;
@@ -195,7 +195,7 @@ function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[
   return `<details class="resource-group resource-pack" data-resource-group="Skill" data-resource-node="${escapeResourceHtml(node)}" data-resource-type="skill" data-resource-pack="${escapeResourceHtml(pack.id)}"${collapsed.has(node) ? "" : " open"}>`
     + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node)}">${escapeResourceHtml(pack.name)}</span>`
     + (version ? `<span class="resource-pack-version">${escapeResourceHtml(version)}</span>` : "")
-    + `<span class="resource-count">${entries.length}</span>${action}${visibility}<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary>`
+    + `<span class="resource-count">${entries.length}</span>${action}${visibility}<span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary>`
     + `<ul>${[...entries].sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
 }
 
@@ -281,7 +281,7 @@ export function renderTreeContents(node: ResourceTreeNode, collapsed: Set<string
 
 
 export function renderTreeNode(node: ResourceTreeNode, collapsed: Set<string>, type: string, prefix = "dext"): string {
-  return `<details class="resource-group resource-api-node" data-resource-group="${escapeResourceHtml(node.path)}" data-resource-node="${escapeResourceHtml(node.path)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(node.path) ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node.path)}">${escapeResourceHtml(node.label)}</span><span class="resource-count">${countTreeNodeEntries(node)}</span><span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${renderTreeContents(node, collapsed, type, prefix)}</ul></details>`;
+  return `<details class="resource-group resource-api-node" data-resource-group="${escapeResourceHtml(node.path)}" data-resource-node="${escapeResourceHtml(node.path)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(node.path) ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node.path)}">${escapeResourceHtml(node.label)}</span><span class="resource-count">${countTreeNodeEntries(node)}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${renderTreeContents(node, collapsed, type, prefix)}</ul></details>`;
 }
 
 
@@ -290,7 +290,7 @@ export function renderApiTree(document: ResourceListDocument, collapsed: Set<str
     document.groups.flatMap((group) => group.entries.map((entry) => ({ entry, parts: group.label === "." ? [] : group.label.split(".") }))));
   // Keep the synthetic Top level group limited to APIs without a namespace. Namespace
   // groups such as node and ui are siblings of it, rather than nested beneath it.
-  const topLevel = `<details class="resource-group resource-api-node" data-resource-group="." data-resource-node="." data-resource-type="api"${collapsed.has(".") ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle=".">Top level</span><span class="resource-count">${root.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${root.entries.sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
+  const topLevel = `<details class="resource-group resource-api-node" data-resource-group="." data-resource-node="." data-resource-type="api"${collapsed.has(".") ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle=".">Top level</span><span class="resource-count">${root.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${root.entries.sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
   return topLevel + [...root.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((node) => renderTreeNode(node, collapsed, "api", prefix)).join("");
 }
 
@@ -320,8 +320,7 @@ export function renderCategoryTree(document: ResourceListDocument, collapsed: Se
       : "";
     return `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(group.label) ? "" : " open"}>`
       + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label)}</span><span class="resource-count">${group.entries.length}</span>`
-      + `<span class="resource-group-actions">${resourceToggleButton(`data-resource-group-action="toggle" data-resource-group-target="${escapeResourceHtml(group.label)}"`, group.label, !collapsed.has(group.label))}</span>`
-      + `<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>${packHtml}${renderTreeContents(root, collapsed, type, prefix)}</ul>`
+      + `<span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${packHtml}${renderTreeContents(root, collapsed, type, prefix)}</ul>`
       + (group.entries.length ? "" : `<p class="resource-empty">No ${escapeResourceHtml(group.label)} resources found.</p>`) + `</details>`;
   }).join("");
 }
@@ -339,20 +338,12 @@ export function resourceClientScript(state?: EditorTabState): string {
     function search(){return document.querySelector('[data-resource-search]');}
     function query(){var input=search();return input?input.value.trim().toLocaleLowerCase():'';}
     function viewState(){var input=search();return {query:input?input.value:undefined,scrollTop:window.scrollY,collapsed:Array.from(collapsed)};}
-    function targets(button){
-      var id=button.getAttribute('data-resource-group-target');
-      if(!id)return nodes();
-      var group=nodes().find(function(node){return node.getAttribute('data-resource-node')===id;});
-      return group?[group].concat(Array.from(group.querySelectorAll('[data-resource-node]'))):[];
-    }
-    function expanded(button){
-      var groups=targets(button);
-      if(button.hasAttribute('data-resource-group-target'))return !!groups[0]&&groups[0].open;
-      return groups.filter(function(group){return !group.parentElement.closest('[data-resource-node]');}).some(function(group){return group.open;});
+    function expanded(){
+      return nodes().filter(function(group){return !group.parentElement.closest('[data-resource-node]');}).some(function(group){return group.open;});
     }
     function syncButtons(){
       document.querySelectorAll('[data-resource-toggle-label]').forEach(function(button){
-        var open=expanded(button),label=(open?'Collapse ':'Expand ')+button.getAttribute('data-resource-toggle-label');
+        var open=expanded(),label=(open?'Collapse ':'Expand ')+button.getAttribute('data-resource-toggle-label');
         button.title=label;button.setAttribute('aria-label',label);button.setAttribute('aria-expanded',String(open));
         button.querySelector('[data-resource-icon="collapse-all"]').hidden=!open;
         button.querySelector('[data-resource-icon="expand-all"]').hidden=open;
@@ -383,7 +374,7 @@ export function resourceClientScript(state?: EditorTabState): string {
       mark.indeterminate=false;
     }
     document.addEventListener('click',function(event){
-      var element=event.target.closest('[data-resource-command],[data-resource-open],[data-resource-navigate],[data-resource-toggle],[data-resource-toggle-all],[data-resource-group-action],[data-resource-copy],button[data-resource-scope]');
+      var element=event.target.closest('[data-resource-command],[data-resource-open],[data-resource-navigate],[data-resource-toggle],[data-resource-toggle-all],[data-resource-copy],button[data-resource-scope]');
       if(!element||element.disabled)return;
       var copied=element.getAttribute('data-resource-copy');
       if(copied){
@@ -393,8 +384,8 @@ export function resourceClientScript(state?: EditorTabState): string {
         announceCopy(element);
         return;
       }
-      if(element.hasAttribute('data-resource-toggle-all')||element.hasAttribute('data-resource-group-action')){
-        event.preventDefault();var open=!expanded(element);targets(element).forEach(function(node){setOpen(node,open);});syncButtons();return;
+      if(element.hasAttribute('data-resource-toggle-all')){
+        event.preventDefault();var open=!expanded();nodes().forEach(function(node){setOpen(node,open);});syncButtons();return;
       }
       var nodeId=element.getAttribute('data-resource-toggle');
       if(nodeId){event.preventDefault();var node=nodes().find(function(item){return item.getAttribute('data-resource-node')===nodeId;});if(node)setOpen(node,!node.open);syncButtons();return;}
@@ -447,7 +438,7 @@ export function renderResourceList(document: ResourceListDocument, options: Reso
   const groups = options.apiTree ? renderApiTree(document, collapsed, prefix)
     : options.categoryTree ? renderCategoryTree(document, collapsed, prefix)
     : document.groups.map((group) => `<details class="resource-group" data-resource-group="${escapeResourceHtml(group.label)}" data-resource-node="${escapeResourceHtml(group.label)}"${collapsed.has(group.label) ? "" : " open"} data-resource-type="${document.kind === "api" ? "api" : (options.createKinds?.find((kind) => RESOURCE_LABELS[kind] === group.label) ?? "")}">`
-    + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label === "." ? "Top level" : group.label)}</span><span class="resource-count">${group.entries.length}</span>${options.createKinds ? `<span class="resource-group-actions">${resourceToggleButton(`data-resource-group-action="toggle" data-resource-group-target="${escapeResourceHtml(group.label)}"`, group.label, !collapsed.has(group.label))}</span>` : ""}<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary><ul>`
+    + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(group.label)}">${escapeResourceHtml(group.label === "." ? "Top level" : group.label)}</span><span class="resource-count">${group.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>`
     + group.entries.map((entry) => `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(`${entry.name} ${entry.description ?? ""}`)}" data-resource-id="${escapeResourceHtml(entry.id)}" data-resource-path="${escapeResourceHtml(entry.path)}">`
       + `<button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(entry.name)}</span></span>`
       + (entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : "") + `</button>`
