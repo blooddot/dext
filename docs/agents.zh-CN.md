@@ -122,7 +122,7 @@ await ask({ input: "审查这次修改", cli: "pi", model: { model: "deepseek/de
 
 Pi 没有 Dext 工作区沙箱。Ask、预览和计划生成限制活动工具并拒绝白名单之外的调用，这些轮次禁用原生 MCP。受信工作区中，只读回合可通过 `dext_fetch` 读取网页：它拒绝本机与私网地址，也不发送任何凭据。GitHub 文件链接（`raw.githubusercontent.com`、`blob` 与 `raw` 链接）先经 `cdn.jsdelivr.net` 读取，失败再回退原 URL；需要可复现的内容时请用 commit 或 tag 而不是分支名。写入和计划执行要求受信任的本地工作区及显式 **Full access**，该权限能访问工作区之外。Pi 的 **Workspace write** 不可选，也不会静默升级。工具限制不等于对 Pi 进程或用户可执行配置的操作系统隔离。计划执行回合还会额外获得 `dext_update_todos`，把任务状态作为工具调用上报，而不必写 `dext-todo` 注释；没有计划在跑的回合会拒绝它。
 
-Dext 仅加载随包提供的扩展，关闭自动扩展、Skills、模板、主题及包更新，保留可信项目的 AGENTS.md/CLAUDE.md 等文本指令。`dext.agentCliArgs.pi` 仅接受重复的 `--append-system-prompt` 与参数值对；不可信请求关闭项目上下文发现。用户级模型和认证文件仍由 Pi 管理。
+Dext 加载随包提供的扩展，以及用户自己 Pi 设置（`pi install`）中列出的 Pi 包，并关闭自动功能：项目扩展、Skills、模板、主题及包更新。输入区 Model 与 Reasoning 旁的 **Plugins** 行选择本对话运行哪些已安装包，新对话默认全部启用。包工具通过通配工具选择到达模型，因此只读轮次会从选择中排除 `write`、`edit`、`bash`、`powershell`，并在 Dext 扩展里再次阻止它们。未安装 `pi-subagents` 时没有其他变化；安装后，只读轮次同样把其子会话限制为只读工具，因为子会话的工具来自它自己的 agent 文件而不是本轮的设置。保留可信项目的 AGENTS.md/CLAUDE.md 等文本指令。`dext.agentCliArgs.pi` 仅接受重复的 `--append-system-prompt` 与参数值对；不可信请求关闭项目上下文发现。用户级模型和认证文件仍由 Pi 管理。
 
 提问支持单选、多选和自定义答案；原生 select/confirm/input/editor 转为 Dext 表单。秘密答案不进入展示事件，取消、撤回和超时会结束等待。不支持异步提问、任意 TUI 嵌入、原生 schema、独立结果修复及原生 entry 分叉。类型化调用按轮注册 `dext_submit_result`，同轮校验后撤销；即将结束却未提交的回合会在同一轮内被要求提交一次结果。不自动重跑写入操作。
 
