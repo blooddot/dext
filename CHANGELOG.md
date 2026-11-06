@@ -34,6 +34,7 @@ All notable changes to Dext are documented in this file.
 - `template(input, source, values)` renders text from a Dext template whose front matter declares its fields, so no section can be added or reordered, and it writes nothing.
 - **Breaking:** an Agent patch is applied before the result returns; Accept/Reject cards, diff views and `dext.diff.defaultView` are gone. `agent(patch=false)` still returns text-only.
 - Every Resources category groups by directory, and discovery reads file-based APIs, rules, skills and MCP manifests without executing them.
+- A Skill's eye button on the Resources page writes `dext.hiddenSkills`, which keeps the Skill installed but out of the Input skills menu.
 - MCP tools are filed under **MCP** on the Resources page with per-node counts, and `dext.viewMcp` is now `dext.viewResources`.
 - The API directory and Global Resources open as editor tabs like History, and each panel key restores its own page and target after a reload.
 - **Breaking:** `dext.apiDirs`, `dext.skillDirs` and `dext.plan.directory` become `dext.apiDirectories`, `dext.skillDirectories` and `dext.planDirectory`. Replace them in `settings.json`.
