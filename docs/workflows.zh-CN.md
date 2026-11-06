@@ -389,7 +389,7 @@ Import 是确定性安装器，只有候选存在歧义时才使用当前 Agent�
 
 Command 校验后也按每一轮的“Agent 专用版 → 共享版”解析。兼容的 OpenCode 提示词模板会转换为共享 Dext command，并记录原始来源；不兼容的专用模板不会阻挡可用的共享模板。预览和保存的 `SOURCE.md` 会列出所有导入版本、来源路径、忽略的命令路由字段，以及未安装的原生插件功能。各版本分别保留自己的附属文件。Dext 不会改写正文中的 Agent 专用工具名或路径，也不会启用原生 hooks。新导入使用版本 2 包清单；已有版本 1 包仍可使用原来安装的内容，需要重新导入才能获得额外版本。`version` 表示清单格式，不是仓库发布版本；仓库导入会记录已发布 Release 的 `releaseTag`、仓库在 `package.json` 或插件清单中声明的 `upstreamVersion`，以及解析后的 `commit`。
 
-Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、128 个文件、总计 1 MB、单文件 200 KB）；任一选中项失败则整包失败。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
+Create 之前，每个被选中的 Skill 都会完整校验（front matter、标量 description、非空正文、id、安全路径、每个包最多 499 个附属文件、`SKILL.md` 上限 1 MiB、单文件上限 25 MiB、整包上限 50 MiB）；任一选中项失败则整包失败。其他资源草稿的 32 个文件、单文件 200 KB、总计 1 MB 限制不适用于 Skill 包。front matter 格式非法会失败，但缺少 front matter 只是警告。草稿把每个 Skill 放在 `skills/<id>/`，在 `skill-packs/<pack>/` 下写入清单和报告，把可用提示词命令复制到 `skill-packs/<pack>/commands/`，并在仓库提供 LICENSE 时保留它。Import 本身不写盘。Create 原子写入整个包，重新检查已存在的包目录和 Skill 目录，并且不会自动启用新 Skill；之后需在 Skills 控件中勾选。
 
 修改已有资源时，打开 **Resources** 并切换到它所在的 **Project / Global**，悬浮或键盘聚焦资源行，可选择 **Edit in Dext**、打开文件、打开所在目录、删除。**Edit in Dext** 会以该文档为初始目标打开资源对话——就是 **New API / New MCP / New Rule / New Skill** 打开的那个专用 Tab——描述改动、预览草稿后再保存。移除旧版本时使用同一行的删除按钮。独立 Skill 会连同自己的附属文件目录一起移除；导入包中的任意 Skill 的删除按钮会卸载整个包，包括所有 Skill、Agent 版本、commands、清单和报告，确认框会列出范围。删除使用系统回收站，存在未保存文件时会阻止操作。删除后 Resources 和 Input 会刷新。
 
