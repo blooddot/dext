@@ -13,6 +13,7 @@ English | [简体中文](settings.zh-CN.md)
 - `dext.submitOnEnter` (boolean, default `true`) — sends the message with Enter in Agent, Ask and Plan modes, using Shift+Enter for a newline. Set it to `false` to require Ctrl/Cmd+Enter. Code mode always runs with Ctrl/Cmd+Enter.
 - `dext.history.maxTurns` (integer, default `100`, minimum `1`) — turns kept across all conversations. The oldest turns are dropped first, which also removes them from the conversation tab strip.
 - `dext.history.maxOutputLength` (integer, default `64000`, minimum `1000`) — characters kept per stored input, process event and serialized output. A longer value keeps its first and last half, and the text removed when a turn is stored goes to that conversation's overflow file, which the turn can open. The same value also caps one live Process row while it streams.
+- `dext.captureSelectionOnCopy` (boolean, default `true`) — stages a text selection as a Dext file reference when you copy it with Ctrl+C (Cmd+C on macOS) in any workspace text file, including Markdown, plain text, logs and CSV, and gates the Ctrl+Shift+C (Cmd+C on macOS) copy of selected terminal output. The clipboard still receives the exact selected text, and a multi-cursor copy is left entirely to VS Code. Set it to `false` to leave both copies to VS Code. [File and selection references](workflows.md#file-and-selection-references) describes the Input reference that results; `dext.selectionActions.enabled` and `dext.copyFilePathOnCopy` control the **Add to Dext** hover and path staging instead.
 
 ## Storage and attachments
 
