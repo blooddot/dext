@@ -439,16 +439,16 @@ Code 运行会在 Node 内核中立即执行。每次 Dext API 调用都会派�
 
 ## UI 交互与表单
 
-所有 UI API 都等待用户回答，每次调用只记录一个工作流步骤。`presentation: "inline"` 在所属对话的 Process 上方展示卡片，`"dialog"` 使用弹窗。等待只暂停所属工作流，停止任务会中断等待并跳过后续步骤。
+所有 UI API 都等待用户回答，每次调用只记录一个工作流步骤。`presentation: "inline"` 在所属对话的 Process 上方展示卡片，`"dialog"` 使用弹窗；除 `ui.form` 默认 `"inline"` 外，各 API 默认 `"dialog"`。等待只暂停所属工作流，停止任务会中断等待并跳过后续步骤。
 
 ```ts
 ui.select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>
 ui.radio(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiRadioResult>
 ui.checkbox(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiCheckboxResult>
 ui.input(options: { label: string; placeholder?: string; multiline?: boolean; presentation?: "inline" | "dialog" }): Promise<UiInputResult>
-ui.confirm(options: { message: string; confirm_label?: string; cancel_label?: string; presentation?: "inline" | "dialog" }): Promise<UiConfirmResult>
+ui.confirm(options: { message: string; confirm_label?: string; cancel_label?: string; on_cancel?: "return" | "abort"; presentation?: "inline" | "dialog" }): Promise<UiConfirmResult>
 ui.alert(options: { message: string; acknowledge_label?: string; presentation?: "inline" | "dialog" }): Promise<UiAlertResult>
-ui.form(options: { title: string; fields: UiField[]; description?: string; submit_label?: string; cancel_label?: string; show_cancel?: boolean; presentation?: "inline" | "dialog" }): Promise<UiFormResult>
+ui.form(options: { title: string; fields: UiField[]; description?: string; submit_label?: string; cancel_label?: string; show_cancel?: boolean; actions?: UiFormAction[]; on_cancel?: "return" | "abort"; presentation?: "inline" | "dialog" }): Promise<UiFormResult>
 ```
 
 | API / 字段 | 控件 | 返回内容 |
@@ -459,9 +459,11 @@ ui.form(options: { title: string; fields: UiField[]; description?: string; submi
 | `ui.input` / `input` | 单行或多行文本 | `type: "input"`、字符串 `value` |
 | `ui.confirm` | 确认、取消按钮 | `type: "confirm"`、布尔值 `confirmed` |
 | `ui.alert` | 阅读信息后关闭 | `type: "alert"`、`status: "acknowledged"` 或 `"dismissed"` |
-| `ui.form` | 整组字段统一提交 | `type: "form"`、`status: "submitted"` 或 `"cancelled"`、按字段 ID 保存的 `answers` |
+| `ui.form` | 整组字段统一提交 | `type: "form"`、`status: "submitted"` 或 `"cancelled"`、按字段 ID 保存的 `answers`，以及按下按钮 id 的 `action` |
 
 API 结果带有 `kind: "ui"`。`answers` 中的字段答案只包含 `type` 及对应值。字段描述仅为数据，可以保存到变量复用；不要在 `fields` 中调用交互 API。
+
+`ui.form` 接受 `actions: UiFormAction[]`，用来替代单个 `submit_label` 按钮；按下按钮的 id 通过 `action` 返回，未声明任何按钮的表单使用 id 为 `submit` 的隐式按钮。`ui.confirm` 与 `ui.form` 还接受 `on_cancel`：`"return"`（默认）把取消作为结果返回，`"abort"` 则以取消错误结束整个工作流。
 
 ```ts
 import { ui, type UiField } from "dext";
@@ -502,4 +504,4 @@ Esc 先关闭下拉弹层，再关闭外层容器。单选支持方向键，复�
 
 工作流与 Agent 共用控件。Agent 仍按每题一个答案回传，保留异步回答、跳过及秘密输入语义；秘密输入提交后清空，不写入草稿或历史。公共字段不开放密码输入。
 
-限制为每张表单 32 个字段、每字段 200 个选项、标签和选项值最多 2,000 字符、文本最多 20,000 字符，表单和答案各最多 200,000 UTF-8 字节。不支持的类型或属性、重复 ID、重复选项值、重复选择、与原始请求不符的答案均被拒绝。未知历史结果通过有大小限制、转义后的文本或 JSON 只读展示，不能恢复执行。搜索、远程选项、自由创建、虚拟列表、条件字段和嵌套分组不在本版范围；普通输出使用 `console.log`，进度使用 Process/Todo。
+限制为每张表单 32 个字段、8 个 `actions`、每字段 200 个选项、标签和选项值最多 2,000 字符、文本最多 20,000 字符、字段 id 与操作 id 最多 128 字符，表单和答案各最多 200,000 UTF-8 字节。不支持的类型或属性、重复 ID、重复选项值、重复选择、与原始请求不符的答案均被拒绝。未知历史结果通过有大小限制、转义后的文本或 JSON 只读展示，不能恢复执行。搜索、远程选项、自由创建、虚拟列表、条件字段和嵌套分组不在本版范围；普通输出使用 `console.log`，进度使用 Process/Todo。

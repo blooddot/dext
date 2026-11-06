@@ -451,16 +451,16 @@ Old `.dx` checkpoints from earlier versions are not read and cannot be resumed; 
 
 ## UI interactions and forms
 
-All UI calls wait for the user's answer and produce one workflow step. `presentation: "inline"` places the interaction above Process in its conversation; `"dialog"` uses a dialog. Waiting pauses only the calling workflow. Stopping the task interrupts the wait and skips subsequent steps.
+All UI calls wait for the user's answer and produce one workflow step. `presentation: "inline"` places the interaction above Process in its conversation; `"dialog"` uses a dialog. Every API defaults to `"dialog"` except `ui.form`, which defaults to `"inline"`. Waiting pauses only the calling workflow. Stopping the task interrupts the wait and skips subsequent steps.
 
 ```ts
 ui.select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>
 ui.radio(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiRadioResult>
 ui.checkbox(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiCheckboxResult>
 ui.input(options: { label: string; placeholder?: string; multiline?: boolean; presentation?: "inline" | "dialog" }): Promise<UiInputResult>
-ui.confirm(options: { message: string; confirm_label?: string; cancel_label?: string; presentation?: "inline" | "dialog" }): Promise<UiConfirmResult>
+ui.confirm(options: { message: string; confirm_label?: string; cancel_label?: string; on_cancel?: "return" | "abort"; presentation?: "inline" | "dialog" }): Promise<UiConfirmResult>
 ui.alert(options: { message: string; acknowledge_label?: string; presentation?: "inline" | "dialog" }): Promise<UiAlertResult>
-ui.form(options: { title: string; fields: UiField[]; description?: string; submit_label?: string; cancel_label?: string; show_cancel?: boolean; presentation?: "inline" | "dialog" }): Promise<UiFormResult>
+ui.form(options: { title: string; fields: UiField[]; description?: string; submit_label?: string; cancel_label?: string; show_cancel?: boolean; actions?: UiFormAction[]; on_cancel?: "return" | "abort"; presentation?: "inline" | "dialog" }): Promise<UiFormResult>
 ```
 
 | API / field | Control | Result payload |
@@ -471,9 +471,11 @@ ui.form(options: { title: string; fields: UiField[]; description?: string; submi
 | `ui.input` / `input` | Single or multiline text | `type: "input"`, string `value` |
 | `ui.confirm` | Confirm / cancel buttons | `type: "confirm"`, boolean `confirmed` |
 | `ui.alert` | Acknowledge information | `type: "alert"`, `status: "acknowledged"` or `"dismissed"` |
-| `ui.form` | Submit all fields together | `type: "form"`, `status: "submitted"` or `"cancelled"`, `answers` keyed by field ID |
+| `ui.form` | Submit all fields together | `type: "form"`, `status: "submitted"` or `"cancelled"`, `answers` keyed by field ID, and `action` with the pressed button's id |
 
 API results include `kind: "ui"`. Field answers inside `answers` contain only `type` and their value properties. A field description creates no interaction itself; never put executing API calls inside `fields`.
+
+`ui.form` accepts `actions: UiFormAction[]`, which replace the single `submit_label` button; the pressed button's id comes back as `action`, and a form that declares no action uses the implicit button whose id is `submit`. `ui.confirm` and `ui.form` also accept `on_cancel`: `"return"` (the default) hands cancellation back as a result, while `"abort"` ends the whole workflow with a cancellation error.
 
 ```ts
 import { ui, type UiField } from "dext";
@@ -512,4 +514,4 @@ Dropdown Escape closes the option popup first; another Escape closes the contain
 
 Workflow and Agent inputs share controls. Native Agent questions still return one answer per question, preserve asynchronous answering and Skip, and clear secret input on submission without storing it in drafts or history. Public fields do not expose secret inputs.
 
-Limits: 32 fields, 200 options per field, 2,000 characters per label/value, 20,000 per text, and 200,000 UTF-8 bytes per form or answer payload. Unsupported fields/attributes, duplicate IDs/options/selections and answers not matching the live request are rejected. Unknown historical results use bounded, escaped read-only text/JSON; they never resume execution. Search, remote options, free creation, virtual lists, conditional fields and nested groups are outside this API version. Ordinary output uses `console.log`; progress remains in Process/Todo.
+Limits: 32 fields, 8 `actions` per form, 200 options per field, 2,000 characters per label/value, 20,000 per text, 128 characters per field or action id, and 200,000 UTF-8 bytes per form or answer payload. Unsupported fields/attributes, duplicate IDs/options/selections and answers not matching the live request are rejected. Unknown historical results use bounded, escaped read-only text/JSON; they never resume execution. Search, remote options, free creation, virtual lists, conditional fields and nested groups are outside this API version. Ordinary output uses `console.log`; progress remains in Process/Todo.
