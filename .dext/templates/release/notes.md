@@ -2,7 +2,6 @@
 dext-template:
   format: markdown
   title: 文档标题，调用方已给定，原样使用
-  title_zh: 中文部分的节标题，调用方已给定，原样使用
   summary_en: 2-4 句英文，说明本版最重要的事
   highlights_en:
     type: lines
@@ -40,36 +39,46 @@ dext-template:
 
 {{summary_en}}
 
-## Highlights
+## ✨ Highlights
+
 - {{highlights_en}}
 
-## Breaking changes
+## 💥 Breaking changes
+
 - {{breaking_en}}
 
-## New features
+## 🚀 New features
+
 - {{features_en}}
 
-## Fixes
+## 🐛 Fixes
+
 - {{fixes_en}}
 
-## Notes
+## 📝 Notes
+
 - {{notes_en}}
 
-## {{title_zh}}
+---
 
 {{summary_zh}}
 
-### 亮点
+## ✨ 亮点
+
 - {{highlights_zh}}
 
-### 破坏性变更
+## 💥 破坏性变更
+
 - {{breaking_zh}}
 
-### 新功能
+## 🚀 新功能
+
 - {{features_zh}}
 
-### 修复
+## 🐛 修复
+
 - {{fixes_zh}}
 
-### 其他说明
+## 📝 其他说明
+
 - {{notes_zh}}

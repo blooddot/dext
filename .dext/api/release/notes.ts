@@ -8,8 +8,6 @@ const PACKAGE_PATH = 'package.json';
 const CHANGELOG_PATH = 'CHANGELOG.md';
 const NOTES_DIR = 'docs/releases';
 const NOTES_TEMPLATE = '.dext/templates/release/notes.md';
-/** 模板里中文部分的节标题；也放在这里，免得模板文件和代码各写一份。 */
-const NOTES_DIVIDER = '简体中文';
 const RULES = ['release/notes.md'];
 const GIT_TIMEOUT_MS = 60_000;
 const STAT_CHAR_LIMIT = 20_000;
@@ -144,7 +142,7 @@ async function readChanges(command: string): Promise<TerminalResult> {
 }
 
 async function renderNotes(title: string, input: string): Promise<TemplateResult> {
-  return template({ source: NOTES_TEMPLATE, values: { title, title_zh: NOTES_DIVIDER }, input, rules: RULES });
+  return template({ source: NOTES_TEMPLATE, values: { title }, input, rules: RULES });
 }
 
 // ---------------------------------------------------------------- 通用解析
