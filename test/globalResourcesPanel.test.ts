@@ -32,7 +32,7 @@ function entry(kind: ResourceKind, name: string): ResourceEntry {
     name,
     path: `${name}.jsonc`,
     group: kind,
-    source: { kind: "global", label: "Global" }
+    source: { kind: "global" }
   };
 }
 

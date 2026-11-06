@@ -15,7 +15,7 @@ afterEach(async () => { await rm(workspace, { recursive: true, force: true }); }
 
 function entry(kind: ResourceEntry["kind"], path: string, scope: ResourceEntry["scope"] = "project"): ResourceEntry {
   return { id: `${kind}:${scope}:${path}`, kind, path, scope, name: path, group: ".",
-    source: { kind: scope, label: scope, path: join(root, RESOURCE_DIRECTORIES[kind], path) } };
+    source: { kind: scope, path: join(root, RESOURCE_DIRECTORIES[kind], path) } };
 }
 async function put(path: string, content = "source"): Promise<void> {
   const file = join(root, path);
@@ -39,7 +39,7 @@ describe("managed resource actions", () => {
     expect(managedResourcePath(source, root)).toBe(resolve(root, "rules/team/style.md"));
     expect(() => managedResourcePath({ ...source, source: { ...source.source, path: join(workspace, "outside.md") } }, root)).toThrow("outside");
     expect(() => managedResourcePath({ ...source, path: "../outside.md" }, root)).toThrow("Invalid resource path");
-    expect(() => managedResourcePath({ ...source, source: { kind: "directory", label: "builtin" } }, root)).toThrow("read-only");
+    expect(() => managedResourcePath({ ...source, source: { kind: "directory" } }, root)).toThrow("read-only");
     expect(() => managedResourcePath(entry("file", "README.md", scope), root)).toThrow("read-only");
   });
 

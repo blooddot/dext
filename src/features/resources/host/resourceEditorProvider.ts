@@ -144,7 +144,7 @@ export function apiEntry(method: ApiCallable): ResourceEntry {
       returnType
     },
     // Callable contracts describe runtime capabilities, not resource source files.
-    source: { kind: "directory", label: method.source }
+    source: { kind: "directory" }
   };
 }
 
@@ -174,7 +174,7 @@ export function apiReferenceEntry(module: ApiReferenceModule): ResourceEntry {
     reference: module,
     // A reference entry ships inside the extension's own declarations rather than
     // in a resource directory, so it is listed but not editable or openable.
-    source: { kind: "directory", label: module.id.startsWith("node:") ? "module" : "global" }
+    source: { kind: "directory" }
   };
 }
 
@@ -199,7 +199,7 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
           group: kind === "api"
             ? file.name.split(".").slice(0, -1).join(".") || "."
             : resourceDirectorySegments(kind, file.path).join("/") || ".",
-          source: { kind: file.scope, label: file.scope === "project" ? "Project" : "Global", path: `${directory}/${RESOURCE_DIRECTORIES[kind]}/${file.path}` }
+          source: { kind: file.scope, path: `${directory}/${RESOURCE_DIRECTORIES[kind]}/${file.path}` }
         }];
       })
     ));

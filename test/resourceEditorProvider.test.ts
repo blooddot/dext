@@ -4,7 +4,7 @@ import { buildResourceDefinition, buildResourceList, filterResourceEntries, grou
 
 const entry = (name: string, path: string, kind: ResourceEntry["kind"] = "api"): ResourceEntry => ({
   id: `${kind}:project:${path}`, kind, scope: "project", name, path, group: path.split("/").slice(0, -1).join("/") || ".",
-  source: { kind: "project", label: "Project", path: `.dext/${kind}/${path}` }
+  source: { kind: "project", path: `.dext/${kind}/${path}` }
 });
 
 const entries = [entry("Task.Query", "Task/Query.ts"), entry("Task.Stats", "Task/Stats.ts"), entry("User.Get", "User/Get.ts")];
@@ -43,7 +43,7 @@ describe("resource documents", () => {
 
   it("offers source management actions only for managed files, with custom command prefixes in every layout", () => {
     const source = entry("review", "review/SKILL.md", "skill");
-    const builtin: ResourceEntry = { ...source, id: "builtin", source: { kind: "directory", label: "builtin", path: "/builtin/SKILL.md" } };
+    const builtin: ResourceEntry = { ...source, id: "builtin", source: { kind: "directory", path: "/builtin/SKILL.md" } };
     const list = buildResourceList({ kind: "skill", scope: "project", entries: [source, builtin] });
     for (const layout of [{}, { categoryTree: true }, { apiTree: true }]) {
       const html = renderResourceList(list, { ...layout, commandPrefix: "custom" });

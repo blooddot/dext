@@ -10,7 +10,6 @@ import { type ResourceKind, type ResourceScope } from "./resourceSession.js";
 
 export interface ResourceSourceRef {
   kind: "project" | "global" | "directory";
-  label: string;
   path?: string;
 }
 

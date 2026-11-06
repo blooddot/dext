@@ -113,7 +113,7 @@ describe("resource documents", () => {
   it("keeps Top level APIs separate from node and ui namespaces", () => {
     const entry = (name: string): ResourceEntry => ({
       id: `api:global:${name}`, kind: "api", scope: "global", name, path: `${name.replaceAll(".", "/")}.ts`,
-      group: name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : ".", source: { kind: "directory", label: "builtin" }
+      group: name.includes(".") ? name.slice(0, name.lastIndexOf(".")) : ".", source: { kind: "directory" }
     });
     const html = renderResourceList(buildResourceList({ kind: "api", scope: "global", entries: [entry("ask"), entry("node.path"), entry("ui.input")] }), { apiTree: true });
     expect(html).toMatch(/data-resource-node="\."[\s\S]*Top level[\s\S]*ask/);
@@ -136,7 +136,7 @@ describe("resource documents", () => {
   it("files MCP tool APIs under the MCP category", () => {
     const api = (name: string, kind: ResourceEntry["kind"] = "api"): ResourceEntry => ({
       id: `${kind}:project:${name}`, kind, scope: "project", name, path: `${name}.ts`, group: ".",
-      source: { kind: "project", label: "Project" }
+      source: { kind: "project" }
     });
     expect(resourceCategory(api("mcp.files.read"))).toBe("mcp");
     expect(resourceCategory(api("mcp.files.read", "mcp"))).toBe("mcp");

@@ -123,7 +123,7 @@ describe("API reference catalog", () => {
       expect(entry.kind).toBe("api");
       expect(entry.reference).toBeDefined();
       // A reference is a declaration, not a resource file: nothing to open or run.
-      expect(entry.source).toEqual({ kind: "directory", label: entry.group === "node" ? "module" : "global" });
+      expect(entry.source).toEqual({ kind: "directory" });
       expect(entry.api).toBeUndefined();
     }
     expect(entries[0]!.description).toBe("Utilities for working with file and directory paths.");
