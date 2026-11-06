@@ -87,12 +87,6 @@ node -e "const {DatabaseSync}=require('node:sqlite');new DatabaseSync(process.ar
 
 Provider 会话 id 按 Provider 分别保存，且只会由上报它的 Provider 写入。执行快照是唯一的配对依据：Profile 与 Provider 会话都来自同一个会话选择，因此 Harness 的 `dsh1:...` 不可能到达 Codex 并触发 `thread/resume` 的 `-32600 invalid session id`。实现不做跨 Provider 的静默回退，真正的 Provider 错误仍会如实上报。
 
-### 本轮保留的真实共享依赖
-
-`migrationExceptions` 已为空：上一轮保留的依赖都已有了新所有者。`domain/planTodoProgress.ts` → `features/agents/domain/agentTodoTracking.ts`（feature domain 之间允许）；`presentation/historyRender.ts`、`host/historyStore.ts` → `features/workspace/domain/fileReference.ts` 与 `shared/lib/markdownCopy.ts`（跨 feature domain 与共享内核）；`host/historyEditorProvider.ts` → `platform/vscode/contextHost.ts`（host 使用 VS Code 适配器）；`host/uiInteractionBroker.ts` → `shared/contracts/uiForm.ts`、`shared/protocol/executionErrors.ts`；`browser/transcriptView.ts` → `features/workspace/domain/fileReference.ts` 与 `platform/browser/fileReferenceChip.ts`（读取可读的 `@` 标签并渲染 chip）。
-
-剩余的跨 feature host 耦合登记在 `crossFeatureHostCouplings`：`workflow/host/runtime` → `agents/host/*`。下一轮通过 `app` 注入端口后删除登记。
-
 ## 验证（第三轮）
 
 结果分别记录；未执行的项目不计为通过。
@@ -118,3 +112,18 @@ Provider 会话 id 按 Provider 分别保存，且只会由上报它的 Provider
 - Agent 执行器、CLI 传输、工作流内核、MCP、补全与资源编辑只更新了路径，行为未改。
 - `core/types.ts` 搬到 `shared/contracts/types.ts`，本轮未拆分内容；下一轮按所有者拆分并收缩共享契约。
 - 下一轮请从本文的迁移记录开始；不要把历史表格当作当前导入指引。
+
+### 本轮保留的真实共享依赖
+
+`migrationExceptions` 已为空：上一轮保留的依赖都已有了新所有者。
+
+| 从 | 到 | 允许原因 |
+| --- | --- | --- |
+| `features/conversations/domain/planTodoProgress.ts` | `features/agents/domain/agentTodoTracking.ts` | 共享 todo reducer；feature domain → feature domain 允许 |
+| `features/conversations/presentation/historyRender.ts` | `features/workspace/domain/fileReference.ts`、`shared/lib/markdownCopy.ts` | 跨 feature domain 与共享内核 |
+| `features/conversations/host/historyStore.ts` | `features/workspace/domain/fileReference.ts` | 跨 feature domain |
+| `features/conversations/host/historyEditorProvider.ts` | `platform/vscode/contextHost.ts` | host → VS Code 适配器允许 |
+| `features/conversations/host/uiInteractionBroker.ts` | `shared/contracts/uiForm.ts`、`shared/protocol/executionErrors.ts` | 共享内核 |
+| `features/conversations/browser/transcriptView.ts` | `features/workspace/domain/fileReference.ts`、`platform/browser/fileReferenceChip.ts` | browser → 共享 workspace domain 与 chip 基础组件 |
+
+剩余的跨 feature host 耦合登记在 `crossFeatureHostCouplings`：`workflow/host/runtime` → `agents/host/*`。下一轮通过 `app` 注入端口后删除登记。

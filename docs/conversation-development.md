@@ -12,7 +12,7 @@ It is the current operating guide; historical notes are separated at the bottom.
 - The third wave dissolved `src/core/` into `features/{agents,workflow,mcp,workspace}`,
   `shared/` and `platform/`, moved the VS Code adapters to `platform/vscode/`, the
   composition roots to `src/app/`, and the remaining conversation DOM to
-  `features/conversations/browser/`. `src/` now contains only `extension.ts`.
+  `features/conversations/browser/`. The `src/` root now contains only `extension.ts`.
 
 ## Removed entries and their targets (historical)
 
