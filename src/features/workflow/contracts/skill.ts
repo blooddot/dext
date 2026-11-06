@@ -46,6 +46,8 @@ export interface SkillSummary {
   /** Automatically resolved for the current Input Agent. */
   variant?: string;
   available?: boolean;
+  /** Kept out of the composer's Input menu, but still loadable by id. */
+  hidden?: boolean;
   /** Present when `.dext/skill-packs/<pack>/pack.json` declared this skill. */
   packId?: string;
   packName?: string;

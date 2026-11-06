@@ -14,10 +14,13 @@ export interface SkillSelectionGroup {
 
 export function groupSkills(
   skills: readonly SkillSummary[],
-  commands: readonly SkillCommandSummary[]
+  commands: readonly SkillCommandSummary[],
+  selected: readonly string[] = []
 ): SkillSelectionGroup[] {
   const groups = new Map<string, SkillSelectionGroup>();
-  for (const skill of [...skills].sort((left, right) => left.id.localeCompare(right.id))) {
+  // A hidden Skill only keeps its row while it is already selected, so the
+  // user can still clear it instead of it vanishing from the menu.
+  for (const skill of [...skills].filter((item) => !item.hidden || selected.includes(item.id)).sort((left, right) => left.id.localeCompare(right.id))) {
     const key = skill.packId ?? "";
     const group = groups.get(key) ?? {
       ...(skill.packId ? { packId: skill.packId } : {}),

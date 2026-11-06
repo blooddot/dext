@@ -81,13 +81,17 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
         ...(typeof payload.path === "string" ? { path: payload.path } : {}),
         ...(typeof payload.query === "string" ? { query: payload.query } : {})
       };
+      // These commands change what this list itself renders. A Skill's visibility
+      // does too, but its checkbox already flipped in the page, so re-rendering
+      // would only cost a file scan and a visible repaint.
+      const reRendersList = /\.(?:deleteResource|upgradeSkillPack)$/.test(payload.command);
       try {
         const changed = await this.options.onCommand?.(payload.command, parameters);
-        if (changed === true && (payload.command.endsWith(".deleteResource") || payload.command.endsWith(".upgradeSkillPack"))) {
+        if (changed === true && reRendersList) {
           await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
         }
       } catch (error) {
-        if (payload.command.endsWith(".deleteResource") || payload.command.endsWith(".upgradeSkillPack")) await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
+        if (reRendersList) await this.navigate({ query: current.query, scrollTop: current.scrollTop, scope: current.scope, collapsed: current.collapsed });
         throw error;
       }
       return;

@@ -24,6 +24,7 @@ import { agentResultCandidates, parseAgentResult } from "../shared/protocol/resu
 import { createResultRepair } from "../features/agents/host/resultRepair.js";
 import { DextRuntime } from "../features/workflow/host/runtime.js";
 import { SkillCatalog } from "../features/workflow/host/skillCatalog.js";
+import { isSkillId } from "../features/workflow/contracts/skill.js";
 import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
 import { AGENT_PERMISSIONS, DEFAULT_AGENT_PROFILE_IDS, SUPPORTED_AGENT_PROFILE_IDS, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
 import { AgentProfileStore } from "../features/agents/host/agentProfiles.js";
@@ -44,7 +45,7 @@ import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "../featu
 import { splitPlanResponse } from "../features/conversations/domain/planResponse.js";
 import { DextStorage } from "../platform/vscode/dextStorage.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
-import type { ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
+import { skillEntryId, type ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
 import { isSkillPackId, normalizeSkillPackManifest, skillPackId, SKILL_PACK_MANIFEST_FILE, SKILL_PACK_SOURCE_FILE, SKILL_PACKS_DIRECTORY, SKILLS_DIRECTORY, type SkillPackManifest } from "../features/resources/domain/skillPack.js";
 import { buildSkillPackUpgradePlan, compareSkillPackContent, type InstalledSkillPack } from "../features/resources/domain/skillPackUpgrade.js";
@@ -293,6 +294,48 @@ export class DextApplication {
       try { directories.push(planPathSegments(entry).join("/")); } catch { /* an unusable path is ignored */ }
     }
     return directories;
+  }
+
+  /** Skill ids the composer's Input menu leaves out. They stay installed, so
+   * an API or an already stored selection can still load them. */
+  private hiddenSkillIds(): Set<string> {
+    const configured: unknown = vscode.workspace.getConfiguration("dext").get("hiddenSkills");
+    return new Set(Array.isArray(configured) ? configured.filter(isSkillId) : []);
+  }
+
+  /** Flips one Skill's Input-menu visibility. The workspace setting outlives a
+   * Skill pack upgrade, unlike a flag inside SKILL.md. */
+  async toggleHiddenSkill(id: string): Promise<boolean> {
+    if (!isSkillId(id)) throw new Error(`Unsafe Skill id '${String(id)}'.`);
+    const hidden = !this.hiddenSkillIds().has(id);
+    await this.setHiddenSkills([id], hidden);
+    return hidden;
+  }
+
+  /** Hides or shows several Skills in one write; a pack row uses this. */
+  async setHiddenSkills(ids: readonly string[], hidden: boolean): Promise<void> {
+    if (!vscode.workspace.workspaceFolders?.length) throw new Error("Hiding a Skill from the Input menu needs an open workspace.");
+    const next = this.hiddenSkillIds();
+    for (const id of ids) {
+      if (!isSkillId(id)) continue;
+      if (hidden) next.add(id); else next.delete(id);
+    }
+    await vscode.workspace.getConfiguration("dext").update("hiddenSkills", [...next].sort(), vscode.ConfigurationTarget.Workspace);
+  }
+
+  /** Hides every Skill of a pack, or shows them all when any is hidden. */
+  async toggleSkillPackVisibility(packId: string, scope?: ResourceScope): Promise<boolean> {
+    const skills = (await this.listResources("skill"))
+      .filter((item) => item.pack?.id === packId && (!scope || item.scope === scope))
+      .flatMap((item) => {
+        const id = skillEntryId({ kind: "skill", path: item.path });
+        return id ? [id] : [];
+      });
+    if (!skills.length) throw new Error(`Skill pack '${packId}' has no installed Skills.`);
+    const hidden = new Set(this.hiddenSkillIds());
+    const hide = skills.some((id) => !hidden.has(id));
+    await this.setHiddenSkills(skills, hide);
+    return hide;
   }
 
   /** The workspace-relative directory saved plans go in, or the default. */
@@ -860,6 +903,7 @@ export class DextApplication {
     const theme = loadEditorTokenTheme();
     const selection = this.agents.currentSelection();
     const skillAgent = this.agents.list().find((profile) => profile.id === selection.profileId)?.provider;
+    const hiddenSkills = this.hiddenSkillIds();
     return {
       ...(theme ? { theme } : {}),
       methods: this.registry.list().map((method) => ({
@@ -888,7 +932,8 @@ export class DextApplication {
         ...(skill.available !== undefined ? { available: skill.available } : {}),
         commandIds: [...skill.commandIds],
         ...(skill.packId ? { packId: skill.packId } : {}),
-        ...(skill.packName ? { packName: skill.packName } : {})
+        ...(skill.packName ? { packName: skill.packName } : {}),
+        ...(hiddenSkills.has(skill.id) ? { hidden: true } : {})
       })),
       skillCommands: this.skills.commands(skillAgent),
       piPlugins: installedPiPlugins().map(({ id, label }) => ({ id, label })),
@@ -1047,11 +1092,12 @@ export class DextApplication {
     return vscode.Uri.joinPath(folder.uri, ".dext", RESOURCE_DIRECTORIES[type]);
   }
 
-  async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }>> {
-    const items: Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }> = [];
+  async listResources(type: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef; hidden?: boolean }>> {
+    const items: Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef; hidden?: boolean }> = [];
     for (const scope of ["project", "global"] as const) {
       if (scope === "project" && (!vscode.workspace.workspaceFolders?.[0] || !this.workspaceTrusted)) continue;
       const root = this.resourceRoot(type, scope);
+      const hiddenSkills = type === "skill" ? this.hiddenSkillIds() : undefined;
       const owned = type === "skill" ? await this.skillPackRefs(scope) : undefined;
       const visit = async (directory: vscode.Uri, prefix = "", depth = 0): Promise<void> => {
         if (depth > 12 || items.length >= 2000) return;
@@ -1066,7 +1112,9 @@ export class DextApplication {
           try { resourcePathSegments(type, path); } catch { continue; }
           const label = type === "file" ? path : type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
           const pack = owned?.get(path);
-          items.push({ name: label, path, scope, ...(pack ? { pack } : {}) });
+          const skillId = skillEntryId({ kind: type, path });
+          const hidden = Boolean(skillId && hiddenSkills?.has(skillId));
+          items.push({ name: label, path, scope, ...(pack ? { pack } : {}), ...(hidden ? { hidden: true } : {}) });
         }
       };
       await visit(root);

@@ -34,6 +34,16 @@ describe("skill selection tree", () => {
     expect(groups[1]?.commands.map((item) => item.id)).toEqual(["loose-command"]);
   });
 
+  it("keeps hidden skills out of the menu unless they are selected", () => {
+    const skills = [skill("loose"), { ...skill("api-only", "ponytail"), hidden: true }, skill("review", "ponytail")];
+    expect(groupSkills(skills, []).map((group) => [group.packId, group.skills.map((item) => item.id)])).toEqual([
+      ["ponytail", ["review"]],
+      [undefined, ["loose"]]
+    ]);
+    expect(groupSkills(skills, [], ["api-only"]).flatMap((group) => group.skills.map((item) => item.id)))
+      .toEqual(["api-only", "review", "loose"]);
+  });
+
   it("computes tri-state packs and toggles every member", () => {
     expect(packCheckState(["a", "b"], [])).toBe("unchecked");
     expect(packCheckState(["a", "b"], ["a"])).toBe("mixed");

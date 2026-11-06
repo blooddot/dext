@@ -858,7 +858,7 @@ function displayOptionValue(value: string): string {
 function renderSkillsMenu(state: SidebarState, selected: readonly string[], enabled: boolean): void {
   const menu = elements.skillsMenu;
   menu.replaceChildren();
-  const groups = groupSkills(state.skills ?? [], state.skillCommands ?? []);
+  const groups = groupSkills(state.skills ?? [], state.skillCommands ?? [], selected);
   if (!enabled) {
     const note = document.createElement("div");
     note.className = "composer-menu-empty";
@@ -869,7 +869,9 @@ function renderSkillsMenu(state: SidebarState, selected: readonly string[], enab
   if (!groups.length) {
     const note = document.createElement("div");
     note.className = "composer-menu-empty";
-    note.textContent = "No skills are installed. Add a SKILL.md package under .dext/skills or import a GitHub repository.";
+    note.textContent = (state.skills ?? []).length
+      ? "Every installed Skill is hidden from this menu. Toggle visibility in the Dext Resources page."
+      : "No skills are installed. Add a SKILL.md package under .dext/skills or import a GitHub repository.";
     menu.append(note);
     return;
   }

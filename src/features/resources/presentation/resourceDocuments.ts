@@ -1,6 +1,6 @@
 import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
-import type { ResourceDefinitionDocument, ResourceEntry, ResourceListDocument, ResourcePackRef, ResourcePanelOptions, ResourceTreeNode } from "../contracts/resourceDocuments.js";
+import { skillEntryId, type ResourceDefinitionDocument, type ResourceEntry, type ResourceListDocument, type ResourcePackRef, type ResourcePanelOptions, type ResourceTreeNode } from "../contracts/resourceDocuments.js";
 import { RESOURCE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
 import { renderApiFlow } from "./apiFlowDiagram.js";
 import { escapeHtml as escapeResourceHtml } from "../../../shared/lib/html.js";
@@ -189,10 +189,13 @@ function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[
   const action = pack.updatable
     ? `<span class="resource-group-actions resource-pack-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("cloud-download")}</button></span>`
     : "";
+  const skills = entries.flatMap((entry) => (skillEntryId(entry) ? [entry] : []));
+  const shown = skills.filter((entry) => !entry.hidden).length;
+  const visibility = `<input type="checkbox" class="resource-pack-visibility" data-resource-command="${prefix}.toggleSkillPackVisibility" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Show this pack's Skills in the Input skills menu" aria-label="Show this pack's Skills in the Input skills menu"${shown === skills.length && skills.length ? " checked" : ""}${skills.length ? "" : " disabled"}${shown > 0 && shown < skills.length ? ' data-resource-indeterminate="1"' : ""}>`;
   return `<details class="resource-group resource-pack" data-resource-group="Skill" data-resource-node="${escapeResourceHtml(node)}" data-resource-type="skill" data-resource-pack="${escapeResourceHtml(pack.id)}"${collapsed.has(node) ? "" : " open"}>`
     + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node)}">${escapeResourceHtml(pack.name)}</span>`
     + (version ? `<span class="resource-pack-version">${escapeResourceHtml(version)}</span>` : "")
-    + `<span class="resource-count">${entries.length}</span>${action}<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary>`
+    + `<span class="resource-count">${entries.length}</span>${action}${visibility}<span class="resource-group-chevron" aria-hidden="true">⌄</span></summary>`
     + `<ul>${[...entries].sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
 }
 
@@ -259,8 +262,15 @@ export function renderResourceActions(entry: ResourceEntry, prefix: string): str
   ).join("")}</span>`;
 }
 
+/** A Skill's Input-menu visibility. Always visible, unlike the hover toolbar,
+ * so its state reads at a glance. */
+export function renderSkillVisibility(entry: ResourceEntry, prefix: string): string {
+  if (!skillEntryId(entry)) return "";
+  return `<input type="checkbox" class="resource-entry-visibility" data-resource-command="${escapeResourceHtml(prefix)}.toggleSkillVisibility" data-resource-id="${escapeResourceHtml(entry.id)}" title="Show in the Input skills menu" aria-label="Show in the Input skills menu"${entry.hidden ? "" : " checked"}>`;
+}
+
 export function renderTreeEntry(entry: ResourceEntry, prefix = "dext"): string {
-  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span><span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>${entry.api ? `<code class="resource-entry-signature">${apiEntries(entry).map(item => renderApiSignature(item, true)).join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button>${renderResourceActions(entry, prefix)}</li>`;
+  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span><span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>${entry.api ? `<code class="resource-entry-signature">${apiEntries(entry).map(item => renderApiSignature(item, true)).join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button>${renderSkillVisibility(entry, prefix)}${renderResourceActions(entry, prefix)}</li>`;
 }
 
 
@@ -356,6 +366,22 @@ export function resourceClientScript(state?: EditorTabState): string {
       var previous=button.textContent;button.textContent='Copied';
       setTimeout(function(){button.textContent=previous;},1200);
     }
+    function packMark(box){var pack=box.closest('details[data-resource-pack]');return pack?[pack,pack.querySelector('.resource-pack-visibility')]:[null,null];}
+    /* The host does not re-render the list for a visibility toggle, so the pack's
+       checked/indeterminate state is recomputed here. */
+    function syncPack(box){
+      var found=packMark(box),pack=found[0],mark=found[1];
+      if(!pack||!mark)return;
+      var boxes=pack.querySelectorAll('.resource-entry-visibility'),shown=0;
+      boxes.forEach(function(box){if(box.checked)shown++;});
+      mark.checked=shown===boxes.length;mark.indeterminate=shown>0&&shown<boxes.length;
+    }
+    function applyPack(mark){
+      var found=packMark(mark),pack=found[0];
+      if(!pack)return;
+      pack.querySelectorAll('.resource-entry-visibility').forEach(function(box){box.checked=mark.checked;});
+      mark.indeterminate=false;
+    }
     document.addEventListener('click',function(event){
       var element=event.target.closest('[data-resource-command],[data-resource-open],[data-resource-navigate],[data-resource-toggle],[data-resource-toggle-all],[data-resource-group-action],[data-resource-copy],button[data-resource-scope]');
       if(!element||element.disabled)return;
@@ -380,7 +406,12 @@ export function resourceClientScript(state?: EditorTabState): string {
         path:element.getAttribute('data-resource-path')||undefined,id:element.getAttribute('data-resource-id')||undefined,
         pack:element.getAttribute('data-resource-pack')||undefined
       }:id?{type:'resourceOpen',id:id}:null;
-      if(message){if(command&&message.type==='resourceCommand')event.preventDefault();if(document.querySelector('.resource-navigation'))message.viewState=viewState();api.postMessage(message);}
+      if(message){if(command&&message.type==='resourceCommand'){
+        /* A checkbox already flipped its checkedness before this handler ran, so
+           preventing the default would roll that back; only sync the pack. */
+        if(element.type==='checkbox'){if(element.classList.contains('resource-pack-visibility'))applyPack(element);else syncPack(element);}
+        else event.preventDefault();
+      }if(document.querySelector('.resource-navigation'))message.viewState=viewState();api.postMessage(message);}
     });
     document.addEventListener('toggle',function(event){
       var node=event.target;if(!node.matches('[data-resource-node]'))return;
@@ -402,6 +433,7 @@ export function resourceClientScript(state?: EditorTabState): string {
       syncButtons();
     }
     document.addEventListener('input',function(event){if(event.target.matches('[data-resource-search]'))filter();});
+    document.querySelectorAll('input[data-resource-indeterminate]').forEach(function(box){box.indeterminate=true;});
     filter();
     var navigation=document.querySelector('[data-resource-scroll]');
     if(navigation)requestAnimationFrame(function(){window.scrollTo(0,Number(navigation.getAttribute('data-resource-scroll'))||0);});
@@ -420,7 +452,7 @@ export function renderResourceList(document: ResourceListDocument, options: Reso
       + `<button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(entry.name)}</span>`
       + `<span class="resource-source">${escapeResourceHtml(entry.source.label)}</span></span>`
       + (entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : "") + `</button>`
-      + `${renderResourceActions(entry, prefix)}</li>`).join("")
+      + `${renderSkillVisibility(entry, prefix)}${renderResourceActions(entry, prefix)}</li>`).join("")
     + `</ul>${group.entries.length ? "" : `<p class="resource-empty">No ${escapeResourceHtml(group.label)} resources found.</p>`}</details>`).join("");
   return `<div class="resource-panel" data-resource-kind="${document.kind}" data-resource-scope="${document.scope}">`
     + renderResourceNavigation(options)

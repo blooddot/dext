@@ -874,6 +874,14 @@
           "default": [],
           "markdownDescription": "Additional workspace-relative directories to discover Skills in, for example `tools/skills`. `.dext/skills` and Dext's global Skill storage are always searched too."
         },
+        "dext.hiddenSkills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Skill ids kept out of the Input skills menu while staying installed, so an API or a stored selection can still load them. The Dext Resources page writes this setting when you toggle a Skill's eye button."
+        },
         "dext.mcpDirectories": {
           "type": "array",
           "items": {

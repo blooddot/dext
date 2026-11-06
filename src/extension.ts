@@ -7,7 +7,7 @@ import { describeApiSource } from "./features/workflow/host/apiSource.js";
 import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
 import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
 import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
-import { type ResourceEditorDataSource } from "./features/resources/contracts/resourceDocuments.js";
+import { skillEntryId, type ResourceEditorDataSource } from "./features/resources/contracts/resourceDocuments.js";
 import type { ResourceScope } from "./features/resources/contracts/resourceSession.js";
 import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.js";
 import { GlobalResourcesEditorProvider } from "./features/resources/host/globalResourcesEditorProvider.js";
@@ -169,7 +169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     methods: () => application.registry.list(), files: resourceDataSource, reference: apiReference
   });
   const resourceCommandFor = (scope: ResourceScope, dataSource: ResourceEditorDataSource) =>
-    async (command: string, payload: { id?: string; kind?: string; pack?: string; path?: string }): Promise<void | boolean> => {
+    async (command: string, payload: { id?: string; kind?: string; pack?: string; path?: string; scope?: ResourceScope }): Promise<void | boolean> => {
       if (command.endsWith(".upgradeSkillPack")) {
         if (!payload.pack) throw new Error("Select a Skill pack to update.");
         const result = await vscode.window.withProgress({
@@ -204,6 +204,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           void vscode.window.showInformationMessage(`Skill pack '${result.name}' is already up to date (${result.to}).`);
         }
         return result.updated || Boolean(result.refreshed);
+      }
+      if (command.endsWith(".toggleSkillPackVisibility")) {
+        if (!payload.pack) throw new Error("Select a Skill pack to toggle.");
+        await application.toggleSkillPackVisibility(payload.pack, payload.scope);
+        await sidebar.refresh();
+        return true;
+      }
+      if (command.endsWith(".toggleSkillVisibility")) {
+        const document = payload.id ? await dataSource.definition(payload.id) : undefined;
+        const skillId = document ? skillEntryId(document.entry) : undefined;
+        if (!document || !skillId) throw new Error("This resource is not a Skill's SKILL.md file.");
+        await application.toggleHiddenSkill(skillId);
+        await sidebar.refresh();
+        return true;
       }
       if (command.endsWith(".editResourceDocument")) {
         const document = payload.id ? await dataSource.definition(payload.id) : undefined;

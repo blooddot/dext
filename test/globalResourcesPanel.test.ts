@@ -58,6 +58,21 @@ describe("global resources panel", () => {
     }
   });
 
+  it("updates a Skill's visibility without re-rendering the list", async () => {
+    const files = [{ name: "review", path: "review/SKILL.md", scope: "project" as const }];
+    const dataSource = createFileResourceDataSource({ roots: () => ({ project: "C:/project/.dext" }), listFiles: async kind => kind === "skill" ? files : [], readFile: async () => "Skill source" });
+    const list = vi.spyOn(dataSource, "list");
+    const host = new FakeHost();
+    const manager = new EditorTabManager(host);
+    const provider = new GlobalResourcesEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "project", onCommand: async () => true });
+    await provider.showList();
+    const before = host.created[0]!.panel.html;
+    await provider.handleMessage(provider.listTabKey, { type: "resourceCommand", command: "dext.toggleSkillVisibility", id: "skill:project:review/SKILL.md" });
+    // The page flips the checkbox itself, so rescanning the disk here is pure lag.
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(host.created[0]!.panel.html).toBe(before);
+  });
+
   it("refreshes after a partially failed deletion and reports the original error", async () => {
     let files = [{ name: "review", path: "review/SKILL.md", scope: "global" as const }];
     const dataSource = createFileResourceDataSource({ roots: () => ({ global: "C:/global" }), listFiles: async kind => kind === "skill" ? files : [], readFile: async () => "Skill source" });
@@ -232,6 +247,35 @@ describe("global resources panel", () => {
     expect(html).toContain('data-resource-command="dext.upgradeSkillPack"');
     expect(html).toContain('data-resource-id="skill:global:standalone/SKILL.md"');
     expect(html).toContain('data-resource-id="skill:global:review/SKILL.md"');
+  });
+
+  it("shows an always-visible visibility checkbox on Skill rows and on the pack row", () => {
+    const skillEntry = (name: string, hidden = false): ResourceEntry => ({
+      ...entry("skill", name),
+      id: `skill:global:${name}/SKILL.md`,
+      path: `${name}/SKILL.md`,
+      ...(hidden ? { hidden: true } : {})
+    });
+    const pack = { id: "ponytail", name: "ponytail", updatable: false };
+    const document = buildResourceList({
+      kind: "skill",
+      scope: "global",
+      groupBy: "kind",
+      entries: [
+        { ...skillEntry("review"), pack },
+        { ...skillEntry("audit", true), pack },
+        skillEntry("standalone")
+      ]
+    });
+    const html = renderGlobalResources(document, { createKinds: ["mcp", "rule", "skill"] });
+    // One checkbox per Skill row, none inside the hover toolbar.
+    expect(html.match(/class="resource-entry-visibility"/g)).toHaveLength(3);
+    expect(html).toContain('data-resource-command="dext.toggleSkillPackVisibility"');
+    expect(html).toContain('data-resource-pack="ponytail" data-resource-kind="skill"');
+    // A pack with one hidden Skill of two reads as mixed.
+    expect(html).toContain('data-resource-indeterminate="1"');
+    expect(html).toContain('aria-label="Show in the Input skills menu" checked>');
+    expect(html).toContain('aria-label="Show in the Input skills menu">');
   });
 
   it("lists only current files, preserving nested paths and actual MCP filenames", async () => {

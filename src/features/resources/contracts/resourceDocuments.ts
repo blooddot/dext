@@ -1,6 +1,7 @@
 import type { ApiFlow } from "../../workflow/contracts/apiFlow.js";
 import type { ApiReferenceCatalog, ApiReferenceModule, ApiSourceFunction } from "../../workflow/contracts/apiReference.js";
 import type { RegisteredCallable } from "../../../shared/contracts/types.js";
+import { isSkillId } from "../../workflow/contracts/skill.js";
 import { type EditorTabManager } from "../../../platform/editor-tabs/editorTabManager.js";
 import type { EditorTabRestorer } from "../../../platform/editor-tabs/editorTabSerializer.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
@@ -39,6 +40,8 @@ export interface ResourceEntry {
   description?: string;
   /** Present when a pack manifest owns this canonical Skill. */
   pack?: ResourcePackRef;
+  /** A Skill the composer's Input menu leaves out; it still loads by id. */
+  hidden?: boolean;
   api?: ApiSourceFunction["api"];
   /** Exported functions read from a file; both pages render these with the same API component. */
   apiFunctions?: ApiSourceFunction[];
@@ -47,6 +50,15 @@ export interface ResourceEntry {
   /** A read-only reference entry: a Node module or JavaScript global documented
    * from its own declaration rather than a callable Dext API. */
   reference?: ApiReferenceModule;
+}
+
+
+/** The Skill id a canonical `<id>/SKILL.md` entry owns. Other files below a
+ * Skill directory are not the Skill itself. */
+export function skillEntryId(entry: Pick<ResourceEntry, "kind" | "path">): string | undefined {
+  if (entry.kind !== "skill") return undefined;
+  const match = /^([^/]+)\/SKILL\.md$/.exec(entry.path);
+  return match && isSkillId(match[1]) ? match[1] : undefined;
 }
 
 
@@ -124,7 +136,7 @@ export interface ResourceEditorShowResult {
 export interface FileResourceDataSourceOptions {
   roots(): Partial<Record<ResourceScope, string>>;
   /** Enumerates files without importing or executing TypeScript API modules. */
-  listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef }>>;
+  listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef; hidden?: boolean }>>;
   readFile(entry: ResourceEntry): Promise<string | undefined>;
   describeApi?(content: string): Promise<ApiSourceFunction[]>;
   /** Builds the flow for a detail page; lists deliberately skip it. The second

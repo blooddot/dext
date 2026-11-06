@@ -11,7 +11,7 @@ import { buildResourceList, isMcpApiId, renderResourceList, resourceCategory } f
 import { createFileResourceDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
 import { describeApiFlow } from "../src/features/workflow/host/apiFlow.js";
 import { SkillCatalog } from "../src/features/workflow/host/skillCatalog.js";
-import type { ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
+import { skillEntryId, type ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, SKILL_FILE_MAX_BYTES, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES } from "../src/features/resources/host/skillImporter.js";
 
 vi.mock("vscode", () => {
@@ -927,5 +927,14 @@ describe("resource documents", () => {
     await expect(application.saveResource(resource)).rejects.toThrow("Write failed");
     expect(await readFile(join(root, "rules/review.md"), "utf8")).toBe(resource.target.files![0]!.content);
     expect(await readFile(join(root, "api/docs/review.ts"), "utf8")).toBe(resource.target.content);
+  });
+});
+
+describe("skillEntryId", () => {
+  it("recognizes only a canonical <id>/SKILL.md entry", () => {
+    expect(skillEntryId({ kind: "skill", path: "ponytail/SKILL.md" })).toBe("ponytail");
+    expect(skillEntryId({ kind: "skill", path: "ponytail/commands/review.md" })).toBeUndefined();
+    expect(skillEntryId({ kind: "skill", path: "bad id/SKILL.md" })).toBeUndefined();
+    expect(skillEntryId({ kind: "rule", path: "ponytail/SKILL.md" })).toBeUndefined();
   });
 });
