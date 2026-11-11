@@ -37,6 +37,7 @@ let activeApplication: DextApplication | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const application = new DextApplication(context.globalState, context.secrets, context.globalStorageUri);
   application.configurePiRuntime(vscode.Uri.joinPath(context.extensionUri, "media", "pi-extension.mjs").fsPath);
+  application.configureVideoFrames(context.extensionUri);
   activeApplication = application;
   context.subscriptions.push({ dispose: () => { void application.dispose(); } });
   const folder = vscode.workspace.workspaceFolders?.[0];

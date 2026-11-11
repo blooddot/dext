@@ -5,6 +5,8 @@ import { isAbsolute, join, relative as relativePath, resolve, sep } from "node:p
 import * as vscode from "vscode";
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
+import { FramesBridge } from "../features/agents/host/framesBridge.js";
+import { VideoFrames } from "../features/conversations/host/videoFrames.js";
 import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
 import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
@@ -162,6 +164,8 @@ export class DextApplication {
   private readonly reservedKernels = new Set<DextKernelHost>();
   private dispatchConcurrency = DEFAULT_DISPATCH_CONCURRENCY;
   private configDiagnostics: string[] = [];
+  /** The video-frame tool's private pipe; started once, disposed with Dext. */
+  private frames: FramesBridge | undefined;
 
   /**
    * The workspace's generated declaration when it has one, otherwise the built-in
@@ -1747,6 +1751,7 @@ export class DextApplication {
   dispose(): Promise<void> {
     // Each Code conversation may hold a kernel child process; nothing else kills them.
     this.stopKernel();
+    this.frames?.dispose();
     return this.agentRunner.dispose();
   }
 
@@ -1759,6 +1764,17 @@ export class DextApplication {
   }
 
   configurePiRuntime(extensionPath: string): void { this.agentRunner.pi.configure({ extensionPath }); }
+
+  /** Video frames are decoded by the editor, so a provider's own child process
+   * cannot reach them; it is handed a tool that asks this bridge instead. */
+  configureVideoFrames(extensionUri: vscode.Uri): void {
+    const script = vscode.Uri.joinPath(extensionUri, "dist", "framesMcp.js").fsPath;
+    // A source checkout without a build has no tool process to launch.
+    if (!existsSync(script)) return;
+    const videoFrames = new VideoFrames({ extensionUri, storage: this.storage });
+    this.frames = new FramesBridge(script, (path, times) => videoFrames.capture(path, times));
+    this.runtime.setHostMcpServers([this.frames.mcpServer]);
+  }
 
   piDiscoveryKey(): string {
     const profile = this.agents.list().find((item) => item.provider === "pi");

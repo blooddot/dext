@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { FRAMES_TOOL } from "../../features/conversations/contracts/videoFrames.js";
 import { attachmentByteLimit, MAX_ATTACHMENT_BYTES } from "../../shared/lib/attachmentStore.js";
 
 export const STORAGE_LOCATIONS = ["global", "workspace"] as const;
@@ -10,6 +11,11 @@ const GLOBAL_REFERENCE_ROOT = ".dext-global";
 const ATTACHMENT_FILE = /^(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp|mp4|m4v|mov|webm)|terminal-[a-f0-9]{24}\.log|conversation-[a-f0-9]{24}\.md)$/i;
 const ATTACHMENT_REFERENCE = /@((?:\.dext-global|\.dext)\/attachments\/(?:[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp|mp4|m4v|mov|webm)|terminal-[a-f0-9]{24}\.log|conversation-[a-f0-9]{24}\.md))/gi;
 const EXTERNAL_FILE_REFERENCE = /@(file:\/\/\/[^\s@#"'`(){}[\],]+)/gi;
+/** Reading a video as text tells an agent nothing, so a video path has to arrive
+ * with the tool that turns it into stills. shortcut: the note names the tool even
+ * in a checkout that never registered it, until a build without the frame bridge
+ * has to be supported. */
+const VIDEO_FILE = /\.(?:mp4|m4v|mov|webm)$/i;
 
 function safeSegments(path: string): string[] | undefined {
   const segments = path.replaceAll("\\", "/").split("/");
@@ -89,7 +95,11 @@ export class DextStorage {
       .filter((path): path is string => Boolean(path));
     const paths = [...new Set([...ownedPaths, ...externalPaths])];
     if (!paths.length) return input;
-    return `${input}\n\nDext attachment files (read-only):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+    const listing = `Dext attachment files (read-only):\n${paths.map((path) => `- ${path}`).join("\n")}`;
+    const video = paths.some((path) => VIDEO_FILE.test(path))
+      ? `\n\nA video is not text: open ${FRAMES_TOOL} with that path and no times to learn its length, then ask for the seconds you need as stills.`
+      : "";
+    return `${input}\n\n${listing}${video}`;
   }
 
   async pruneAttachments(maxFiles: number, keep?: vscode.Uri): Promise<void> {

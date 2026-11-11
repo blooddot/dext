@@ -23,7 +23,10 @@ const contexts = await Promise.all([
   esbuild.context({
     entryPoints: {
       extension: "src/extension.ts",
-      extensionHostTest: "test/extensionHost.ts"
+      extensionHostTest: "test/extensionHost.ts",
+      // The video-frame tool a provider launches: it has no Webview of its own and
+      // asks the extension over a private pipe, so it is its own Node process.
+      framesMcp: "src/features/agents/host/framesMcp.ts"
     },
     bundle: true,
     outdir: "dist",
@@ -45,6 +48,9 @@ const contexts = await Promise.all([
       // A video attachment opens its own page in the same kind of tab: a player
       // and a per-frame annotation overlay.
       videoAnnotator: "src/features/conversations/browser/videoAnnotatorPage.ts",
+      // The hidden capture page: it decodes a video the host points it at, posts
+      // the stills back and is closed, with no UI of its own.
+      videoFrames: "src/features/conversations/browser/videoFramesPage.ts",
       // The API detail pages and the conversation page both display Mermaid, and
       // they are separate Webview documents. This single shared entry keeps one
       // copy of Mermaid in the VSIX; both pages lazy-load it only when a diagram

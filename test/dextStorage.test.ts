@@ -27,4 +27,11 @@ describe("Dext storage attachments", () => {
     expect(storage.attachmentPrompt(`What goes wrong in @.dext-global/attachments/${clip}?`))
       .toContain(`- /store/attachments/${clip}`);
   });
+
+  it("tells an agent which tool decodes a video, and only for a video", () => {
+    const clip = `${"c".repeat(24)}.mp4`;
+    const still = `${"d".repeat(24)}.png`;
+    expect(storage.attachmentPrompt(`@.dext-global/attachments/${clip}`)).toContain("dext_video_frames");
+    expect(storage.attachmentPrompt(`@.dext-global/attachments/${still}`)).not.toContain("dext_video_frames");
+  });
 });
