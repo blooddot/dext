@@ -14,7 +14,7 @@ import type { AgentResult, DirRef, McpRawResult } from "../../../shared/contract
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
 import { patchResultFrom } from "../../../shared/protocol/patch.js";
 import { CONVERSATION_METHODS } from "../domain/methodSignature.js";
-import type { AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../../agents/contracts/agent.js";
+import type { AgentMcpServer, AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../../agents/contracts/agent.js";
 import { DefaultAgentRunner } from "../../agents/host/agentRouter.js";
 import type { AgentRunner } from "../../agents/host/agentRunner.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
@@ -309,6 +309,9 @@ export class DextRuntime implements WorkflowRuntime {
     onProcessEvent?: ExecutionMetadata["onMcpEvent"]
   ) => Promise<McpRawResult>) | undefined;
   private resultRepair: RuntimeResultRepair | undefined;
+  /** Host-owned tools every provider is handed, so a Dext capability is available
+   * whichever CLI the reader picked. */
+  private hostMcpServers: readonly AgentMcpServer[] = [];
   /** MCP tool ids a manifest declares, whether or not their server is running. */
   private declaredMcpTools: ReadonlySet<string> = new Set();
   /** Why a configured MCP server was rejected during the last reload, by name. */
@@ -390,6 +393,10 @@ export class DextRuntime implements WorkflowRuntime {
    * one, so a project can be careful by default. */
   setDefaultAgentPermission(permission: WritableAgentPermission): void {
     this.defaultAgentPermission = permission;
+  }
+
+  setHostMcpServers(servers: readonly AgentMcpServer[]): void {
+    this.hostMcpServers = [...servers];
   }
 
   setAgentCliArguments(argumentsByProvider: Readonly<Partial<Record<AgentProvider, readonly string[]>>>): void {
@@ -949,6 +956,7 @@ export class DextRuntime implements WorkflowRuntime {
       allowWorkspaceWrite,
       permission,
       ...(this.extraCliArguments(profile).length ? { cliArguments: this.extraCliArguments(profile) } : {}),
+      ...(this.hostMcpServers.length ? { mcpServers: this.hostMcpServers } : {}),
       ...(metadata.signal ? { signal: metadata.signal } : {}),
       ...(onEvent ? { onEvent } : {})
     });

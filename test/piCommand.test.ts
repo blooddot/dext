@@ -9,6 +9,14 @@ describe("associating an installed Pi command", () => {
     expect(args).toContain("--no-mcp");
     expect(args[args.indexOf("--tools") + 1]).not.toMatch(/(?:^|,)(?:write|edit|bash|powershell|mcp__\*)(?:,|$)/);
   });
+  it("keeps only the host's own MCP tools in a read-only turn that has them", () => {
+    const server = { name: "dext_frames", command: "node", args: ["frames.mjs"], env: {} };
+    const args = piArguments({ extensionPath: "pi.mjs", sessionDirectory: "sessions", permission: "read-only", trusted: true, mcpServers: [server] });
+    expect(args).toContain("builtin:mcp"); expect(args).not.toContain("--no-mcp");
+    const tools = String(args[args.indexOf("--tools") + 1]).split(",");
+    expect(tools).toContain("mcp__dext_dext_frames__*");
+    expect(tools).not.toContain("mcp__*");
+  });
   it("rejects an incompatible executable and respects an already cancelled connection check", async () => {
     await expect(checkPiVersion(process.execPath, process.cwd())).rejects.toThrow("could not start or report its version");
     const controller = new AbortController(); controller.abort(new Error("connection cancelled"));

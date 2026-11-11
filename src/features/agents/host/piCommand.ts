@@ -1,4 +1,4 @@
-import type { AgentPermission, AgentProfile } from "../contracts/agent.js";
+import type { AgentMcpServer, AgentPermission, AgentProfile } from "../contracts/agent.js";
 import { resolveCliCommand } from "./agentRunner.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -72,16 +72,22 @@ const PI_WRITE_TOOLS = "write,edit,bash,powershell";
 export function piArguments(options: {
   extensionPath: string; sessionDirectory: string; sessionPath?: string; trusted: boolean;
   permission: AgentPermission; result?: boolean; ephemeral?: boolean; extra?: readonly string[];
-  plugins?: readonly string[];
+  plugins?: readonly string[]; mcpServers?: readonly AgentMcpServer[];
 }): string[] {
   const plugins = options.plugins ?? [];
+  const readOnly = options.permission === "read-only";
+  // The Dext extension registers the host's own servers as `dext_<name>`, and Pi
+  // declares their tools as `mcp__<server>__<tool>`. Naming them in the allowlist
+  // keeps them in a read-only turn and drops every server from the user's own
+  // mcp.json, which Pi would otherwise connect too.
+  const hostMcp = (options.mcpServers ?? []).map((server) => `mcp__dext_${server.name.replace(/[^A-Za-z0-9_]/g, "_")}__*`);
   return [...piExtraArguments(options.extra ?? []), "--mode", "rpc", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-approve", "--offline",
     ...(!options.trusted ? ["--no-context-files"] : []),
     "--extension", options.extensionPath,
     ...plugins.flatMap((path) => ["--extension", path]),
-    ...(options.permission === "full-access" ? ["--extension", "builtin:mcp"] : ["--no-mcp"]),
+    ...(options.permission === "full-access" || hostMcp.length ? ["--extension", "builtin:mcp"] : ["--no-mcp"]),
     ...(plugins.length
-      ? ["--tools", "*", ...(options.permission === "read-only" ? ["--exclude-tools", PI_WRITE_TOOLS] : [])]
-      : ["--tools", piTools(options.permission, Boolean(options.result), process.platform, options.trusted).join(",")]),
+      ? ["--tools", "*", ...(readOnly ? ["--exclude-tools", PI_WRITE_TOOLS] : [])]
+      : ["--tools", [...piTools(options.permission, Boolean(options.result), process.platform, options.trusted), ...(readOnly ? hostMcp : [])].join(",")]),
     ...(options.result || options.ephemeral ? ["--no-session"] : ["--session-dir", options.sessionDirectory, ...(options.sessionPath ? ["--session", options.sessionPath] : [])])];
 }

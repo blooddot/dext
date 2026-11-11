@@ -69,4 +69,18 @@ describe("shipped Pi extension", () => {
     expect(await tools.get("dext_submit_result")!.execute("one", { value: "ok" })).toMatchObject({ isError: false });
     expect(settle!(ready)).toBeUndefined();
   });
+  it("keeps the host's own MCP server in a read-only turn and nothing else", async () => {
+    const bridge = new PiBridge({ permission: "read-only", tools: ["read"], plugins: true, mcpServers: [{ name: "dext_frames", command: "node", args: ["frames.mjs"], env: {} }] }, async () => ({ status: "accepted" }));
+    bridges.push(bridge); process.env.DEXT_PI_BRIDGE = bridge.endpoint; process.env.DEXT_PI_BRIDGE_TOKEN = bridge.token;
+    const registered: { name: string; config: { exposure?: string } }[] = [];
+    let guard: ((event: { toolName: string }) => unknown) | undefined;
+    const module = await import(pathToFileURL(resolve("media/pi-extension.mjs")).href) as { default(api: object): Promise<void> };
+    await module.default({ registerTool: () => {}, getActiveTools: () => [], setActiveTools: () => {},
+      on: (event: string, listener: (payload: { toolName: string }) => unknown) => { if (event === "tool_call") guard = listener as typeof guard; else if (event === "session_shutdown") shutdowns.push(() => { listener({ toolName: "" }); }); },
+      registerMcpServer: (name: string, config: { exposure?: string }) => registered.push({ name, config }) });
+    await bridge.ready();
+    expect(registered).toEqual([{ name: "dext_dext_frames", config: expect.objectContaining({ exposure: "direct" }) }]);
+    expect(guard?.({ toolName: "mcp__dext_dext_frames__dext_video_frames" })).toBeUndefined();
+    expect(guard?.({ toolName: "mcp__filesystem__write_file" })).toMatchObject({ block: true });
+  });
 });

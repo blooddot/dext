@@ -103,6 +103,7 @@ export class PiAgentRunner implements AgentRunner {
     let transport: PiRpcTransport | undefined;
     try {
       const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral, plugins,
+        mcpServers: request.mcpServers ?? [],
         ...(resume ? { sessionPath: resume } : {}), ...(request.cliArguments ? { extra: request.cliArguments } : {}) });
       transport = (this.options.transportFactory ?? ((program, argv, cwd, env) => new PiRpcTransport(program, argv, cwd, env)))(command, args, request.cwd,
         { ...process.env, DEXT_PI_BRIDGE: bridge.endpoint, DEXT_PI_BRIDGE_TOKEN: bridge.token });
@@ -265,7 +266,7 @@ export class PiAgentRunner implements AgentRunner {
       const completed = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; }); void completed.catch(() => {});
       active = { request, controller, timeout, events: new PiEvents(`${key}:${randomUUID()}`), resolve: resolveTurn, reject: rejectTurn, done: false, uiIds: new Set() };
       session.active = active; session.transport.onActivity = timeout.activity; session.bridge.beginTurn();
-      if (!request.allowWorkspaceWrite && request.mcpServers?.length) request.onEvent?.({ phase: "status", text: "Pi native MCP is disabled for this read-only turn. Code MCP calls remain available through Dext." });
+      if (!request.allowWorkspaceWrite && request.mcpServers?.length) request.onEvent?.({ phase: "status", text: "The configured MCP servers stay off for this read-only turn; Dext's own MCP tools remain available. Code MCP calls remain available through Dext." });
       try { active.events.setBaseline(await session.transport.request("get_session_stats", {}, 1000, controller.signal)); } catch { /* Message-level usage remains available. */ }
       if (controller.signal.aborted) throw controller.signal.reason;
       const input = session.fresh ? bootstrappedConversationInput(request.metadata.conversationContext, request.input) : request.input;

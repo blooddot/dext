@@ -655,12 +655,19 @@ export function codexSandbox(permission: AgentPermission): string {
   return permission === "workspace-write" ? "workspace-write" : "read-only";
 }
 
-/** Claude accepts extra stdio servers as one JSON document; no user file is written. */
+/** Claude accepts extra stdio servers as one JSON document; no user file is written.
+ * Print mode cannot ask, so the injected servers' own tools are allowed up front:
+ * otherwise every call is refused as an unapproved permission. */
 function claudeMcpArguments(servers: readonly AgentMcpServer[]): string[] {
   if (!servers.length) return [];
-  return ["--mcp-config", JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, {
-    type: "stdio", command: server.command, args: [...server.args], env: { ...server.env }
-  }])) })];
+  return [
+    "--mcp-config",
+    JSON.stringify({ mcpServers: Object.fromEntries(servers.map(server => [server.name, {
+      type: "stdio", command: server.command, args: [...server.args], env: { ...server.env }
+    }])) }),
+    "--allowedTools",
+    ...servers.map(server => `mcp__${server.name}`)
+  ];
 }
 
 /** Codex reads the same injection through `--config` overrides. */

@@ -83,8 +83,14 @@ export default async function dextPiExtension(pi) {
     return { continue: true, entries: [{ type: "custom_message", customType: "dext_result_reminder", display: false, content: "This Dext turn is not complete: call dext_submit_result with the whole result object. Plain text is not a result." }] };
   });
   pi.on("tool_call", (event) => {
-    const pluginTool = config.plugins === true && !WRITE_TOOLS.has(event.toolName);
-    if (config.permission !== "full-access" && !config.tools.includes(event.toolName) && !pluginTool) return { block: true, reason: "This Dext turn is read-only; this tool is unavailable." };
+    // A plugin may ship its own MCP servers, so a plugin's tools stop at the MCP
+    // boundary: only the host's own servers stay reachable in a read-only turn.
+    const mcpTool = event.toolName.startsWith("mcp__");
+    const pluginTool = config.plugins === true && !WRITE_TOOLS.has(event.toolName) && !mcpTool;
+    // The host's own servers are read-only by nature and stay available in a
+    // read-only turn, which is how a video becomes stills without Pi's own MCP.
+    const hostMcp = config.mcpServers.some((server) => event.toolName.startsWith(`mcp__dext_${server.name.replace(/[^A-Za-z0-9_]/g, "_")}__`));
+    if (config.permission !== "full-access" && !config.tools.includes(event.toolName) && !pluginTool && !hostMcp) return { block: true, reason: "This Dext turn is read-only; this tool is unavailable." };
     if (!active && event.toolName.startsWith("dext_")) return { block: true, reason: "The Dext turn has ended." };
     return undefined;
   });
@@ -93,6 +99,6 @@ export default async function dextPiExtension(pi) {
     if (sessionId) void capSubagentsAtReadOnly(sessionId);
   });
   pi.on("session_shutdown", () => { active = false; socket.destroy(); });
-  if (config.permission === "full-access") for (const server of config.mcpServers) pi.registerMcpServer(`dext_${server.name}`, { command: server.command, args: server.args, env: server.env, exposure: "direct" });
+  for (const server of config.mcpServers) pi.registerMcpServer(`dext_${server.name}`, { command: server.command, args: server.args, env: server.env, exposure: "direct" });
   send({ type: "ready" });
 }
