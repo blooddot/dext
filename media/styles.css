@@ -1481,6 +1481,24 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   opacity: 0.85;
 }
 
+/* A video chip has no still to show: it names the file instead. */
+.image-attachment-name {
+  width: 100%;
+  height: 100%;
+  padding: 4px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
 /* The annotation editor tab: the picture fills the page, its annotations below. */
 html:has(.image-page) {
   height: 100%;
