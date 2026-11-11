@@ -224,7 +224,7 @@ button.primary.plan-build.conflict:hover:not(:disabled) {
   padding: 6px 0;
 }
 .agent-todo-item > .codicon { flex: 0 0 16px; margin-top: 2px; color: var(--vscode-descriptionForeground); }
-.agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; color: inherit; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
+.agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 .agent-todo-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
 .agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
 .agent-todo-item.active {
@@ -235,6 +235,7 @@ button.primary.plan-build.conflict:hover:not(:disabled) {
 body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.active .agent-todo-status { color: var(--vscode-foreground); }
 .agent-todo-item[data-status="completed"] > .codicon { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
 .agent-todo-item[data-status="completed"] .agent-todo-text { color: var(--vscode-descriptionForeground); }
+.agent-todo-verify { margin-top: 2px; font-size: 12px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; white-space: normal; }
 
 .conversation-tab {
   position: relative;

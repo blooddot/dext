@@ -1,8 +1,14 @@
 import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import { escapeHtml } from "../../../shared/lib/html.js";
 import { dextMarkdown } from "../../../shared/lib/markdown.js";
 
 // Live Todo rows and restored history use the same Markdown interpretation.
 const todoMarkdown = dextMarkdown();
+// Plan tasks end with `verify: <check>`. Splitting on the last marker keeps the
+// task readable as a task instead of one long line.
+// shortcut: a task whose prose mentions `verify:` also splits there, until
+// tasks carry a structured field.
+const TASK_VERIFY = /^(.*\S)\s*verify:\s*(\S.*)$/is;
 
 export function planExecutionLabel(events: readonly AgentStreamEvent[], error?: string, outcome?: PlanExecutionOutcome): string {
   if (outcome?.status === "cancelled") return "Stopped";
@@ -31,12 +37,14 @@ export function agentTodoProgress(items: readonly AgentTodoItem[], running: bool
 
 export function agentTodoRows(items: readonly AgentTodoItem[], running: boolean): string {
   return items.map((item) => {
+    const verify = TASK_VERIFY.exec(item.text);
+    const task = verify?.[1] ?? item.text;
     const active = item.status === "in_progress" && running;
     const label = item.status === "completed" ? "Completed" : active ? "In progress"
       : item.status === "in_progress" ? "Paused" : "Pending";
     const icon = item.status === "completed" ? "check" : active ? "loading codicon-modifier-spin"
       : item.status === "in_progress" ? "debug-pause" : "circle-large-outline";
-    return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(item.text)}</div><span class="agent-todo-status">${label}</span></li>`;
+    return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(task)}${verify ? `<div class="agent-todo-verify">verify: ${escapeHtml(verify[2]!)}</div>` : ""}</div><span class="agent-todo-status">${label}</span></li>`;
   }).join("");
 }
 

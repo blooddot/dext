@@ -120,6 +120,12 @@ describe("agent task progress", () => {
     }
   });
 
+  it("shows a plan task's verify step as its own quiet line", () => {
+    const html = agentTodoRows([{ id: "plan-1", status: "pending", text: "新增 parseFoo。verify: npm test" }], false);
+    expect(html).toContain("<p>新增 parseFoo。</p>");
+    expect(html).toContain('<div class="agent-todo-verify">verify: npm test</div>');
+  });
+
   it("keeps raw HTML and executable links inert in Todo Markdown", () => {
     const html = agentTodoRows([{ id: "untrusted", status: "pending",
       text: '<img src=x onerror="alert(1)"> [unsafe](javascript:alert(1)) **Safe bold**' }], true);
