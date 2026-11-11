@@ -3143,6 +3143,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section[data-t
 
 /* An indented timeline, not a card: the divider is the only frame. */
 .turn-section[data-turn-section="process"] > .turn-section-body {
+  /* width: 100% plus this indent would make the open timeline 18px wider than
+     the transcript and add a horizontal scrollbar to the whole conversation. */
+  width: calc(100% - 18px);
   margin-left: 18px;
   padding: 2px 4px 6px 14px;
   border-left: 1px solid var(--dext-quiet-divider);
@@ -3577,7 +3580,9 @@ pre {
 
 .agent-trace-message {
   position: relative;
-  margin: 8px 4px;
+  /* No side gutter: these rows are width: 100% at every nesting level, so a
+     horizontal margin would overflow the transcript by twice its width. */
+  margin: 8px 0;
 }
 
 /* The body holds rendered Markdown, so it follows the UI font and lets the

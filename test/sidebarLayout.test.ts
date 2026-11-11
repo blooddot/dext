@@ -850,6 +850,14 @@ describe("sidebar panel layout", () => {
     expect(trace).toMatch(/summary\.append\(this\.toolGlyph\(event\.toolKind\), summaryLabel, chevron\)/);
   });
 
+  it("keeps the expanded process timeline inside the transcript width", async () => {
+    const css = await source("media/styles.css");
+    // Full-width rows plus a horizontal margin or indent are wider than
+    // #result-body, which turns into a scrollbar under every open timeline.
+    expect(css).toMatch(/\.turn-section\[data-turn-section="process"\] > \.turn-section-body \{[^}]*width: calc\(100% - 18px\);/);
+    expect(css).toMatch(/\.agent-trace-message \{[^}]*margin: 8px 0;/);
+  });
+
   it("keeps the model category menu visible beside its option submenu", async () => {
     const main = await source("src/webview/main.ts");
     const css = await source("media/styles.css");
