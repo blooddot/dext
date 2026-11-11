@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { AgentModelOption, AgentProfile } from "../contracts/agent.js";
 import { piObject, piText, type PiBridgeRequest, type PiRecord, type PiState } from "../contracts/pi.js";
 import type { AgentWakeReport } from "../../../shared/contracts/types.js";
@@ -10,6 +10,7 @@ import { decodePiSession, encodePiSession, parsePiModelId, piModelId, piModelOpt
 import { agentTimeout, DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, type AgentTimeout } from "../domain/agentTimeout.js";
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
 import { formatDiagnostics } from "../../../shared/protocol/resultBoundary.js";
+import { insideRoot } from "../../../platform/node/insideRoot.js";
 import { resultToolParameters } from "../domain/harnessResultTool.js";
 import { agentPayload, bootstrappedConversationInput, type AgentConversationRequest, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
 import { piArguments, piCommand, piPermission, piTools, checkPiVersion } from "./piCommand.js";
@@ -92,8 +93,7 @@ export class PiAgentRunner implements AgentRunner {
   private async validateSession(path: string): Promise<string> {
     const root = await realpath(this.resources().sessionDirectory);
     const canonical = await realpath(path).catch(() => { throw new Error("The stored Pi session is missing. Start a new conversation."); });
-    const child = relative(root, canonical);
-    if (!child || child === ".." || child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(child)) throw new Error("The stored Pi session is outside Dext's session directory.");
+    if (!insideRoot(root, canonical, { allowRoot: false })) throw new Error("The stored Pi session is outside Dext's session directory.");
     return canonical;
   }
   private async open(request: TurnRequest, command: string, binding: string, signal: AbortSignal, resume?: string, ephemeral = false): Promise<Session> {

@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
-import { basename, extname, relative, sep } from "node:path";
+import { basename, extname, relative } from "node:path";
 import * as vscode from "vscode";
+import { insideRoot } from "../platform/node/insideRoot.js";
 import { createConversationServices, type ConversationServices } from "./conversationSetup.js";
 import type { DextApplication } from "./application.js";
 import {
@@ -259,13 +260,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const folder = vscode.workspace.workspaceFolders?.[0];
     let reference: string | undefined;
     const globalRelative = relative(globalRoot, uri.fsPath);
-    if (globalRelative && !globalRelative.startsWith(`..${sep}`) && globalRelative !== "..") {
+    if (insideRoot(globalRoot, uri.fsPath, { allowRoot: false })) {
       const segments = globalRelative.split(/[\\/]+/).filter(Boolean);
       if (segments[0] === "plans" && segments.length > 1) reference = [".dext-global", ...segments].join("/");
     }
     if (!reference && folder) {
       const workspaceRelative = relative(folder.uri.fsPath, uri.fsPath);
-      if (workspaceRelative && !workspaceRelative.startsWith(`..${sep}`) && workspaceRelative !== "..") {
+      if (insideRoot(folder.uri.fsPath, uri.fsPath, { allowRoot: false })) {
         const normalized = workspaceRelative.replaceAll("\\", "/");
         if (normalized.startsWith(".dext/plans/")) reference = normalized;
       }
@@ -353,7 +354,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       const root = this.application.resourceRoot(resource.type, resource.scope).fsPath.replace(/[\\/]$/, "");
       const candidate = uri.fsPath.replace(/[\\/]$/, "");
       const path = relative(root, candidate).replaceAll("\\", "/");
-      if (!path || path === ".." || path.startsWith(`../`) || /^[A-Za-z]:/.test(path)) {
+      if (!insideRoot(root, candidate, { allowRoot: false })) {
         throw new Error(`Select a file inside the ${RESOURCE_LABELS[resource.type]} directory.`);
       }
       const target = await this.application.readResource(resource.type, resource.scope, path, basename(path));

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { insideRoot } from "../../../platform/node/insideRoot.js";
 import type { ResourceEntry } from "../contracts/resourceDocuments.js";
 import { RESOURCE_DIRECTORIES, resourcePathSegments } from "../contracts/resourceSession.js";
 import { isSkillId } from "../../workflow/contracts/skill.js";
@@ -12,11 +13,6 @@ export interface ResourceRemovalPlan {
   skills: string[];
   /** Detects changed pack ownership while the confirmation is open. */
   revision: string;
-}
-
-function within(root: string, path: string): boolean {
-  const part = relative(resolve(root), resolve(path));
-  return Boolean(part) && !isAbsolute(part) && part !== ".." && !part.startsWith(`..${sep}`);
 }
 
 function samePath(left: string, right: string): boolean {
@@ -31,7 +27,7 @@ export function managedResourcePath(entry: ResourceEntry, root: string): string 
   resourcePathSegments(entry.kind, entry.path);
   const kindRoot = resolve(root, RESOURCE_DIRECTORIES[entry.kind]);
   const path = resolve(kindRoot, entry.path);
-  if (!within(kindRoot, path) || relative(path, resolve(entry.source.path)) !== "") {
+  if (!insideRoot(kindRoot, path, { allowRoot: false }) || relative(path, resolve(entry.source.path)) !== "") {
     throw new Error("The resource path is outside its managed directory.");
   }
   return path;
@@ -40,7 +36,7 @@ export function managedResourcePath(entry: ResourceEntry, root: string): string 
 /** Reject links in every component below the named resource root. This also
  * protects recursive directory removal from a symlink/junction in a parent. */
 async function validateTarget(root: string, target: string): Promise<void> {
-  if (!within(root, target)) throw new Error("Refusing to remove the resource root or a path outside it.");
+  if (!insideRoot(root, target, { allowRoot: false })) throw new Error("Refusing to remove the resource root or a path outside it.");
   let current = resolve(root);
   for (const part of relative(current, target).split(sep)) {
     current = join(current, part);
@@ -99,7 +95,7 @@ export async function resourceRemovalPlan(entry: ResourceEntry, root: string): P
       for (const skill of owner.manifest.skills) {
         if (!skill.file) continue; // Legacy packs use the canonical skills directory.
         const file = resolve(root, skill.file);
-        if (relative(file, resolve(root, "skills", skill.id, "SKILL.md")) !== "" && !within(packRoot, file)) {
+        if (relative(file, resolve(root, "skills", skill.id, "SKILL.md")) !== "" && !insideRoot(packRoot, file, { allowRoot: false })) {
           throw new Error("The pack manifest points to a Skill outside its owned directories.");
         }
       }
@@ -120,7 +116,7 @@ export async function removeManagedResource(entry: ResourceEntry, root: string, 
   trash(path: string): Promise<void>;
 }): Promise<boolean> {
   const checkDirty = (plan: ResourceRemovalPlan): void => {
-    if (host.dirtyPaths().some((path) => plan.targets.some((target) => relative(resolve(target), resolve(path)) === "" || within(target, path)))) {
+    if (host.dirtyPaths().some((path) => plan.targets.some((target) => relative(resolve(target), resolve(path)) === "" || insideRoot(target, path, { allowRoot: false })))) {
       throw new Error("This resource has unsaved files. Save or discard those changes before deleting it.");
     }
   };

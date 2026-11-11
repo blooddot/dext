@@ -1,7 +1,7 @@
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
+import { join, relative as relativePath, resolve, sep } from "node:path";
 import * as vscode from "vscode";
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
@@ -58,6 +58,7 @@ import {
   SKILL_IMPORT_SELECTION_JSON_SCHEMA,
   type SkillImportAnalyzer
 } from "../features/resources/domain/skillImportAnalysis.js";
+import { insideRoot } from "../platform/node/insideRoot.js";
 
 /** How many API modules the composer's TypeScript worker is given, and how many
  * bytes of source, so a large workspace cannot flood the Webview channel. */
@@ -253,8 +254,8 @@ export class DextApplication {
     const globalSources: ComposerApiSource[] = [];
     for (const uri of await apiSourceFiles(globalRoot, Math.max(0, COMPOSER_MODULE_LIMIT - modules.length))) {
       if (modules.length + globalSources.length >= COMPOSER_MODULE_LIMIT || bytes >= COMPOSER_MODULE_BYTES) break;
+      if (!insideRoot(globalRoot.fsPath, uri.fsPath, { allowRoot: false })) continue;
       const relative = relativePath(globalRoot.fsPath, uri.fsPath).replaceAll("\\", "/");
-      if (!relative || relative.startsWith("../") || isAbsolute(relative)) continue;
       let content: string;
       try {
         content = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
@@ -526,9 +527,10 @@ export class DextApplication {
       resolve: (uri) => {
         try {
           const parsed = vscode.Uri.parse(uri, true);
-          if (parsed.scheme !== "file" || !vscode.workspace.getWorkspaceFolder(parsed)) return undefined;
+          const folder = vscode.workspace.getWorkspaceFolder(parsed);
+          if (parsed.scheme !== "file" || !folder) return undefined;
           const relativePath = vscode.workspace.asRelativePath(parsed, false).replaceAll("\\", "/");
-          return relativePath.startsWith("../") || isAbsolute(relativePath) ? undefined : relativePath;
+          return insideRoot(folder.uri.fsPath, parsed.fsPath) ? relativePath : undefined;
         } catch {
           return undefined;
         }
@@ -1356,8 +1358,7 @@ export class DextApplication {
     for (const dirty of dirtyPaths) {
       const path = resolve(dirty);
       for (const target of targets) {
-        const part = relativePath(resolve(target), path);
-        if (part === "" || (!part.startsWith("..") && !isAbsolute(part))) {
+        if (insideRoot(target, path)) {
           throw new Error(`This Skill pack has unsaved files: ${dirty}. Save or discard those changes before updating it.`);
         }
       }

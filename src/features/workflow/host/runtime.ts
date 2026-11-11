@@ -1,6 +1,6 @@
 import { uiCallForm, uiCallResult, validateUiFormResult, type UiAction } from "../../../shared/contracts/uiForm.js";
 import { performance } from "node:perf_hooks";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { AxAdapter, type AxMethodContract } from "../../agents/domain/axAdapter.js";
@@ -13,6 +13,7 @@ import type { MethodRegistry } from "../domain/registry.js";
 import type { AgentResult, DirRef, McpRawResult } from "../../../shared/contracts/types.js";
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
 import { patchResultFrom } from "../../../shared/protocol/patch.js";
+import { insideRealRoot } from "../../../platform/node/insideRoot.js";
 import { CONVERSATION_METHODS } from "../domain/methodSignature.js";
 import type { AgentMcpServer, AgentPermission, AgentProfile, AgentProvider, AgentSelection, WritableAgentPermission } from "../../agents/contracts/agent.js";
 import { DefaultAgentRunner } from "../../agents/host/agentRouter.js";
@@ -142,15 +143,10 @@ function defaultWorkspace(root: string): DirRef {
   return { kind: "dirRef", uri: pathToFileURL(root).toString(), path: "." };
 }
 
-function insideWorkspace(root: string, candidate: string): boolean {
-  const path = relative(resolve(root), resolve(candidate));
-  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !/^[A-Za-z]:[\\/]/.test(path));
-}
-
-function workspaceCwd(root: string, workspace: unknown): string {
+function workspaceCwd(root: string, workspace: unknown): Promise<string> {
   if (!workspace || typeof workspace !== "object" || !("kind" in workspace) || workspace.kind !== "dirRef"
     || !("uri" in workspace) || typeof workspace.uri !== "string") {
-    return root;
+    return Promise.resolve(root);
   }
   let candidate: string;
   try {
@@ -160,10 +156,10 @@ function workspaceCwd(root: string, workspace: unknown): string {
   } catch {
     throw new Error("ask/agent workspace must be a local workspace directory.");
   }
-  if (!insideWorkspace(root, candidate)) {
-    throw new Error("ask/agent workspace must stay inside the current project.");
-  }
-  return candidate;
+  return insideRealRoot(root, candidate).then((inside) => {
+    if (!inside) throw new Error("ask/agent workspace must stay inside the current project.");
+    return candidate;
+  });
 }
 
 function workspaceDirectory(workspace: unknown, root: string): DirRef {
@@ -586,7 +582,7 @@ export class DextRuntime implements WorkflowRuntime {
                 throw new Error("rules must use paths relative to .dext/rules.");
               }
               const resolvedPath = resolve(rulesRoot, rule);
-              if (!insideWorkspace(this.workspaceRoot, resolvedPath) || !insideWorkspace(rulesRoot, resolvedPath)) {
+              if (!await insideRealRoot(this.workspaceRoot, resolvedPath) || !await insideRealRoot(rulesRoot, resolvedPath)) {
                 throw new Error("rules must stay below .dext/rules.");
               }
               try {
@@ -639,7 +635,7 @@ export class DextRuntime implements WorkflowRuntime {
         }
         const onEvent = runnerMetadata.onAgentEvent ? guardPlanDocumentEvents(runnerMetadata.onAgentEvent) : undefined;
         const cwd = CONVERSATION_METHODS.has(method.id)
-          ? workspaceCwd(this.workspaceRoot, resolved.arguments.workspace)
+          ? await workspaceCwd(this.workspaceRoot, resolved.arguments.workspace)
           : this.workspaceRoot;
         const includePatch = method.id !== "template" && resolved.arguments.patch !== false;
         const raw = await this.agentRunner.run({
@@ -737,7 +733,7 @@ export class DextRuntime implements WorkflowRuntime {
     const source = args.source;
     if (typeof source !== "string" || !source.trim()) throw new Error("template requires a template path.");
     const absolute = isAbsolute(source) ? source : resolve(this.workspaceRoot, source);
-    if (!insideWorkspace(this.workspaceRoot, absolute)) throw new Error("The template must stay inside the workspace.");
+    if (!await insideRealRoot(this.workspaceRoot, absolute)) throw new Error("The template must stay inside the workspace.");
     const spec = parseTemplate(await this.readTemplate(source, absolute), source);
     return { spec, preset: templatePreset(spec, args.values) };
   }
@@ -747,7 +743,7 @@ export class DextRuntime implements WorkflowRuntime {
   private async readTemplate(source: string, absolute: string): Promise<string> {
     const projectRoot = resolve(this.workspaceRoot, ".dext", "templates");
     const globalRoot = this.templateRoot;
-    const fallback = globalRoot && insideWorkspace(projectRoot, absolute)
+    const fallback = globalRoot && await insideRealRoot(projectRoot, absolute)
       ? resolve(globalRoot, "templates", relative(projectRoot, absolute))
       : undefined;
     let failure: unknown;

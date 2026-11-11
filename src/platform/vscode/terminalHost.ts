@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import * as vscode from "vscode";
+import { insideRoot } from "../node/insideRoot.js";
 import type { DeterministicHandler } from "../../features/workflow/contracts/runtime.js";
 import type { TerminalResult } from "../../shared/contracts/types.js";
 
@@ -76,8 +77,7 @@ function trustedWorkspaceRoot(): string {
 function workspaceCwd(root: string, value: unknown): string {
   const requested = value === undefined ? "." : requiredString(value, "cwd");
   const cwd = diskPath(resolve(root, requested));
-  const pathFromRoot = relative(root, cwd);
-  if (isAbsolute(pathFromRoot) || pathFromRoot === ".." || pathFromRoot.startsWith(`..\\`) || pathFromRoot.startsWith("../")) {
+  if (!insideRoot(root, cwd)) {
     throw new Error("terminal cwd must stay inside the current workspace.");
   }
   if (!statSync(cwd).isDirectory()) {

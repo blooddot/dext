@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { insideRoot } from "../../../platform/node/insideRoot.js";
 import { parseSkillMetadata } from "../domain/skillMetadata.js";
 import { parseCommandSource, resolvedCommand, type ParsedSkillCommand } from "../domain/skillCommand.js";
 import type { SkillCommandResolution, SkillCommandSummary } from "../contracts/skill.js";
@@ -42,11 +43,6 @@ interface InvalidCommand {
 }
 
 interface SkillVariant { agent: string; sourcePath: string; title: string; description: string; }
-
-function inside(root: string, candidate: string): boolean {
-  const path = relative(root, candidate);
-  return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
-}
 
 function unique<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
@@ -119,7 +115,7 @@ export class SkillCatalog {
 
   async load(id: string, workspaceRoot: string, workspacePath = ".", agent = "shared"): Promise<{ instructions: string; sourcePath: string }> {
     const base = resolve(workspaceRoot, workspacePath);
-    if (!inside(workspaceRoot, base)) throw new Error("skill workspace must stay inside the current project.");
+    if (!insideRoot(workspaceRoot, base)) throw new Error("skill workspace must stay inside the current project.");
     const descriptor = this.entries.get(id);
     if (!descriptor) throw new Error(`Unknown skill '${id}'. Reload Dext after adding a SKILL.md package.`);
     const variants = this.skillVariants.get(id);
@@ -231,7 +227,7 @@ export class SkillCatalog {
       // check a global pack would tag a local skill that shadows its own copy.
       const scopedSkills = manifest.skills.filter((record) => {
         const skill = this.entries.get(record.id);
-        return Boolean(skill && inside(base, skill.sourcePath));
+        return Boolean(skill && insideRoot(base, skill.sourcePath));
       });
       for (const record of scopedSkills) {
         const skill = this.entries.get(record.id)!;
@@ -242,7 +238,7 @@ export class SkillCatalog {
           const variants = this.skillVariants.get(record.id) ?? [];
           this.skillVariants.set(record.id, variants);
           const path = record.file ? resolve(base, record.file) : undefined;
-          if (!path || !inside(base, path)) { this.notes.push(`${record.id}: variant path escapes the resource root or is missing.`); continue; }
+          if (!path || !insideRoot(base, path)) { this.notes.push(`${record.id}: variant path escapes the resource root or is missing.`); continue; }
           try {
             const metadata = parseSkillMetadata(await readFile(path, "utf8"), record.id);
             const agent = record.agent ?? "unknown";
@@ -263,7 +259,7 @@ export class SkillCatalog {
           continue;
         }
         const path = resolve(base, record.file);
-        if (!inside(base, path)) {
+        if (!insideRoot(base, path)) {
           this.registerInvalidCommand(record.id, "Command path escapes the resource root.", priority, agent);
           continue;
         }
