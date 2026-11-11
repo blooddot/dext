@@ -55,6 +55,29 @@ async function validatedChange(change: PatchChange, autoApply = false): Promise<
   return { document, range: targetRange, alreadyApplied: false };
 }
 
+function startsBefore(a: vscode.Position, b: vscode.Position): boolean {
+  return a.line !== b.line ? a.line < b.line : a.character < b.character;
+}
+
+function samePosition(a: vscode.Position, b: vscode.Position): boolean {
+  return a.line === b.line && a.character === b.character;
+}
+
+// VS Code throws on overlapping edits instead of returning false, so the overlap
+// must be caught before the edit is built. Adjacent ranges are fine.
+function overlappingDocument(validated: Awaited<ReturnType<typeof validatedChange>>[]): vscode.TextDocument | undefined {
+  const pending = validated.filter((change) => !change.alreadyApplied);
+  for (const [index, left] of pending.entries()) {
+    for (const right of pending.slice(index + 1)) {
+      if (left.document.uri.toString() !== right.document.uri.toString()) continue;
+      const identical = samePosition(left.range.start, right.range.start) && samePosition(left.range.end, right.range.end);
+      const interleaved = startsBefore(left.range.start, right.range.end) && startsBefore(right.range.start, left.range.end);
+      if (identical || interleaved) return left.document;
+    }
+  }
+  return undefined;
+}
+
 function codeRef(document: vscode.TextDocument): CodeRef {
   const content = document.getText();
   return {
@@ -106,6 +129,16 @@ export const applyPatchHandler: DeterministicHandler = async ({ arguments: args,
       kind: "apply", status: "unchanged",
       files: [...new Map(validated.map(({ document }) => [document.uri.toString(), document])).values()].map(codeRef),
       summary: "The Agent changes are already present; nothing to apply."
+    } satisfies ApplyResult;
+  }
+
+  const overlap = overlappingDocument(validated);
+  if (overlap) {
+    return {
+      kind: "apply",
+      status: "conflict",
+      files: [],
+      summary: `The edit preview changes the same range of '${overlap.uri.fsPath}' twice; apply one change at a time.`
     } satisfies ApplyResult;
   }
 

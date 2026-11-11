@@ -220,6 +220,19 @@ describe("VS Code patch host", () => {
     if (scenario === "save failure") expect(response.patchApplication?.summary).toContain("could not be saved");
   });
 
+  it("returns a conflict without writing when two changes overlap in one file", async () => {
+    const call = invocation("before", "after");
+    const patch = call.arguments.result as PatchResult;
+    patch.changes = [
+      patch.changes[0]!,
+      { ...patch.changes[0]!, after: "other" }
+    ];
+    const result = await applyPatchHandler(call);
+    expect(result).toMatchObject({ kind: "apply", status: "conflict", files: [], summary: expect.stringContaining("same range") });
+    expect(vscodeState.writes).toBe(0);
+    expect(vscodeState.text).toBe("before");
+  });
+
   it("keeps explicit apply behavior: a repeated original patch conflicts without writing", async () => {
     const call = invocation("before", "after");
     expect(await applyPatchHandler(call)).toMatchObject({ status: "applied" });
