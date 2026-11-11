@@ -80,10 +80,10 @@ export function renderPlanToolbar(view: PlanToolbarView): void {
   elements.build.classList.toggle("stopping", planBuildRunning && view.stopping());
   elements.build.classList.remove("conflict");
   const buildLabel = elements.build.querySelector("span");
-  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : planStatus === "completed" ? "Rebuild" : "Build";
+  if (buildLabel) buildLabel.textContent = planBuildRunning ? "Stop" : "Build";
   elements.build.title = buildRestriction ?? (planBuildRunning
     ? view.stopping() ? "Stopping the active plan" : "Stop building the active plan"
-    : planStatus === "completed" ? "Rebuild the active plan" : "Build the active plan");
+    : "Build the active plan");
   elements.build.setAttribute("aria-label", elements.build.title);
   const buildIcon = elements.build.querySelector<HTMLElement>("i");
   if (buildIcon) buildIcon.className = `codicon codicon-${planBuildRunning ? "debug-stop" : "play"}`;
