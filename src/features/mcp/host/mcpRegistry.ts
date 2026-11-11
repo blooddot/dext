@@ -122,6 +122,8 @@ export interface McpTransport {
   ): Promise<McpToolCallResult>;
   verify?(server: McpServerConfig, options?: McpTransportOptions): Promise<void>;
   listTools?(server: McpServerConfig, options?: McpTransportOptions): Promise<McpDiscoveredTool[]>;
+  /** Closes every cached session so the extension does not leave servers running. */
+  dispose?(): Promise<void>;
 }
 
 export type McpAccessTokenProvider = (server: McpServerConfig) => Promise<string | undefined>;
@@ -265,6 +267,8 @@ function normalizeTimeout(value: unknown, name: string, diagnostics: string[]): 
 }
 
 class StdioJsonRpcClient {
+  /** Replaced per call so the events of the current turn reach its own log. */
+  onProcessEvent: ((event: McpProcessEvent) => void) | undefined;
   private nextId = 1;
   private buffer = "";
   private stderrBuffer = "";
@@ -279,8 +283,9 @@ class StdioJsonRpcClient {
     private readonly process: ChildProcessWithoutNullStreams,
     private readonly serverName: string,
     private readonly timeoutMs: number,
-    private readonly onProcessEvent?: (event: McpProcessEvent) => void
+    onProcessEvent?: (event: McpProcessEvent) => void
   ) {
+    this.onProcessEvent = onProcessEvent;
     this.exited = new Promise((resolve) => this.process.once("exit", () => resolve()));
     this.process.stdout.setEncoding("utf8");
     this.process.stdout.on("data", (chunk: string) => this.consume(chunk));
@@ -442,8 +447,22 @@ function forceKill(child: ChildProcessWithoutNullStreams): void {
   }
 }
 
-/** Standard JSON-RPC stdio lifecycle for one MCP tool call. */
+/** How long an unused MCP session stays open before the server is shut down. */
+const SESSION_IDLE_MS = 30_000;
+
+interface McpSession<Client> {
+  key: string;
+  client: Client;
+  ready: Promise<void>;
+  busy: number;
+  idle: NodeJS.Timeout | undefined;
+}
+
+/** Standard JSON-RPC stdio lifecycle for one MCP server session. The session is
+ * reused for every call while the server configuration stays the same. */
 export class StdioMcpTransport implements McpTransport {
+  private readonly sessions = new Map<string, McpSession<StdioJsonRpcClient>>();
+
   private spawn(server: StdioMcpServerConfig, accessToken?: string): ChildProcessWithoutNullStreams {
     const env = { ...process.env };
     if (server.auth) {
@@ -467,19 +486,66 @@ export class StdioMcpTransport implements McpTransport {
     options: McpTransportOptions = {}
   ): Promise<McpToolCallResult> {
     if (server.transport !== "stdio") throw new Error(`MCP server '${server.name}' is not a stdio server.`);
-    const process = this.spawn(server, options.accessToken);
-    const client = new StdioJsonRpcClient(process, server.name, timeoutFor(server), options.onProcessEvent);
+    const session = this.session(server, options.accessToken);
+    session.busy += 1;
+    if (session.idle) {
+      clearTimeout(session.idle);
+      session.idle = undefined;
+    }
+    session.client.onProcessEvent = options.onProcessEvent;
     try {
-      await client.request("initialize", initializationParams("stdio"));
-      client.notify("notifications/initialized", {});
+      await session.ready;
       return toolResult(
-        await client.request("tools/call", { name: tool, arguments: argumentsValue }),
+        await session.client.request("tools/call", { name: tool, arguments: argumentsValue }),
         server,
         tool
       );
+    } catch (error) {
+      // A session that failed or timed out may be half-dead; the next call
+      // starts a fresh one instead of reusing a broken pipe.
+      await this.close(session);
+      throw error;
     } finally {
-      await client.close();
+      session.busy -= 1;
+      this.scheduleIdle(session);
     }
+  }
+
+  async dispose(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((session) => this.close(session)));
+  }
+
+  private session(server: StdioMcpServerConfig, accessToken?: string): McpSession<StdioJsonRpcClient> {
+    const key = JSON.stringify([server.command, server.args ?? [], server.auth, server.timeoutMs, accessToken]);
+    const existing = this.sessions.get(key);
+    if (existing) return existing;
+    const client = new StdioJsonRpcClient(this.spawn(server, accessToken), server.name, timeoutFor(server));
+    const session: McpSession<StdioJsonRpcClient> = {
+      key,
+      client,
+      busy: 0,
+      idle: undefined,
+      ready: (async () => {
+        await client.request("initialize", initializationParams("stdio"));
+        client.notify("notifications/initialized", {});
+      })()
+    };
+    this.sessions.set(key, session);
+    return session;
+  }
+
+  private scheduleIdle(session: McpSession<StdioJsonRpcClient>): void {
+    if (session.busy > 0 || this.sessions.get(session.key) !== session) return;
+    session.idle = setTimeout(() => { void this.close(session); }, SESSION_IDLE_MS);
+    session.idle.unref();
+  }
+
+  private async close(session: McpSession<StdioJsonRpcClient>): Promise<void> {
+    if (this.sessions.get(session.key) !== session) return;
+    this.sessions.delete(session.key);
+    if (session.idle) clearTimeout(session.idle);
+    session.idle = undefined;
+    await session.client.close();
   }
 
   async verify(server: McpServerConfig, options: McpTransportOptions = {}): Promise<void> {
@@ -677,8 +743,11 @@ class StreamableHttpMcpClient {
   }
 }
 
-/** Streamable HTTP MCP transport using the protocol version in the extension manifest. */
+/** Streamable HTTP MCP transport using the protocol version in the extension manifest.
+ * The session is reused for every call while url, auth and token stay the same. */
 export class HttpMcpTransport implements McpTransport {
+  private readonly sessions = new Map<string, McpSession<StreamableHttpMcpClient>>();
+
   constructor(private readonly fetchImpl: McpFetch = (url, init) => fetch(url, init)) {}
 
   async call(
@@ -688,13 +757,60 @@ export class HttpMcpTransport implements McpTransport {
     options: McpTransportOptions = {}
   ): Promise<McpToolCallResult> {
     if (server.transport !== "http") throw new Error(`MCP server '${server.name}' is not an HTTP server.`);
-    const client = new StreamableHttpMcpClient(server, this.fetchImpl, options.accessToken);
-    try {
-      await client.initialize();
-      return toolResult(await client.call(tool, argumentsValue), server, tool);
-    } finally {
-      await client.terminate();
+    const session = this.session(server, options.accessToken);
+    session.busy += 1;
+    if (session.idle) {
+      clearTimeout(session.idle);
+      session.idle = undefined;
     }
+    try {
+      await session.ready;
+      return toolResult(await session.client.call(tool, argumentsValue), server, tool);
+    } catch (error) {
+      // The next call initializes a fresh session instead of reusing a broken one.
+      await this.close(session);
+      throw error;
+    } finally {
+      session.busy -= 1;
+      this.scheduleIdle(session);
+    }
+  }
+
+  async dispose(): Promise<void> {
+    await Promise.all([...this.sessions.values()].map((session) => this.close(session)));
+  }
+
+  private session(server: McpServerConfig, accessToken?: string): McpSession<StreamableHttpMcpClient> {
+    if (server.transport !== "http") throw new Error(`MCP server '${server.name}' is not an HTTP server.`);
+    const key = JSON.stringify([server.url, server.auth, accessToken]);
+    const existing = this.sessions.get(key);
+    if (existing) return existing;
+    const client = new StreamableHttpMcpClient(server, this.fetchImpl, accessToken);
+    const session: McpSession<StreamableHttpMcpClient> = {
+      key,
+      client,
+      busy: 0,
+      idle: undefined,
+      ready: (async () => {
+        await client.initialize();
+      })()
+    };
+    this.sessions.set(key, session);
+    return session;
+  }
+
+  private scheduleIdle(session: McpSession<StreamableHttpMcpClient>): void {
+    if (session.busy > 0 || this.sessions.get(session.key) !== session) return;
+    session.idle = setTimeout(() => { void this.close(session); }, SESSION_IDLE_MS);
+    session.idle.unref();
+  }
+
+  private async close(session: McpSession<StreamableHttpMcpClient>): Promise<void> {
+    if (this.sessions.get(session.key) !== session) return;
+    this.sessions.delete(session.key);
+    if (session.idle) clearTimeout(session.idle);
+    session.idle = undefined;
+    await session.client.terminate();
   }
 
   async verify(server: McpServerConfig, options: McpTransportOptions = {}): Promise<void> {
@@ -744,6 +860,10 @@ class DefaultMcpTransport implements McpTransport {
     return server.transport === "http"
       ? this.http.listTools(server, options)
       : this.stdio.listTools(server, options);
+  }
+
+  async dispose(): Promise<void> {
+    await Promise.all([this.stdio.dispose(), this.http.dispose()]);
   }
 }
 
@@ -963,6 +1083,11 @@ export class McpToolRegistry {
   async discoverTools(server: McpServerConfig): Promise<McpDiscoveredTool[]> {
     if (!this.transport.listTools) throw new Error("MCP tool discovery is not available.");
     return this.transport.listTools(server, await this.transportOptions(server));
+  }
+
+  /** Closes every cached MCP session; called when the extension stops. */
+  async dispose(): Promise<void> {
+    await this.transport.dispose?.();
   }
 
   private async transportOptions(server: McpServerConfig): Promise<McpTransportOptions> {

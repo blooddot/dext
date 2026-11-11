@@ -206,6 +206,9 @@ describe("McpToolRegistry", () => {
     registry.setAccessTokenProvider(async () => "a&b=c");
 
     await expect(registry.call("gateway.read", {})).resolves.toMatchObject({ content: "ok" });
+    // The session stays open for the next call; only dispose terminates it.
+    expect(requests.map((entry) => entry.method)).toEqual(["POST", "POST", "POST"]);
+    await registry.dispose();
     expect(requests.map((entry) => entry.method)).toEqual(["POST", "POST", "POST", "DELETE"]);
     expect(requests.map((entry) => entry.url)).toEqual(Array.from({ length: 4 }, () => "https://mcp.example.test/server/abc?key=a%26b%3Dc"));
     expect(requests.map((entry) => entry.authorization)).toEqual([null, null, null, null]);
@@ -219,7 +222,7 @@ describe("McpToolRegistry", () => {
     await expect(registry.call("gateway.read", {})).rejects.toThrow("Run 'Dext: Set MCP Access Token'");
   });
 
-  it("uses Streamable HTTP initialize, initialized notification, tools/call, and session termination", async () => {
+  it("initializes one Streamable HTTP session for repeated calls and terminates it on dispose", async () => {
     const requests: Array<{ method: string; message?: Record<string, unknown>; session?: string | null; accept?: string | null }> = [];
     const fetcher: McpFetch = async (_url, init) => {
       const headers = new Headers(init?.headers);
@@ -249,16 +252,19 @@ describe("McpToolRegistry", () => {
     await expect(registry.call("remote.status", {})).resolves.toMatchObject({
       kind: "mcpRaw", content: "ok", structured: { ready: true }
     });
-    expect(requests.map((request) => request.method)).toEqual(["POST", "POST", "POST", "DELETE"]);
+    await expect(registry.call("remote.status", {})).resolves.toMatchObject({ content: "ok" });
+    expect(requests.map((request) => request.method)).toEqual(["POST", "POST", "POST", "POST"]);
+    await registry.dispose();
+    expect(requests.map((request) => request.method)).toEqual(["POST", "POST", "POST", "POST", "DELETE"]);
     expect(requests.map((request) => request.message?.method)).toEqual([
-      "initialize", "notifications/initialized", "tools/call", undefined
+      "initialize", "notifications/initialized", "tools/call", "tools/call", undefined
     ]);
     expect(requests[0]?.message?.params).toEqual({
       protocolVersion: dext.mcpProtocolVersions.http,
       capabilities: {},
       clientInfo: { name, version }
     });
-    expect(requests.slice(1).map((request) => request.session)).toEqual(["session-a", "session-a", "session-a"]);
+    expect(requests.slice(1).map((request) => request.session)).toEqual(["session-a", "session-a", "session-a", "session-a"]);
     expect(requests[0]?.accept).toContain("application/json");
     expect(requests[0]?.accept).toContain("text/event-stream");
   });
@@ -371,6 +377,7 @@ describe("McpToolRegistry", () => {
     } else {
       await expect(transport.verify(server)).resolves.toBeUndefined();
     }
+    await transport.dispose();
   });
 
   it("force-kills a stdio server that ignores SIGTERM", { timeout: 20_000 }, async () => {
@@ -443,5 +450,54 @@ describe("McpToolRegistry", () => {
       { source: "progress", text: "Reading task · 1/1" },
       { source: "stderr", text: "Task request completed" }
     ]));
+    await transport.dispose();
+  });
+
+  it("reuses one stdio process for repeated calls and shuts it down on dispose", { timeout: 20_000 }, async () => {
+    const root = await mkdtemp(join(tmpdir(), "dext-mcp-reuse-"));
+    const pidFile = join(root, "pid");
+    const logFile = join(root, "log");
+    const script = [
+      "const { appendFileSync, writeFileSync } = require('node:fs');",
+      "writeFileSync(process.argv[1], String(process.pid));",
+      "let input = '';",
+      "process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data', (chunk) => {",
+      "  input += chunk;",
+      "  let newline = input.indexOf('\\n');",
+      "  while (newline >= 0) {",
+      "    const message = JSON.parse(input.slice(0, newline));",
+      "    input = input.slice(newline + 1);",
+      "    if (message.method === 'initialize') appendFileSync(process.argv[2], 'initialize\\n');",
+      "    if (message.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: {} }) + '\\n');",
+      "    newline = input.indexOf('\\n');",
+      "  }",
+      "});"
+    ].join("\n");
+    const transport = new StdioMcpTransport();
+    const server = { name: "reused", transport: "stdio" as const, command: process.execPath, args: ["-e", script, pidFile, logFile] };
+    let pid = 0;
+    const alive = (): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      await expect(transport.call(server, "one", {})).resolves.toEqual({});
+      await expect(transport.call(server, "two", {})).resolves.toEqual({});
+      pid = Number((await readFile(pidFile, "utf8")).trim());
+      expect((await readFile(logFile, "utf8")).trim().split("\n")).toEqual(["initialize"]);
+      expect(alive()).toBe(true);
+
+      await transport.dispose();
+      for (let attempt = 0; attempt < 60 && alive(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(alive()).toBe(false);
+    } finally {
+      await transport.dispose();
+      await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    }
   });
 });

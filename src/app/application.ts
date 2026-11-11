@@ -1749,11 +1749,12 @@ export class DextApplication {
     this.refreshAgentProfiles();
   }
 
-  dispose(): Promise<void> {
+  async dispose(): Promise<void> {
     // Each Code conversation may hold a kernel child process; nothing else kills them.
     this.stopKernel();
     this.frames?.dispose();
-    return this.agentRunner.dispose();
+    await this.mcp.dispose();
+    await this.agentRunner.dispose();
   }
 
   async discoverHarnessPresets(): Promise<void> {
