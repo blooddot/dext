@@ -3646,14 +3646,17 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
 }
 
 /* The answer's copy control floats over its top-right corner and appears on
-   hover or keyboard focus, like the rest of the row controls. */
+   hover or keyboard focus, like the rest of the row controls. z-index lifts it
+   over the answer's own positioned block, which otherwise covers the lower half
+   of the hit area and takes its clicks as text. */
 .turn-output > :is(.copy-button, .output-copy),
 .turn-output > .output-copy.icon-button {
   position: absolute;
-  top: 8px;
+  z-index: 1;
+  top: 4px;
   right: 0;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   border-radius: 4px;
   opacity: 0;
   transition: opacity 120ms ease-out;
