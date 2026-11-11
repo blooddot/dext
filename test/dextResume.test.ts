@@ -80,6 +80,32 @@ describe("Dext run replay", () => {
     expect(replayed.executions).toHaveLength(2);
   });
 
+  it("replays a call whose optional argument is undefined", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    // `toDextJson` drops the undefined key, so the host records `{ input: "one" }`
+    // while the caller's own object still carries `model: undefined`.
+    const file = await fixture(root, "optional.ts", [
+      "import { ask } from \"dext\";",
+      "const maybe: string | undefined = undefined;",
+      "const first = await ask({ input: \"one\", model: maybe });",
+      "console.log(first.text);",
+      ""
+    ].join("\n"));
+    const first = host(root, async (invocation) => askResponse(invocation));
+    let recorded: readonly DextReplayEntry[] = [];
+    await first.run(file, { onCallLog: (entries) => { recorded = entries; } });
+    expect(recorded.map((entry) => entry.arguments)).toEqual([{ input: "one" }]);
+
+    let calls = 0;
+    const second = host(root, async (invocation) => {
+      calls += 1;
+      return askResponse(invocation);
+    });
+    const replayed = await second.run(file, { resume: recorded });
+    expect(calls).toBe(0);
+    expect(replayed.steps?.[0]?.response?.result).toEqual({ kind: "ask", text: "one" });
+  });
+
   it("refuses to reuse a recorded response when the calls no longer line up", { timeout: 30000 }, async () => {
     const root = await workspace();
     const file = await fixture(root, "run.ts", TWO_ASKS);

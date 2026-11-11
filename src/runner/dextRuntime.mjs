@@ -152,7 +152,8 @@ async function invoke(method, options) {
   if (typeof args !== "object" || Array.isArray(args)) {
     throw new Error(`${method}() takes one object of named arguments, for example ${method}({ input: "..." }).`);
   }
-  const recorded = replay(method, args);
+  const converted = toDextJson(args, `The arguments of ${method}()`);
+  const recorded = replay(method, converted);
   // A call reaches Output only when it asked for `echo: true`; otherwise the step is
   // marked quiet, which hides its result from Output while the caller, resume and
   // history keep the full record.
@@ -167,7 +168,7 @@ async function invoke(method, options) {
     type: "request",
     id,
     method,
-    arguments: toDextJson(args, `The arguments of ${method}()`)
+    arguments: converted
   };
   flushStreams();
   const completion = new Promise((resolve, reject) => {
