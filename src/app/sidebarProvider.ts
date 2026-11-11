@@ -22,6 +22,7 @@ import { dedupeSkillIds, withoutSkills } from "../features/conversations/domain/
 import type { McpServerConfig } from "../features/mcp/host/mcpRegistry.js";
 import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
 import { FileSearchController } from "../features/workspace/host/fileSearchController.js";
+import { referencedAttachmentNames } from "../platform/vscode/dextStorage.js";
 import { ReadyMessageQueue } from "../shared/lib/readyMessageQueue.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import {
@@ -1286,6 +1287,12 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /** Attachment files saved history still points at, so pruning never breaks an
+   * old conversation's image or log. */
+  private referencedAttachments(): ReadonlySet<string> {
+    return referencedAttachmentNames(this.history.list(true).map((session) => JSON.stringify(session)).join("\n"));
+  }
+
   /** `limit` is the base64 bridge's own ceiling for a pasted video; the
    * configured attachment limit applies otherwise. */
   private async storeImage(data: string, mimeType: string, limit = this.application.storage.attachmentByteLimit()): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
@@ -1300,7 +1307,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await vscode.workspace.fs.createDirectory(directory);
     const uri = vscode.Uri.joinPath(directory, name);
     await vscode.workspace.fs.writeFile(uri, buffer);
-    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
+    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri, () => this.referencedAttachments());
     return { relativePath: this.application.storage.reference("attachments", name), uri, name };
   }
 
@@ -1315,7 +1322,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await vscode.workspace.fs.createDirectory(directory);
     const uri = vscode.Uri.joinPath(directory, name);
     await vscode.workspace.fs.writeFile(uri, buffer);
-    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
+    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri, () => this.referencedAttachments());
     return { relativePath: this.application.storage.reference("attachments", name), uri, name };
   }
 
@@ -1358,7 +1365,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await vscode.workspace.fs.createDirectory(directory);
     const uri = vscode.Uri.joinPath(directory, name);
     await vscode.workspace.fs.copy(source, uri, { overwrite: true });
-    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
+    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri, () => this.referencedAttachments());
     return { relativePath: this.application.storage.reference("attachments", name), uri, name };
   }
 

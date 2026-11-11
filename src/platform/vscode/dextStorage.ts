@@ -24,6 +24,14 @@ function safeSegments(path: string): string[] | undefined {
     : undefined;
 }
 
+/** Attachment file names a history text still references, so pruning keeps them. */
+export function referencedAttachmentNames(text: string): ReadonlySet<string> {
+  const names = [...text.matchAll(ATTACHMENT_REFERENCE)]
+    .map((match) => (match[1] ?? "").split("/").at(-1) ?? "")
+    .filter((name) => ATTACHMENT_FILE.test(name));
+  return new Set(names);
+}
+
 /** Resolves Dext-owned transient files independently of the workspace. Global
  * references carry their location with them, so changing the setting never
  * strands a plan or image saved under the previous choice. */
@@ -102,7 +110,7 @@ export class DextStorage {
     return `${input}\n\n${listing}${video}`;
   }
 
-  async pruneAttachments(maxFiles: number, keep?: vscode.Uri): Promise<void> {
+  async pruneAttachments(maxFiles: number, keep?: vscode.Uri, keepNames?: () => ReadonlySet<string>): Promise<void> {
     const directory = this.directory("attachments");
     let entries: [string, vscode.FileType][];
     try {
@@ -113,14 +121,15 @@ export class DextStorage {
     }
     const attachments = entries
       .filter(([name, type]) => type === vscode.FileType.File && ATTACHMENT_FILE.test(name))
-      .map(([name]) => vscode.Uri.joinPath(directory, name));
+      .map(([name]) => ({ name, uri: vscode.Uri.joinPath(directory, name) }));
     const excess = attachments.length - maxFiles;
     if (excess <= 0) return;
-    const dated = await Promise.all(attachments.map(async (uri) => ({ uri, stat: await vscode.workspace.fs.stat(uri) })));
+    const keptNames = keepNames?.();
+    const dated = await Promise.all(attachments.map(async ({ name, uri }) => ({ name, uri, stat: await vscode.workspace.fs.stat(uri) })));
     dated.sort((left, right) => left.stat.mtime - right.stat.mtime || left.stat.ctime - right.stat.ctime);
     const protectedUri = keep?.toString();
     await Promise.all(dated
-      .filter(({ uri }) => uri.toString() !== protectedUri)
+      .filter(({ name, uri }) => uri.toString() !== protectedUri && !keptNames?.has(name))
       .slice(0, excess)
       .map(({ uri }) => vscode.workspace.fs.delete(uri)));
   }
