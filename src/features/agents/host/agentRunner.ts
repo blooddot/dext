@@ -826,6 +826,7 @@ export async function runClaudeConversation(request: AgentConversationRequest, o
   let buffer = "";
   let finished = false;
   let resultSeen = false;
+  let lateReported = false;
   let resultError: string | undefined;
   let abortReason: Error | undefined;
   let settle: ReturnType<typeof setTimeout> | undefined;
@@ -917,7 +918,15 @@ export async function runClaudeConversation(request: AgentConversationRequest, o
   };
 
   const receive = (line: string): void => {
-    if (finished || !line.trim()) return;
+    if (finished) {
+      // Output that would have been recorded had the turn still been running.
+      if (!lateReported && !abortReason && line.trim()) {
+        lateReported = true;
+        console.warn(`Dext: the Claude CLI produced output after its turn finished; Dext did not record it: ${line.slice(0, 200)}`);
+      }
+      return;
+    }
+    if (!line.trim()) return;
     timeout.activity();
     trackCliToolActivity("claude", line, timeout);
     const frame = record(extractJson(line));

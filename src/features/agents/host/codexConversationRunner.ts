@@ -43,6 +43,7 @@ export async function runCodexConversation(request: AgentConversationRequest, op
   let threadId = "";
   let turnId = "";
   let finished = false;
+  let lateReported = false;
   let finalText = "";
   let lastMessage = "";
   const inputs = new Map<string, { controller: AbortController; request: AgentInputRequest }>();
@@ -92,7 +93,14 @@ export async function runCodexConversation(request: AgentConversationRequest, op
     }
   };
   const message = ({ id, method, params }: CodexRpcMessage): void => {
-    if (finished) return;
+    if (finished) {
+      // A frame that would have been recorded had the turn still been running.
+      if (!lateReported && (method === "turn/started" || (method === "item/completed" && object(params.item).type === "agentMessage"))) {
+        lateReported = true;
+        console.warn("Dext: Codex produced a response after its turn finished; Dext did not record it.");
+      }
+      return;
+    }
     timeout.activity();
     if (id !== undefined) {
       if ((method === "item/tool/requestUserInput" || method === "tool/requestUserInput") && params.threadId === threadId) {

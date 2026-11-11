@@ -38,6 +38,8 @@ interface Session {
    * tool this turn, as JSON. Preferred over the final message when present. */
   submitted?: string | undefined;
   timeout?: ReturnType<typeof agentTimeout> | undefined;
+  /** Set once an update arrived with no turn to attribute it to. */
+  lateReported?: boolean;
 }
 
 export function harnessChoices(options: readonly SessionConfigOption[], id: string): { value: string; name: string; group?: string }[] {
@@ -174,7 +176,15 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     const update = event.update;
     const request = session.request;
     if (update.sessionUpdate === "config_option_update") { session.options = update.configOptions; return; }
-    if (!request) return;
+    if (!request) {
+      // Content that arrives between turns would have been recorded; keep the
+      // loss diagnosable instead of silent. Once per session, not per chunk.
+      if (!session.lateReported && ["agent_message_chunk", "agent_thought_chunk", "plan", "tool_call", "tool_call_update"].includes(update.sessionUpdate)) {
+        session.lateReported = true;
+        console.warn(`Dext: the DeepSeek Harness sent '${update.sessionUpdate}' while no turn was running; Dext did not record it.`);
+      }
+      return;
+    }
     if (update.sessionUpdate === "plan") {
       const todos = normalizeAgentTodos(update.entries);
       if (todos) request.onEvent?.(agentTodoEvent(todos));

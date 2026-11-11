@@ -33,6 +33,17 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (scenario === "failed-turn") { notify("turn/completed", { turn: { id: "turn-1", status: "failed", error: diagnosticError } }); continue; }
     if (scenario === "retry-error") { notify("error", { error: diagnosticError, willRetry: true }); finish("retry succeeded"); continue; }
     if (scenario === "slow") { setTimeout(() => finish("slow"), 120); continue; }
+    if (scenario === "late-turn") {
+      // Completed plus a frame after it, in one chunk: the runner must notice the
+      // second one arrived with no turn to receive it.
+      const lines = [
+        { method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", id: "final", text: "Received: late", phase: "final_answer" } } },
+        { method: "turn/completed", params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed" } } },
+        { method: "turn/started", params: { threadId: "thread-1", turnId: "turn-2", turn: { id: "turn-2", status: "inProgress" } } }
+      ];
+      process.stdout.write(`${lines.map((value) => JSON.stringify(value)).join("\n")}\n`);
+      continue;
+    }
     if (scenario === "config") { finish(JSON.stringify({ config, input: params.input })); continue; }
     if (scenario === "exit") { process.exit(2); }
     if (scenario === "async" || scenario === "expires" || scenario === "steer-fails") {

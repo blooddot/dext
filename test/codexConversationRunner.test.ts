@@ -98,6 +98,13 @@ describe("Codex interactive conversations over stdio", () => {
   it("surfaces process failure instead of leaving an empty Output", async () => {
     await expect(setup("exit").run()).rejects.toThrow(/exited/);
   });
+  it("reports a frame that arrives after the turn completed instead of dropping it silently", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await setup("late-turn").run()).toBe("Received: late");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("did not record it"));
+    } finally { warn.mockRestore(); }
+  });
   it.each(["error-notification", "failed-turn", "rpc-error"])("preserves provider diagnostics from %s over the real transport", async (scenario) => {
     const error = await setup(scenario).run().then(() => { throw new Error("Expected Codex to fail"); }, (error: unknown) => error);
     expect(error).toBeInstanceOf(Error);
