@@ -79,7 +79,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const appearance = new DextAppearanceController(context.globalState);
   // History trims whole conversations inside its own persist(), where no
   // preferences object exists; clear what trimming left behind at startup.
-  await preferences.pruneConversations(history.list(true).map((session) => session.id));
+  await preferences.pruneConversations(history.summaries(true).map((summary) => summary.id));
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage, appearance);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences, appearance);
   // Unified editor tabs: Resources and History all go through one manager so
@@ -391,10 +391,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     turnId?: string;
     dextTabTitle?: string;
   }
-  const historySession = (context?: ConversationContext): DextHistorySession => {
-    const session = context?.sessionId
-      ? history.list(true).find((item) => item.id === context.sessionId)
-      : undefined;
+  // The body is read only when a command actually needs it.
+  const historySession = async (context?: ConversationContext): Promise<DextHistorySession> => {
+    const session = context?.sessionId ? await history.session(context.sessionId) : undefined;
     if (!session) throw new Error("Conversation not found in Dext history.");
     return session;
   };
@@ -467,7 +466,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyPanel.refresh();
   };
   const setFavorite = async (context: ConversationContext | undefined, favorite: boolean): Promise<void> => {
-    await preferences.setFavorite(historySession(context).id, favorite);
+    await preferences.setFavorite((await historySession(context)).id, favorite);
     historyPanel.refresh();
   };
   const updateTrustContext = (): void => {
@@ -545,7 +544,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.openHistory", () => historyPanel.showInActiveEditor()),
     vscode.commands.registerCommand("dext.history.continueConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const restored = { ...session };
         if (restored.archivedAt) delete restored.archivedAt;
         if (session.archivedAt) await history.setArchived(session.id, false);
@@ -555,28 +554,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       })
     ),
     vscode.commands.registerCommand("dext.history.forkConversation", (context?: ConversationContext) =>
-      reportCommandError(() => {
-        const session = historySession(context);
+      reportCommandError(async () => {
+        const session = await historySession(context);
         return forkConversation(session, session.turns);
       })
     ),
     vscode.commands.registerCommand("dext.history.forkFromTurn", (context?: ConversationContext) =>
-      reportCommandError(() => {
-        const session = historySession(context);
+      reportCommandError(async () => {
+        const session = await historySession(context);
         const index = session.turns.findIndex((turn) => turn.id === context?.turnId);
         if (index === -1) throw new Error("Conversation turn not found.");
         return forkConversation(session, session.turns.slice(0, index + 1));
       })
     ),
     vscode.commands.registerCommand("dext.history.renameConversation", (context?: ConversationContext) =>
-      reportCommandError(() => {
-        const session = historySession(context);
+      reportCommandError(async () => {
+        const session = await historySession(context);
         return renameConversation(session.id, preferences.title(session.id) ?? conversationTitle(session));
       })
     ),
     vscode.commands.registerCommand("dext.history.renameTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const turn = session.turns.find((item) => item.id === context?.turnId);
         if (!turn) throw new Error("Conversation turn not found.");
         const name = await vscode.window.showInputBox({
@@ -587,12 +586,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
         if (name === undefined) return;
         await sidebar.renameTurn(session.id, turn.id, name);
-        historyPanel.refreshTurnTitle(session.id, turn.id);
+        void historyPanel.refreshTurnTitle(session.id, turn.id);
       })
     ),
     vscode.commands.registerCommand("dext.history.copyTurnInput", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const turn = session.turns.find((item) => item.id === context?.turnId);
         if (!turn) throw new Error("Conversation turn not found.");
         // Exactly what was submitted, without the answer or the Markdown wrapper.
@@ -601,7 +600,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.history.copyTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const index = session.turns.findIndex((item) => item.id === context?.turnId);
         if (index === -1) throw new Error("Conversation turn not found.");
         await vscode.env.clipboard.writeText(historyTurnMarkdown(session.turns[index]!, index));
@@ -609,7 +608,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.history.addTurnToDext", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const turn = session.turns.find((item) => item.id === context?.turnId);
         if (!turn) throw new Error("Conversation turn not found.");
         await sidebar.referenceConversation(historyTranscript(session, turn));
@@ -619,14 +618,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.history.addConversationToDext", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        await sidebar.referenceConversation(historyTranscript(historySession(context)));
+        await sidebar.referenceConversation(historyTranscript(await historySession(context)));
         await focusSidebar();
         sidebar.showChat();
       })
     ),
     vscode.commands.registerCommand("dext.history.openSpill", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const path = session.turns.find((item) => item.id === context?.turnId)?.spillPath;
         if (!path) {
           await vscode.window.showInformationMessage("This turn has no truncated output.");
@@ -637,7 +636,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.history.retryTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const turn = session.turns.find((item) => item.id === context?.turnId);
         if (!turn) throw new Error("Conversation turn not found.");
         const confirmed = await vscode.window.showWarningMessage(TURN_RETRY_CONFIRMATION, { modal: true }, "Retry");
@@ -655,7 +654,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.history.deleteTurn", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         const turn = session.turns.find((item) => item.id === context?.turnId);
         if (!turn) throw new Error("Conversation turn not found.");
         if (!await confirmHistoryDeletion(TURN_DELETE_CONFIRMATION)) return;
@@ -666,22 +665,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.history.editTurnInput", (context?: ConversationContext) =>
       reportCommandError(async () => {
         if (!context?.sessionId || !context.turnId) throw new Error("Conversation turn not found.");
-        sidebar.editTurnInput(context.sessionId, context.turnId);
+        await sidebar.editTurnInput(context.sessionId, context.turnId);
         await focusSidebar();
         sidebar.showChat();
       })
     ),
     vscode.commands.registerCommand("dext.history.recordWorkflow", (context?: ConversationContext) =>
-      reportCommandError(() => recordConversation(historySession(context)))
+      reportCommandError(async () => recordConversation(await historySession(context)))
     ),
     vscode.commands.registerCommand("dext.history.copyConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        await vscode.env.clipboard.writeText(conversationMarkdown(historySession(context)));
+        await vscode.env.clipboard.writeText(conversationMarkdown(await historySession(context)));
       })
     ),
     vscode.commands.registerCommand("dext.history.deleteConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         if (!await confirmHistoryDeletion(
           `Delete this Dext conversation and its ${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}?`
         )) return;
@@ -695,7 +694,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.history.archiveConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         await sidebar.forgetConversation(session.id);
         await history.setArchived(session.id, true);
         await preferences.setPinned(session.id, false);
@@ -704,7 +703,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("dext.history.unarchiveConversation", (context?: ConversationContext) =>
       reportCommandError(async () => {
-        const session = historySession(context);
+        const session = await historySession(context);
         await history.setArchived(session.id, false);
         historyPanel.refresh();
       })

@@ -24,7 +24,7 @@ async function harness(error?: string) {
       }] };
     }
   });
-  harness.seed([session]);
+  await harness.seed([session]);
   harness.controller.activate(harness.controller.session(session.id)!);
   const active = harness.controller.active();
   // Building re-reads the plan file and starts the execution turn, exactly as
@@ -67,7 +67,7 @@ describe("Plan composer after execution", () => {
     await h.run();
     expect(h.executeConversation).toHaveBeenCalledOnce();
     expect(h.session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "active" });
-    expect(h.history.list()[0]?.planProgress?.todos[0]?.status).toBe("in_progress");
+    expect((await h.history.sessions())[0]?.planProgress?.todos[0]?.status).toBe("in_progress");
     expect(h.controller.session("session")?.turns[0]?.planOutcome?.status).toBe("cancelled");
   });
 
@@ -96,7 +96,7 @@ describe("Plan composer after execution", () => {
     await h.run();
     expect(h.session.planStatus).toBe("new");
     expect(h.session.activePlanPath).toBeUndefined();
-    const saved = h.history.list()[0]!;
+    const saved = (await h.history.sessions())[0]!;
     expect(saved.planStatus).toBe("new");
     expect(saved.activePlanPath).toBeUndefined();
     expect(saved.turns[0]).toMatchObject({ executePlan: true, planPath: "old.plan.md" });
@@ -110,7 +110,7 @@ describe("Plan composer after execution", () => {
     const h = await harness(error);
     await h.run();
     expect(h.session).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "failed" });
-    expect(h.history.list()[0]).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "failed" });
+    expect((await h.history.sessions())[0]).toMatchObject({ activePlanPath: "old.plan.md", planStatus: "failed" });
   });
 
   it("allows explicitly selecting the completed plan for revision", async () => {

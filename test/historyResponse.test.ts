@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readHistoryResponse } from "../src/features/conversations/domain/historyResponse.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { historyTurnMarkdown, renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 
 function legacyRecord(method = "agent", serialized = false): DextHistoryRecord {
@@ -37,11 +38,11 @@ describe("historical result compatibility", () => {
     expect(markdown).not.toContain('"kind": "chat"');
   });
 
-  it("restores normalized results when the history store reopens, preserving the saved record", () => {
+  it("restores normalized results when the history store reopens, preserving the saved record", async () => {
     const record = legacyRecord();
     const persisted = [{ id: "session", createdAt: 1, updatedAt: 1, turns: [record] }];
-    const store = new DextHistoryStore({ get: (key: string, fallback: unknown) => key === "dext.history" ? persisted : fallback } as never);
-    expect(store.list()[0]?.turns[0]?.response?.executions[0]?.result.kind).toBe("agent");
+    const store = new DextHistoryStore(new MemoryHistoryBackend({ legacy: persisted }));
+    expect((await store.sessions())[0]?.turns[0]?.response?.executions[0]?.result.kind).toBe("agent");
     expect((record.response?.executions[0]?.result as unknown as { kind: string }).kind).toBe("chat");
   });
 

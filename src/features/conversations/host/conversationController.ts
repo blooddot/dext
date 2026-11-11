@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
-import type { ConversationHistoryStore, DextHistorySession } from "../contracts/history.js";
+import type { ConversationHistoryStore, DextHistorySession, DextHistorySummary } from "../contracts/history.js";
 import type { ConversationLayout, ConversationPreferences } from "../contracts/preferences.js";
 import type {
   ConversationSummary,
@@ -81,7 +81,10 @@ export class ConversationController {
   // Conversations behave like editor tabs: the strip only shows the ones that
   // are open, while every conversation stays reachable through history.
   private openConversations: string[] = [this.activeSession.id];
-  private sessionsHydrated = false;
+  // Metadata for every conversation: a tab's title and turn count must render
+  // without reading the conversation body.
+  private readonly summaries = new Map<string, DextHistorySummary>();
+  private hydration?: Promise<void>;
   private readonly postedSessionSignatures = new Map<string, string>();
   private layoutWriteTimer: ReturnType<typeof setTimeout> | undefined;
   private layoutWriteInFlight: Promise<void> | undefined;
@@ -115,20 +118,42 @@ export class ConversationController {
     return this.conversationSelections.get(sessionId);
   }
 
-  hydrate(): void {
-    if (this.sessionsHydrated) return;
-    this.sessionsHydrated = true;
-    const storedSessions = this.history.list();
-    for (const session of storedSessions) {
-      if (session.planStatus === "running" && !this.options.execution.running(session.id)) {
-        session.planStatus = session.activePlanPath ? "active" : "new";
-        void this.history.updatePlanContext(session.id, session.activePlanPath, session.planStatus).catch(() => undefined);
-      }
+  /** Loads the conversations the user can see: the open tabs, the pinned ones
+   * and the active one. Everything else stays on disk until it is opened. */
+  hydrate(): Promise<void> {
+    this.hydration ??= this.hydrateOnce();
+    return this.hydration;
+  }
+
+  private async hydrateOnce(): Promise<void> {
+    const layout = this.preferences.conversationLayout();
+    const pinned = this.preferences.pinned();
+    const stored = this.history.summaries(true);
+    for (const summary of stored) {
+      this.resetStalePlan(summary);
+      this.summaries.set(summary.id, summary);
+    }
+    const opened = new Set([
+      ...layout.openConversationIds,
+      ...pinned,
+      ...(layout.activeConversationId ? [layout.activeConversationId] : [])
+    ]);
+    // A layout written before tabs existed names nothing. Start from the
+    // conversation the user last touched instead of an empty sidebar.
+    if (!opened.size && stored.length) {
+      opened.add([...stored].sort((left, right) => right.updatedAt - left.updatedAt)[0]!.id);
+    }
+    for (const sessionId of opened) {
+      const session = await this.history.session(sessionId);
+      if (!session) continue;
+      // The index already carries the corrected status; apply it here so the tab
+      // does not wait for that metadata write to land.
+      const status = this.summaries.get(session.id)?.planStatus;
+      if (session.planStatus === "running" && status !== undefined) session.planStatus = status;
       this.sessions.set(session.id, session);
     }
     if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
     const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    const layout = this.preferences.conversationLayout();
     const restored = layout.openConversationIds.filter((id) => this.sessions.has(id));
     const previouslyActive = layout.activeConversationId
       ? this.sessions.get(layout.activeConversationId)
@@ -143,8 +168,16 @@ export class ConversationController {
     // Keep every tab the user left open, including non-pinned ones. Pins still
     // provide a backwards-compatible fallback for layouts saved before this
     // state was introduced.
-    const pinned = this.preferences.pinned().filter((id) => this.sessions.has(id));
-    this.openConversations = [...new Set([...restored, ...pinned, this.activeSession.id])];
+    const pinnedOpen = pinned.filter((id) => this.sessions.has(id));
+    this.openConversations = [...new Set([...restored, ...pinnedOpen, this.activeSession.id])];
+  }
+
+  /** A plan that was running when the window closed can never still be running.
+   * Resetting it from the index keeps an unopened conversation body unread. */
+  private resetStalePlan(summary: DextHistorySummary): void {
+    if (summary.planStatus !== "running" || this.options.execution.running(summary.id)) return;
+    summary.planStatus = summary.activePlanPath ? "active" : "new";
+    void this.history.updatePlanContext(summary.id, summary.activePlanPath, summary.planStatus).catch(() => undefined);
   }
 
   layout(): ConversationLayout {
@@ -207,14 +240,19 @@ export class ConversationController {
     return orderedConversationIds(this.openConversations, (id) => this.preferences.isPinned(id));
   }
 
-  summarize(session: DextHistorySession): ConversationSummary {
+  /** What a tab shows: the loaded conversation if this window has it, the index
+   * entry otherwise. */
+  summarize(sessionId: string): ConversationSummary | undefined {
+    const session = this.sessions.get(sessionId);
+    const summary = this.summaries.get(sessionId);
+    if (!session && !summary) return undefined;
     return {
-      id: session.id,
-      title: this.preferences.title(session.id) ?? conversationTitle(session),
-      updatedAt: session.updatedAt,
-      turnCount: session.turns.length,
-      pinned: this.preferences.isPinned(session.id),
-      running: this.options.execution.running(session.id)
+      id: sessionId,
+      title: this.preferences.title(sessionId) ?? conversationTitle(session ?? summary!),
+      updatedAt: session?.updatedAt ?? summary!.updatedAt,
+      turnCount: session?.turns.length ?? summary!.turnCount,
+      pinned: this.preferences.isPinned(sessionId),
+      running: this.options.execution.running(sessionId)
     };
   }
 
@@ -240,8 +278,8 @@ export class ConversationController {
     const conversationPayload = {
       type: "conversations",
       sessions: this.ordered().flatMap((id) => {
-        const session = this.sessions.get(id);
-        return session ? [this.summarize(session)] : [];
+        const summary = this.summarize(id);
+        return summary ? [summary] : [];
       }),
       activeId: this.activeSession.id,
       selection: this.conversationSelections.get(this.activeSession.id)
@@ -350,8 +388,11 @@ export class ConversationController {
   /** Explicit resource removal also clears saved checkboxes, so re-importing a
    * package does not silently re-enable it in an older conversation. */
   async reconcileInstalledSkills(installed: ReadonlySet<string>): Promise<void> {
-    this.hydrate();
-    for (const sessionId of this.sessions.keys()) {
+    await this.hydrate();
+    // Selections outlive the bodies, so every stored conversation is visited,
+    // including a tab this window has not saved yet.
+    const sessionIds = new Set([...this.history.summaries(true).map((summary) => summary.id), ...this.sessions.keys()]);
+    for (const sessionId of sessionIds) {
       const previous = this.conversationSelections.get(sessionId) ?? this.preferences.conversationSelection(sessionId);
       if (!previous?.skills?.length) continue;
       const skills = previous.skills.filter((id) => installed.has(id));
@@ -366,7 +407,7 @@ export class ConversationController {
   // History hands over its own copy of a conversation; an already open one
   // keeps the in-memory instance so that a running turn stays attached to it.
   async open(session: DextHistorySession): Promise<void> {
-    this.hydrate();
+    await this.hydrate();
     const existing = this.sessions.get(session.id) ?? session;
     this.sessions.set(existing.id, existing);
     // Preserve the asynchronous command contract used by history actions;
@@ -415,7 +456,7 @@ export class ConversationController {
   }
 
   async move(sessionId: string, beforeSessionId: string | null): Promise<void> {
-    this.hydrate();
+    await this.hydrate();
     const ordered = this.ordered();
     if (!ordered.includes(sessionId) || sessionId === beforeSessionId) return;
     const pinned = this.preferences.isPinned(sessionId);
@@ -431,7 +472,7 @@ export class ConversationController {
   }
 
   async pin(sessionId: string, pinned: boolean): Promise<void> {
-    this.hydrate();
+    await this.hydrate();
     await this.preferences.setPinned(sessionId, pinned);
     await this.persistLayout();
     await this.postConversationState();
@@ -450,8 +491,9 @@ export class ConversationController {
     if (this.options.execution.running(sessionId)) {
       throw new Error("Stop this Dext turn before deleting its conversation.");
     }
-    this.hydrate();
+    await this.hydrate();
     this.sessions.delete(sessionId);
+    this.summaries.delete(sessionId);
     this.conversationSelections.delete(sessionId);
     await this.preferences.forgetConversationSelection(sessionId);
     if (this.openConversations.includes(sessionId)) {
@@ -464,7 +506,7 @@ export class ConversationController {
 
   async renameTurn(sessionId: string, turnId: string, title: string): Promise<void> {
     if (!await this.history.renameTurn(sessionId, turnId, title)) throw new Error("Conversation turn not found.");
-    const stored = this.history.list(true).find((session) => session.id === sessionId)?.turns.find((turn) => turn.id === turnId);
+    const stored = (await this.history.session(sessionId))?.turns.find((turn) => turn.id === turnId);
     if (!stored) throw new Error("Conversation turn not found.");
     // Open conversations retain their own objects while agents are running.
     // Update only the name so continuing or switching tabs cannot restore it.
@@ -482,11 +524,11 @@ export class ConversationController {
   }
 
   async deleteTurn(turnId: string, sessionId = this.activeSession.id): Promise<DextHistorySession | undefined> {
-    this.hydrate();
+    await this.hydrate();
     if (this.options.execution.running(sessionId)) {
       throw new Error("Stop this Dext turn before deleting a conversation turn.");
     }
-    const session = this.sessions.get(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const session = this.sessions.get(sessionId) ?? await this.history.session(sessionId);
     const index = session?.turns.findIndex((turn) => turn.id === turnId) ?? -1;
     if (!session || index === -1) throw new Error("Conversation turn not found.");
     const removed = await this.history.removeTurn(sessionId, turnId, session.providerSessions);

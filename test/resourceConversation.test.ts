@@ -3,6 +3,7 @@ import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/co
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { conversationTitle } from "../src/features/conversations/presentation/historyRender.js";
 import type { ResourceDocument, ResourceSession, ResourceTarget } from "../src/features/resources/contracts/resourceSession.js";
 import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
@@ -95,7 +96,7 @@ const defaultSaveResource = async (resource: ResourceSession): Promise<ResourceT
  * stack inside it is real too; only VS Code and the application are fakes. */
 function createSidebarHarness(options: SidebarHarnessOptions = {}) {
   const state = new HarnessState();
-  const history = new DextHistoryStore(state as never);
+  const history = new DextHistoryStore(new MemoryHistoryBackend());
   const preferences = new DextConversationPreferences(state as never);
   const posted: WebviewResponse[] = [];
   const draftResource = vi.fn(options.draftResource ?? defaultDraftResource);
@@ -149,7 +150,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
   async function seed(resource: ResourceSession): Promise<string> {
     await seedHistory(history, [storedResourceSession(resource)]);
     await receive({ type: "ready" });
-    const stored = history.list()[0];
+    const stored = (await history.sessions())[0];
     if (!stored) throw new Error("The resource conversation was not stored.");
     await sidebar.openConversation(stored);
     return stored.id;
@@ -165,7 +166,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
 describe("resource conversations", () => {
   it("opens and persists a new dedicated tab with read-only generation", async () => {
     const harness = createConversationHarness();
-    harness.seed([storedResourceSession({ type: "rule", scope: "global" })]);
+    await harness.seed([storedResourceSession({ type: "rule", scope: "global" })]);
 
     const created = await harness.controller.start(false, { type: "api", scope: "project" });
 
@@ -174,7 +175,7 @@ describe("resource conversations", () => {
     expect(conversationTitle(created)).toBe("New resource");
     // A resource conversation is generated in the read-only ask mode.
     expect(harness.controller.selection(created.id)?.mode).toBe("ask");
-    expect(harness.history.list().find((item) => item.id === created.id)?.resource)
+    expect((await harness.history.sessions()).find((item) => item.id === created.id)?.resource)
       .toEqual({ type: "api", scope: "project" });
   });
 
@@ -194,7 +195,7 @@ describe("resource conversations", () => {
     release();
     await Promise.all([first, second]);
 
-    expect(harness.history.list().map((session) => session.id))
+    expect((await harness.history.sessions()).map((session) => session.id))
       .toEqual(expect.arrayContaining([firstId, secondId]));
     // The sidebar still announces a newly started tab with outputSession, but
     // that IPC step is outside the controller. At this level only the latest
@@ -211,7 +212,7 @@ describe("resource conversations", () => {
     expect(harness.readResource).toHaveBeenCalledWith("api", "project", "git/commit.ts", "git.commit");
     // The tab starts on the saved document, so the first request revises it
     // rather than asking the Agent to create another resource.
-    expect(harness.history.list().find((item) => item.resource?.type === "api")?.resource).toEqual({
+    expect((await harness.history.sessions()).find((item) => item.resource?.type === "api")?.resource).toEqual({
       type: "api", scope: "project",
       target: { name: "git.commit", path: "git/commit.ts", content: "Existing document" }
     });
@@ -219,7 +220,7 @@ describe("resource conversations", () => {
 
   it("records a resource turn and retains the draft across history reload", async () => {
     const harness = createConversationHarness();
-    harness.seed([storedResourceSession({ type: "rule", scope: "global" })]);
+    await harness.seed([storedResourceSession({ type: "rule", scope: "global" })]);
     const session = harness.controller.session("resource");
     if (!session) throw new Error("The seeded resource conversation was not hydrated.");
     harness.controller.activate(session);
@@ -235,7 +236,7 @@ describe("resource conversations", () => {
     // Drafting never writes the resource: saving stays an explicit action.
     expect(session.resource).toMatchObject({ draft: REVIEW, saved: false });
     expect(session.resource?.target).toBeUndefined();
-    expect(harness.history.list()[0]?.resource?.draft).toEqual(REVIEW);
+    expect((await harness.history.sessions())[0]?.resource?.draft).toEqual(REVIEW);
     expect(conversationTitle(session)).toBe("review");
     // The `execution` IPC row is posted by the sidebar's notifier, which the
     // harness deliberately stubs out. The controller-owned equivalent is the
@@ -244,14 +245,14 @@ describe("resource conversations", () => {
     expect(states.at(-1)?.sessions.find((item) => item.id === "resource")?.turnCount).toBe(1);
 
     const reloaded = createConversationHarness();
-    reloaded.seed(harness.history.list());
+    await reloaded.seed(await harness.history.sessions());
     expect(reloaded.controller.session("resource")?.resource?.draft).toEqual(REVIEW);
     expect(reloaded.controller.session("resource")?.turns[0]?.mode).toBe("ask");
   });
 
   it("keeps background drafts attached to their original tab", async () => {
     const harness = createConversationHarness();
-    harness.seed([
+    await harness.seed([
       storedResourceSession({ type: "rule", scope: "global" }),
       conversation("chat", [{ id: "chat-turn", createdAt: 2, input: "hello", process: [], output: "" }])
     ]);
@@ -272,13 +273,13 @@ describe("resource conversations", () => {
     expect(chatSession.turns[0]?.input).toBe("hello");
     expect(resourceSession.resource?.draft?.name).toBe("review");
     expect(resourceSession.turns).toHaveLength(1);
-    expect(harness.history.list().find((item) => item.id === "chat")?.resource).toBeUndefined();
-    expect(harness.history.list().find((item) => item.id === "resource")?.resource?.draft?.name).toBe("review");
+    expect((await harness.history.sessions()).find((item) => item.id === "chat")?.resource).toBeUndefined();
+    expect((await harness.history.sessions()).find((item) => item.id === "resource")?.resource?.draft?.name).toBe("review");
   });
 
   it("preserves the previous draft after cancellation even if the provider returns a result", async () => {
     const harness = createConversationHarness();
-    harness.seed([storedResourceSession({
+    await harness.seed([storedResourceSession({
       type: "rule", scope: "global", draft: { name: "earlier", content: "Keep this draft" }
     })]);
     const session = harness.controller.session("resource");
@@ -293,7 +294,7 @@ describe("resource conversations", () => {
 
     expect(session.resource?.draft?.content).toBe("Keep this draft");
     expect(session.turns[0]?.error).toContain("stopped");
-    expect(harness.history.list()[0]?.resource?.draft?.content).toBe("Keep this draft");
+    expect((await harness.history.sessions())[0]?.resource?.draft?.content).toBe("Keep this draft");
   });
 
   it("saves only on request, keeps the tab open, and uses the saved document for future revisions", async () => {
@@ -303,20 +304,20 @@ describe("resource conversations", () => {
     await harness.run("Generate");
     expect(harness.draftResource).toHaveBeenCalledOnce();
     expect(harness.saveResource).not.toHaveBeenCalled();
-    expect(harness.history.list()[0]?.resource).toMatchObject({ draft: REVIEW, saved: false });
+    expect((await harness.history.sessions())[0]?.resource).toMatchObject({ draft: REVIEW, saved: false });
 
     await harness.receive({ type: "saveResource", sessionId });
     expect(harness.saveResource).toHaveBeenCalledOnce();
-    expect(harness.history.list()[0]?.resource)
+    expect((await harness.history.sessions())[0]?.resource)
       .toMatchObject({ saved: true, target: { path: "review.md", content: "Review carefully" } });
-    expect(harness.history.list()[0]?.resource?.draft).toBeUndefined();
+    expect((await harness.history.sessions())[0]?.resource?.draft).toBeUndefined();
     // The saved conversation stays the active tab, so the next revision runs there.
     const states = harness.posted.flatMap((message) => message.type === "conversations" ? [message] : []);
     expect(states.at(-1)?.activeId).toBe(sessionId);
 
     await harness.run("Revise the saved rule");
     expect(harness.draftResource.mock.calls[1]?.[0].target?.path).toBe("review.md");
-    expect(harness.history.list()[0]?.turns).toHaveLength(2);
+    expect((await harness.history.sessions())[0]?.turns).toHaveLength(2);
   });
 
   it("carries the import creation mode through draft, history and retry", async () => {
@@ -325,7 +326,7 @@ describe("resource conversations", () => {
     await harness.receive({ type: "executeInput", mode: "ask", source: "https://github.com/acme/ponytail", resourceSource: "import" });
     expect(harness.draftResource).toHaveBeenCalledOnce();
     expect(harness.draftResource.mock.calls[0]?.[2]).toMatchObject({ resourceSource: "import" });
-    const stored = harness.history.list().find((item) => item.id === sessionId);
+    const stored = (await harness.history.sessions()).find((item) => item.id === sessionId);
     expect(stored?.turns[0]).toMatchObject({ input: "https://github.com/acme/ponytail", resourceSource: "import" });
     // The tab is not auto-enabled and no skills leak into its selection.
     const conversation = (harness.sidebar as unknown as {
@@ -349,7 +350,7 @@ describe("resource conversations", () => {
 
     await harness.receive({ type: "resourceOptions", sessionId, resourceType: "rule", scope: "project" });
 
-    expect(harness.history.list()[0]?.resource).toEqual({
+    expect((await harness.history.sessions())[0]?.resource).toEqual({
       type: "rule", scope: "project", draft: { name: "review", content: "Revised" }
     });
     expect(harness.saveResource).not.toHaveBeenCalled();
@@ -367,7 +368,7 @@ describe("resource conversations", () => {
 
     await harness.receive({ type: "saveResource", sessionId });
 
-    expect(harness.history.list()[0]?.resource?.draft?.content).toBe("Review carefully");
+    expect((await harness.history.sessions())[0]?.resource?.draft?.content).toBe("Review carefully");
     expect(harness.posted.at(-1)).toEqual({ type: "error", sessionId, message: "File changed" });
   });
 
@@ -382,14 +383,14 @@ describe("resource conversations", () => {
     const sessionId = await harness.seed({ type: "rule", scope: "global" });
 
     await harness.run("Generate with rules");
-    expect(harness.history.list()[0]?.resource?.draft?.files).toEqual(files);
+    expect((await harness.history.sessions())[0]?.resource?.draft?.files).toEqual(files);
 
     await harness.receive({ type: "saveResource", sessionId });
-    expect(harness.history.list()[0]?.resource?.target?.files).toEqual(files);
+    expect((await harness.history.sessions())[0]?.resource?.target?.files).toEqual(files);
 
     await harness.receive({ type: "resourceOptions", sessionId, resourceType: "rule", scope: "project" });
-    expect(harness.history.list()[0]?.resource?.draft?.files).toEqual(files);
-    expect(harness.history.list()[0]?.resource?.target).toBeUndefined();
+    expect((await harness.history.sessions())[0]?.resource?.draft?.files).toEqual(files);
+    expect((await harness.history.sessions())[0]?.resource?.target).toBeUndefined();
   });
 
   it("previews a selected supporting file against its saved contents", async () => {

@@ -4,7 +4,7 @@ import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown
 import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
-import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession } from "../contracts/history.js";
+import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession, type DextHistorySummary } from "../contracts/history.js";
 import {
   TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_COPY_INPUT_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn,
   presentTurnMode, resultCopyText, type TurnRenderModel
@@ -88,7 +88,7 @@ function historyTurnActions(sessionId: string, turnId: string, spill: boolean): 
   ].join("")}</span>`;
 }
 
-function historySessionActions(session: DextHistorySession, favorite: boolean): string {
+function historySessionActions(session: { id: string; archivedAt?: number }, favorite: boolean): string {
   const favoriteCommand = favorite ? "dext.history.removeFavorite" : "dext.history.addFavorite";
   const favoriteLabel = favorite ? "Remove from favorites" : "Add to favorites";
   const favoriteIcon = favorite ? "star-full" : "star-empty";
@@ -345,12 +345,13 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
 }
 
 /** The name a conversation carries until the user renames it: the opening line
- * of its first message, with @ references spelled out. */
-export function conversationTitle(session: DextHistorySession): string {
+ * of its first message, with @ references spelled out. An index summary names
+ * a conversation without its body ever being read. */
+export function conversationTitle(session: DextHistorySession | DextHistorySummary): string {
   if (session.resource) return session.resource.draft?.name ?? session.resource.target?.name ?? "New resource";
-  const first = session.turns[0];
-  if (!first) return "New conversation";
-  const line = inputReferenceDisplayText(normalizeInputReferenceSource(first.input))
+  const firstInput = "turns" in session ? session.turns[0]?.input : session.firstInput;
+  if (firstInput === undefined) return "New conversation";
+  const line = inputReferenceDisplayText(normalizeInputReferenceSource(firstInput))
     .split(/\r?\n/, 1)[0]!
     .trim()
     .slice(0, 140);
@@ -368,9 +369,13 @@ export function renderHistorySessionBody(session: DextHistorySession): string {
   return session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("\n");
 }
 
-export function renderHistorySession(session: DextHistorySession, view: HistorySessionView = {}): string {
+export function renderHistorySession(session: DextHistorySession | DextHistorySummary, view: HistorySessionView = {}): string {
   const favorite = view.favorite === true;
-  const count = `${session.turns.length} turn${session.turns.length === 1 ? "" : "s"}`;
+  const body = view.lazy
+    ? `<div class="history-lazy-placeholder">Expand to load conversation turns.</div>`
+    : "turns" in session ? renderHistorySessionBody(session) : "";
+  const turnCount = "turns" in session ? session.turns.length : session.turnCount;
+  const count = `${turnCount} turn${turnCount === 1 ? "" : "s"}`;
   const context = contextAttribute({
     webviewSection: "session",
     sessionId: session.id,
@@ -382,12 +387,11 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
-  // shortcut: search covers names and prompts, not answer bodies; upgrade to a
-  // host-side full-text search when replies need to be searchable too.
-  const searchText = [label, ...session.turns.map(historyTurnLabel)].join(" ").toLocaleLowerCase();
-  const body = view.lazy
-    ? `<div class="history-lazy-placeholder">Expand to load conversation turns.</div>`
-    : renderHistorySessionBody(session);
+  // shortcut: search covers names and prompts, not answer bodies; a summary row
+  // can only offer the first prompt. Upgrade to a host-side full-text search
+  // when replies need to be searchable too.
+  const prompts = "turns" in session ? session.turns.map(historyTurnLabel) : [session.firstInput ?? ""];
+  const searchText = [label, ...prompts].join(" ").toLocaleLowerCase();
   const lazyAttributes = view.lazy ? ` data-history-lazy="true" data-history-session-id="${escapeHtml(session.id)}"` : "";
   return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} data-history-search-text="${escapeHtml(searchText)}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
 }

@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { conversation, createConversationHarness } from "./conversationHarness.js";
 
-function harness() {
+async function harness() {
   const h = createConversationHarness({
     pinned: ["p1", "p2"],
     layout: { openConversationIds: ["p1", "p2", "a", "b", "c"], activeConversationId: "b" }
   });
-  h.seed([conversation("p1"), conversation("p2"), conversation("a"), conversation("b"), conversation("c")]);
+  await h.seed([conversation("p1"), conversation("p2"), conversation("a"), conversation("b"), conversation("c")]);
   h.controller.activate(h.controller.session("b")!);
   return h;
 }
 
 describe("conversation tab order", () => {
   it("moves tabs left and right and persists the order without changing the active conversation", async () => {
-    const h = harness();
+    const h = await harness();
     await h.controller.move("c", "a");
     expect(h.controller.ordered()).toEqual(["p1", "p2", "c", "a", "b"]);
     await h.controller.move("c", null);
@@ -28,7 +28,7 @@ describe("conversation tab order", () => {
   });
 
   it("restores reordered pinned tabs ahead of ordinary tabs", async () => {
-    const h = harness();
+    const h = await harness();
     await h.controller.move("p2", "p1");
     await h.controller.flushScheduledLayout();
     expect(h.controller.ordered()).toEqual(["p2", "p1", "a", "b", "c"]);
@@ -38,7 +38,7 @@ describe("conversation tab order", () => {
   });
 
   it("ignores stale or cross-group targets without losing newly opened tabs", async () => {
-    const h = harness();
+    const h = await harness();
     for (const [id, before] of [["closed", "a"], ["a", "closed"], ["a", "p1"], ["p1", "a"], ["a", "a"]]) {
       await h.controller.move(id!, before!);
     }

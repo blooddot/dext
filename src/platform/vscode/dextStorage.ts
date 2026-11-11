@@ -110,7 +110,7 @@ export class DextStorage {
     return `${input}\n\n${listing}${video}`;
   }
 
-  async pruneAttachments(maxFiles: number, keep?: vscode.Uri, keepNames?: () => ReadonlySet<string>): Promise<void> {
+  async pruneAttachments(maxFiles: number, keep?: vscode.Uri, keepNames?: () => ReadonlySet<string> | Promise<ReadonlySet<string>>): Promise<void> {
     const directory = this.directory("attachments");
     let entries: [string, vscode.FileType][];
     try {
@@ -124,7 +124,7 @@ export class DextStorage {
       .map(([name]) => ({ name, uri: vscode.Uri.joinPath(directory, name) }));
     const excess = attachments.length - maxFiles;
     if (excess <= 0) return;
-    const keptNames = keepNames?.();
+    const keptNames = await keepNames?.();
     const dated = await Promise.all(attachments.map(async ({ name, uri }) => ({ name, uri, stat: await vscode.workspace.fs.stat(uri) })));
     dated.sort((left, right) => left.stat.mtime - right.stat.mtime || left.stat.ctime - right.stat.ctime);
     const protectedUri = keep?.toString();

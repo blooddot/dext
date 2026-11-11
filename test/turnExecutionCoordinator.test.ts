@@ -15,7 +15,7 @@ describe("TurnExecutionCoordinator", () => {
   it("runs one turn per conversation while another conversation runs concurrently", async () => {
     const execution = deferred();
     const h = createConversationHarness({ executeConversation: execution.executeConversation });
-    h.seed([conversation("a"), conversation("b")]);
+    await h.seed([conversation("a"), conversation("b")]);
     const a = h.controller.session("a")!;
     const b = h.controller.session("b")!;
     const first = h.coordinator.execute(a, "agent", "first");
@@ -29,14 +29,14 @@ describe("TurnExecutionCoordinator", () => {
     expect(h.executeConversation).toHaveBeenCalledTimes(2);
     expect(h.coordinator.running("a")).toBe(false);
     expect(h.coordinator.running("b")).toBe(false);
-    expect(h.history.list(true).find((session) => session.id === "a")?.turns[0]?.input).toBe("first");
-    expect(h.history.list(true).find((session) => session.id === "b")?.turns[0]?.input).toBe("another");
+    expect((await h.history.sessions(true)).find((session) => session.id === "a")?.turns[0]?.input).toBe("first");
+    expect((await h.history.sessions(true)).find((session) => session.id === "b")?.turns[0]?.input).toBe("another");
   });
 
   it("keeps the composer selection captured when the turn starts", async () => {
     const execution = deferred();
     const h = createConversationHarness({ executeConversation: execution.executeConversation });
-    h.seed([conversation("a")]);
+    await h.seed([conversation("a")]);
     h.controller.activate(h.controller.session("a")!);
     h.controller.setSelection("a", { ...defaultSelection, profileId: "codex", model: "first-model" });
     const turn = h.coordinator.execute(h.controller.session("a")!, "agent", "prompt");
@@ -48,7 +48,7 @@ describe("TurnExecutionCoordinator", () => {
     await turn;
     expect(h.controller.selection("a")?.model).toBe("changed-mid-turn");
     // The visible turn used the captured controls, not the late change.
-    expect(h.history.list()[0]?.turns[0]?.mode).toBe("agent");
+    expect((await h.history.sessions())[0]?.turns[0]?.mode).toBe("agent");
   });
 
   it("snapshots the conversation's own Agent controls and provider session", async () => {
@@ -60,7 +60,7 @@ describe("TurnExecutionCoordinator", () => {
         return { kind: "workflow", executions: [] };
       }
     });
-    h.seed([{ ...conversation("session"), providerSessions: { "deepseek-harness": "dsh1:stored" } }]);
+    await h.seed([{ ...conversation("session"), providerSessions: { "deepseek-harness": "dsh1:stored" } }]);
     h.controller.activate(h.controller.session("session")!);
     h.controller.setSelection("session", {
       mode: "agent",
@@ -91,7 +91,7 @@ describe("TurnExecutionCoordinator", () => {
         return { kind: "workflow", executions: [] };
       }
     });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "start the worker");
     expect(h.coordinator.running("session")).toBe(false);
@@ -101,7 +101,7 @@ describe("TurnExecutionCoordinator", () => {
     expect(h.messages.some((message) => message.type === "executing" && message.value)).toBe(true);
     wake!({ state: "end", text: "all twelve frames show the same bug" });
     await vi.waitFor(() => expect(h.coordinator.running("session")).toBe(false));
-    const turns = h.history.list().find((session) => session.id === "session")!.turns;
+    const turns = (await h.history.sessions()).find((session) => session.id === "session")!.turns;
     expect(turns.map((turn) => turn.input)).toEqual(["start the worker", "Background task completed: **worker**"]);
     expect(turns[1]?.process.map((event) => event.text)).toEqual(["analysing"]);
     expect(turns[1]?.response?.executions[0]).toMatchObject({ result: { kind: "agent", text: "all twelve frames show the same bug" } });
@@ -115,25 +115,25 @@ describe("TurnExecutionCoordinator", () => {
         return { kind: "workflow", executions: [] };
       }
     });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "start the worker");
     wake!({ state: "notice", text: "Background task completed: **worker**" });
     wake!({ state: "event", event: { phase: "message", id: "wake:1", text: "analysing" } });
     expect(h.coordinator.abort("session")).toBe(true);
     expect(h.endAgentSession).toHaveBeenCalledWith("session");
     await vi.waitFor(() => expect(h.coordinator.running("session")).toBe(false));
-    const turns = h.history.list().find((session) => session.id === "session")!.turns;
+    const turns = (await h.history.sessions()).find((session) => session.id === "session")!.turns;
     expect(turns.map((turn) => turn.input)).toEqual(["start the worker", "Background task completed: **worker**"]);
     expect(turns[1]?.error).toBe("Execution was cancelled.");
     // A frame arriving after the stop must not start a third turn.
     wake!({ state: "end", text: "too late" });
     await vi.waitFor(() => expect(h.coordinator.running("session")).toBe(false));
-    expect(h.history.list().find((session) => session.id === "session")!.turns).toHaveLength(2);
+    expect((await h.history.sessions()).find((session) => session.id === "session")!.turns).toHaveLength(2);
   });
 
   it("publishes a non-running tab summary when a turn finishes", async () => {
     const h = createConversationHarness();
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "prompt");
     const last = [...h.messages].reverse().find((message) => message.type === "conversations");
@@ -151,10 +151,10 @@ describe("TurnExecutionCoordinator", () => {
         return { kind: "workflow", executions: [] };
       }
     });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "prompt");
-    expect(h.history.list()[0]?.turns[0]?.process.map((event) => event.phase)).toEqual(["message"]);
+    expect((await h.history.sessions())[0]?.turns[0]?.process.map((event) => event.phase)).toEqual(["message"]);
   });
 
   it("buffers a finished turn's events and never reuses them for the next turn", async () => {
@@ -165,26 +165,26 @@ describe("TurnExecutionCoordinator", () => {
         return { kind: "workflow", executions: [] };
       }
     });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "one");
     expect(h.coordinator.active("session")).toBeUndefined();
     await h.coordinator.execute(h.controller.session("session")!, "agent", "two");
     events = h.messages.filter((message) => message.type === "agentEvent").map((message) => [message.event]);
     expect(events.map(([event]) => event?.text)).toEqual(["first", "first"]);
-    expect(h.history.list()[0]?.turns[0]?.process.map((event) => event.text)).toEqual(["first"]);
-    expect(h.history.list()[0]?.turns[1]?.process.map((event) => event.text)).toEqual(["first"]);
+    expect((await h.history.sessions())[0]?.turns[0]?.process.map((event) => event.text)).toEqual(["first"]);
+    expect((await h.history.sessions())[0]?.turns[1]?.process.map((event) => event.text)).toEqual(["first"]);
   });
 
   it("clears the running state and stores the failure when execution throws", async () => {
     const h = createConversationHarness({
       executeConversation: async (): Promise<InputExecutionResponse> => { throw new Error("provider failed"); }
     });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "prompt");
     expect(h.coordinator.running("session")).toBe(false);
-    const turn = h.history.list()[0]?.turns[0];
+    const turn = (await h.history.sessions())[0]?.turns[0];
     expect(turn?.error).toBe("provider failed");
     expect(turn?.mode).toBe("agent");
   });
@@ -196,14 +196,14 @@ describe("TurnExecutionCoordinator", () => {
         throw new Error("Stopped by user.");
       }
     });
-    h.seed([{ ...conversation("session"), planStatus: "active", activePlanPath: "p.plan.md" }]);
+    await h.seed([{ ...conversation("session"), planStatus: "active", activePlanPath: "p.plan.md" }]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "plan", "## Tasks\n1. [ ] Work", {
       planPath: "p.plan.md",
       executePlan: true
     });
     expect(h.executeConversation).toHaveBeenCalledOnce();
-    const turn = h.history.list()[0]?.turns[0];
+    const turn = (await h.history.sessions())[0]?.turns[0];
     expect(turn?.planOutcome?.status).toBe("cancelled");
     expect(h.controller.session("session")?.planStatus).toBe("active");
   });
@@ -215,11 +215,11 @@ describe("TurnExecutionCoordinator", () => {
       throw new Error("step failed");
     });
     const h = createConversationHarness({ executeInput });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "code", "ask()");
-    expect(h.coordinator.takeContinuation("session", h.history.list()[0]!.turns[0]!.id)).toBe(continuation);
-    expect(h.coordinator.takeContinuation("session", h.history.list()[0]!.turns[0]!.id)).toBeUndefined();
+    expect(h.coordinator.takeContinuation("session", (await h.history.sessions())[0]!.turns[0]!.id)).toBe(continuation);
+    expect(h.coordinator.takeContinuation("session", (await h.history.sessions())[0]!.turns[0]!.id)).toBeUndefined();
 
     const stopped = createConversationHarness({
       executeInput: async (_source, _metadata, run): Promise<InputExecutionResponse> => {
@@ -228,10 +228,10 @@ describe("TurnExecutionCoordinator", () => {
         throw new Error("stopped");
       }
     });
-    stopped.seed([conversation("session")]);
+    await stopped.seed([conversation("session")]);
     stopped.controller.activate(stopped.controller.session("session")!);
     await stopped.coordinator.execute(stopped.controller.session("session")!, "code", "ask()");
-    expect(stopped.coordinator.takeContinuation("session", stopped.history.list()[0]!.turns[0]!.id)).toBeUndefined();
+    expect(stopped.coordinator.takeContinuation("session", (await stopped.history.sessions())[0]!.turns[0]!.id)).toBeUndefined();
   });
 
   it("keeps the replay logs of failed Code turns bounded", async () => {
@@ -240,11 +240,11 @@ describe("TurnExecutionCoordinator", () => {
       throw new Error("step failed");
     };
     const h = createConversationHarness({ executeInput });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     const session = () => h.controller.session("session")!;
     h.controller.activate(session());
     for (let attempt = 0; attempt < 9; attempt++) await h.coordinator.execute(session(), "code", "ask()");
-    const turns = h.history.list()[0]!.turns;
+    const turns = (await h.history.sessions())[0]!.turns;
     expect(turns).toHaveLength(9);
     // The cap keeps the newest failures; an evicted turn falls back to a full rerun.
     expect(h.coordinator.takeContinuation("session", turns[0]!.id)).toBeUndefined();
@@ -273,7 +273,7 @@ describe("TurnExecutionCoordinator", () => {
         return { kind: "workflow", executions: [] };
       }
     });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     h.controller.setSelection("session", { ...defaultSelection, skills: ["ponytail-review"] });
     await h.coordinator.execute(h.controller.session("session")!, "agent", "/ponytail-review src/a.ts");
@@ -284,7 +284,7 @@ describe("TurnExecutionCoordinator", () => {
     expect(seen[0]?.commandInstruction).toContain("Review src/a.ts.");
     expect(seen[0]?.skills).toEqual(["ponytail-review"]);
 
-    const turn = h.history.list()[0]!.turns[0]!;
+    const turn = (await h.history.sessions())[0]!.turns[0]!;
     expect(turn.input).toBe("/ponytail-review src/a.ts");
     expect(turn.command).toEqual({ id: "ponytail-review", skillId: "ponytail-review" });
     expect(turn.skills).toEqual(["ponytail-review"]);
@@ -299,7 +299,7 @@ describe("TurnExecutionCoordinator", () => {
         }
       })
     });
-    inactive.seed([conversation("session")]);
+    await inactive.seed([conversation("session")]);
     inactive.controller.activate(inactive.controller.session("session")!);
     await expect(inactive.coordinator.execute(inactive.controller.session("session")!, "agent", "/review"))
       .rejects.toThrow("requires the skill 'review'");
@@ -308,7 +308,7 @@ describe("TurnExecutionCoordinator", () => {
     const invalid = createConversationHarness({
       resolveSkillCommand: () => ({ status: "invalid", id: "run", reason: "shell execution is not supported" })
     });
-    invalid.seed([conversation("session")]);
+    await invalid.seed([conversation("session")]);
     invalid.controller.activate(invalid.controller.session("session")!);
     await expect(invalid.coordinator.execute(invalid.controller.session("session")!, "agent", "/run"))
       .rejects.toThrow("/run cannot run: shell execution is not supported");
@@ -329,7 +329,7 @@ describe("TurnExecutionCoordinator", () => {
       };
     });
     const h = createConversationHarness({ resolveSkillCommand, executeInput, draftResource });
-    h.seed([
+    await h.seed([
       conversation("code"),
       { ...conversation("resource"), resource: { type: "skill", scope: "project" } }
     ]);
@@ -349,7 +349,7 @@ describe("TurnExecutionCoordinator", () => {
     expect(draftResource.mock.calls[0]?.[2]).toMatchObject({ resourceSource: "import" });
     expect(draftResource.mock.calls[0]?.[2].skills).toBeUndefined();
     expect(draftResource.mock.calls[0]?.[2].commandInstruction).toBeUndefined();
-    expect(h.history.list().find((session) => session.id === "resource")?.turns[0]?.resourceSource).toBe("import");
+    expect((await h.history.sessions()).find((session) => session.id === "resource")?.turns[0]?.resourceSource).toBe("import");
   });
 
   it("publishes an Agent result without registering pending review state", async () => {
@@ -366,10 +366,10 @@ describe("TurnExecutionCoordinator", () => {
         }]
       })
     });
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
     await h.coordinator.execute(h.controller.session("session")!, "agent", "edit");
-    const turnId = h.history.list()[0]!.turns[0]!.id;
+    const turnId = (await h.history.sessions())[0]!.turns[0]!.id;
     expect(h).not.toHaveProperty("patches");
     expect(h.messages).toContainEqual(expect.objectContaining({ type: "execution", turnId }));
   });

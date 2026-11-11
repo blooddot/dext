@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
 import type { AgentSelection } from "../src/features/agents/contracts/agent.js";
@@ -52,16 +53,16 @@ function sidebarFixture(options: {
 
 describe("shared History and Conversation actions", () => {
   it("keeps an existing conversation's Harness preset when a late selection arrives", async () => {
-    const history = new DextHistoryStore(new MemoryState() as never);
+    const history = new DextHistoryStore(new MemoryHistoryBackend());
     await history.addSuccess("hello", [], { kind: "workflow", executions: [] }, "active", "agent", "turn");
     const preferences = new DextConversationPreferences(new MemoryState() as never);
     const sidebar = new DextSidebarProvider({} as never, {
       state: () => ({ agentSelection: { ...selection, profileId: "deepseek-harness", agentPreset: "standard" } }),
       setAgentSelection: vi.fn(), endAgentSession: vi.fn(), agentProfiles: () => []
     } as never, history, preferences);
-    const controller = (sidebar as unknown as { conversation: { controller: { hydrate(): void; open(session: DextHistorySession): Promise<void>; selection(id: string): AgentSelection | undefined } } }).conversation.controller;
-    controller.hydrate();
-    await controller.open(history.list()[0]!);
+    const controller = (sidebar as unknown as { conversation: { controller: { hydrate(): Promise<void>; open(session: DextHistorySession): Promise<void>; selection(id: string): AgentSelection | undefined } } }).conversation.controller;
+    await controller.hydrate();
+    await controller.open((await history.sessions())[0]!);
     expect(controller.selection("active")?.agentPreset).toBe("standard");
     const setConversationSelection = vi.spyOn(preferences, "setConversationSelection");
     await (sidebar as unknown as { receive(message: unknown): Promise<void> }).receive({
@@ -73,12 +74,14 @@ describe("shared History and Conversation actions", () => {
   });
 
   it("rejects late configuration changes while this conversation runs and unlocks independently of background runs", async () => {
-    const history = new DextHistoryStore(new MemoryState() as never);
+    const history = new DextHistoryStore(new MemoryHistoryBackend());
     await history.addSuccess("prompt", [], { kind: "workflow", executions: [] }, "active", "agent", "turn");
     await history.addSuccess("other", [], { kind: "workflow", executions: [] }, "background", "agent", "turn-2");
     const setAgentSelection = vi.fn();
     const setConversationSelection = vi.fn().mockResolvedValue(undefined);
     const preferences = new DextConversationPreferences(new MemoryState() as never);
+    // Both conversations are open tabs: one runs on screen, one behind it.
+    await preferences.setConversationLayout({ openConversationIds: ["active", "background"], activeConversationId: "active" });
     preferences.setConversationSelection = setConversationSelection;
     let releaseActive!: () => void;
     const executeConversation = vi.fn(async () => {
@@ -89,11 +92,11 @@ describe("shared History and Conversation actions", () => {
     const { sidebar, internals } = fixture;
     const provider = sidebar as unknown as {
       conversation: {
-        controller: { hydrate(): void; session(id: string): DextHistorySession | undefined; active(): DextHistorySession; activate(session: DextHistorySession): void; selection(id: string): AgentSelection | undefined };
+        controller: { hydrate(): Promise<void>; session(id: string): DextHistorySession | undefined; active(): DextHistorySession; activate(session: DextHistorySession): void; selection(id: string): AgentSelection | undefined };
         coordinator: { running(id: string): boolean; execute(session: DextHistorySession, mode: string, source: string): Promise<void> };
       };
     };
-    provider.conversation.controller.hydrate();
+    await provider.conversation.controller.hydrate();
     const active = provider.conversation.controller.session("active")!;
     const background = provider.conversation.controller.session("background")!;
     provider.conversation.controller.activate(active);
@@ -125,63 +128,65 @@ describe("shared History and Conversation actions", () => {
   });
 
   it("edits the addressed input, including an unpersisted running turn, without changing saved records", async () => {
-    const history = new DextHistoryStore(new MemoryState() as never);
+    const history = new DextHistoryStore(new MemoryHistoryBackend());
     await history.addSuccess("saved prompt", [], { kind: "workflow", executions: [] }, "source", "ask", "saved");
     await history.addSuccess("other prompt", [], { kind: "workflow", executions: [] }, "other", "ask", "other-turn");
     const { sidebar } = sidebarFixture({ history });
     const provider = sidebar as unknown as {
-      conversation: { controller: { hydrate(): void }; coordinator: { active(id: string): unknown } };
+      conversation: { controller: { hydrate(): Promise<void> }; coordinator: { active(id: string): unknown } };
     };
-    provider.conversation.controller.hydrate();
+    await provider.conversation.controller.hydrate();
     vi.spyOn(provider.conversation.coordinator, "active").mockImplementation((sessionId: string) =>
       sessionId === "source" ? { turnId: "running", source: "live prompt" } : undefined);
     const setInput = vi.spyOn(sidebar, "setInput").mockImplementation(() => {});
-    sidebar.editTurnInput("source", "saved");
+    await sidebar.editTurnInput("source", "saved");
     expect(setInput).toHaveBeenLastCalledWith("saved prompt");
-    sidebar.editTurnInput("source", "running");
+    await sidebar.editTurnInput("source", "running");
     expect(setInput).toHaveBeenLastCalledWith("live prompt");
-    expect(() => sidebar.editTurnInput("other", "running")).toThrow("Conversation turn not found");
-    expect(() => sidebar.editTurnInput("source", "other-turn")).toThrow("Conversation turn not found");
+    await expect(sidebar.editTurnInput("other", "running")).rejects.toThrow("Conversation turn not found");
+    await expect(sidebar.editTurnInput("source", "other-turn")).rejects.toThrow("Conversation turn not found");
     expect(setInput).toHaveBeenCalledTimes(2);
-    expect(history.list().find((session) => session.id === "source")?.turns.map((turn) => turn.input))
+    expect((await history.sessions()).find((session) => session.id === "source")?.turns.map((turn) => turn.input))
       .toEqual(["saved prompt"]);
   });
 
   it("deletes the addressed background turn without disconnecting the CLI or touching the active conversation", async () => {
-    const memory = new MemoryState();
-    const history = new DextHistoryStore(memory as never);
+    const backend = new MemoryHistoryBackend();
+    const history = new DextHistoryStore(backend);
     await history.addSuccess("remove", [], { kind: "workflow", executions: [] }, "background", "ask", "turn-1");
     await history.addSuccess("keep", [], { kind: "workflow", executions: [] }, "active", "ask", "turn-2");
     // Older versions could hold the first CLI ID in memory only.
     await history.setProviderSession("background", "codex", "thread-original");
-    const { sidebar, messages, application } = sidebarFixture({ history });
-    const provider = sidebar as unknown as { conversation: { controller: { hydrate(): void; session(id: string): DextHistorySession | undefined } } };
-    provider.conversation.controller.hydrate();
+    const preferences = new DextConversationPreferences(new MemoryState() as never);
+    await preferences.setConversationLayout({ openConversationIds: ["active", "background"], activeConversationId: "active" });
+    const { sidebar, messages, application } = sidebarFixture({ history, preferences });
+    const provider = sidebar as unknown as { conversation: { controller: { hydrate(): Promise<void>; session(id: string): DextHistorySession | undefined } } };
+    await provider.conversation.controller.hydrate();
     await sidebar.deleteTurn("turn-1", "background");
     expect(provider.conversation.controller.session("background")?.turns).toEqual([]);
     expect(provider.conversation.controller.session("active")?.turns[0]?.input).toBe("keep");
     expect(application.endAgentSession).not.toHaveBeenCalled();
     expect(messages).toContainEqual(expect.objectContaining({ type: "outputSession" }));
-    expect(new DextHistoryStore(memory as never).list().find((session) => session.id === "background"))
+    expect((await new DextHistoryStore(backend).sessions()).find((session) => session.id === "background"))
       .toMatchObject({ turns: [], providerSessions: { codex: "thread-original" } });
     await expect(sidebar.deleteTurn("turn-2", "background")).rejects.toThrow("Conversation turn not found");
     const running = vi.spyOn((sidebar as unknown as { conversation: { coordinator: { running(id: string): boolean } } }).conversation.coordinator, "running").mockReturnValue(true);
     await expect(sidebar.deleteTurn("turn-2", "active")).rejects.toThrow("Stop this Dext turn");
     running.mockRestore();
-    expect(history.list().find((session) => session.id === "active")?.turns).toHaveLength(1);
+    expect((await history.sessions()).find((session) => session.id === "active")?.turns).toHaveLength(1);
   });
 
   it("retries the selected History turn in its original mode and conversation", async () => {
-    const history = new DextHistoryStore(new MemoryState() as never);
+    const history = new DextHistoryStore(new MemoryHistoryBackend());
     await history.addSuccess("original prompt", [], { kind: "workflow", executions: [] }, "source", "ask", "turn-1");
-    const sessions = history.list();
+    const sessions = await history.sessions();
     const { sidebar } = sidebarFixture({ history });
     const provider = sidebar as unknown as {
-      conversation: { controller: { hydrate(): void }; coordinator: { running(id: string): boolean } };
+      conversation: { controller: { hydrate(): Promise<void> }; coordinator: { running(id: string): boolean } };
       openConversation(session: DextHistorySession): Promise<void>;
       run(mode: string, source: string): Promise<void>;
     };
-    provider.conversation.controller.hydrate();
+    await provider.conversation.controller.hydrate();
     const open = vi.spyOn(sidebar, "openConversation").mockResolvedValue(undefined);
     const run = vi.spyOn(provider as unknown as { run(mode: string, source: string): Promise<void> }, "run").mockResolvedValue(undefined);
     await sidebar.retryTurn("source", "turn-1");
@@ -194,8 +199,8 @@ describe("shared History and Conversation actions", () => {
 
   it.each((["agent", "ask", "plan", "code"] as const).flatMap((mode) => [false, true].map((fail) => ({ mode, fail }))))(
     "preserves mode and CLI binding through live replay and persistence ($mode, failure=$fail)", async ({ mode, fail }) => {
-    const memory = new MemoryState();
-    const history = new DextHistoryStore(memory as never);
+    const backend = new MemoryHistoryBackend();
+    const history = new DextHistoryStore(backend);
     const session: DextHistorySession = { id: "first-session", createdAt: 1, updatedAt: 1, turns: [] };
     const execute = async (metadata: ExecutionMetadata) => {
       await (sidebar as unknown as { postActiveExecution(id: string, switchId: number): Promise<void> }).postActiveExecution(session.id, 77);
@@ -220,15 +225,15 @@ describe("shared History and Conversation actions", () => {
     });
     const provider = sidebar as unknown as {
       conversation: {
-        controller: { hydrate(): void; open(session: DextHistorySession): Promise<void>; active(): DextHistorySession };
+        controller: { hydrate(): Promise<void>; open(session: DextHistorySession): Promise<void>; active(): DextHistorySession };
         coordinator: { execute(session: DextHistorySession, mode: string, source: string): Promise<void> };
       };
     };
-    provider.conversation.controller.hydrate();
-    await provider.conversation.controller.open(history.list()[0] ?? session);
+    await provider.conversation.controller.hydrate();
+    await provider.conversation.controller.open((await history.sessions())[0] ?? session);
     await provider.conversation.coordinator.execute(provider.conversation.controller.active(), mode, "first prompt");
     expect(messages).toContainEqual(expect.objectContaining({ type: "executing", value: true, mode, source: "first prompt" }));
-    const restored = new DextHistoryStore(memory as never).list()[0]!;
+    const restored = (await new DextHistoryStore(backend).sessions())[0]!;
     expect(restored.providerSessions).toEqual({ codex: "first-cli-thread" });
     expect(restored.turns).toHaveLength(1);
     expect(restored.turns[0]?.mode).toBe(mode);
@@ -236,11 +241,11 @@ describe("shared History and Conversation actions", () => {
   });
 
   it.each(["codex", "claude"] as const)("resumes the same %s CLI ID after final-turn deletion and a store reload", async (provider) => {
-    const memory = new MemoryState();
-    const history = new DextHistoryStore(memory as never);
+    const backend = new MemoryHistoryBackend();
+    const history = new DextHistoryStore(backend);
     await history.addSuccess("old message", [], { kind: "workflow", executions: [] }, "session", "ask", "turn");
     await history.removeTurn("session", "turn", { [provider]: "original-cli-id" });
-    const restored = new DextHistoryStore(memory as never).list()[0]!;
+    const restored = (await new DextHistoryStore(backend).sessions())[0]!;
     const calls: Array<{ args: string[]; input: string }> = [];
     const runner = new CliAgentRunner(1000, async (_command, args, input) => {
       if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };

@@ -13,6 +13,7 @@ vi.mock("vscode", () => ({
 
 import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { ConversationController } from "../src/features/conversations/host/conversationController.js";
 import { conversation, createConversationHarness, defaultSelection, HarnessState } from "./conversationHarness.js";
@@ -35,12 +36,12 @@ function turn(id: string): DextHistoryRecord {
  * tests drive the real provider with the real conversation controllers. Only
  * the VS Code surface is mocked.
  */
-function sidebarHarness(options: {
+async function sidebarHarness(options: {
   executeConversation?: () => Promise<InputExecutionResponse>;
   provider?: "deepseek-harness" | "pi";
 } = {}) {
   const state = new HarnessState();
-  const history = new DextHistoryStore(state as never);
+  const history = new DextHistoryStore(new MemoryHistoryBackend());
   const preferences = new DextConversationPreferences(state as never);
   let selection: AgentSelection = { ...defaultSelection, profileId: "codex", model: "cached" };
   let models = ["cached-model"];
@@ -78,7 +79,7 @@ function sidebarHarness(options: {
     receive(raw: unknown): Promise<void>;
     conversation: {
       controller: {
-        hydrate(): void;
+        hydrate(): Promise<void>;
         active(): { id: string; turns: DextHistoryRecord[] };
         selection(sessionId: string): AgentSelection | undefined;
       };
@@ -88,7 +89,7 @@ function sidebarHarness(options: {
       };
     };
   };
-  internals.conversation.controller.hydrate();
+  await internals.conversation.controller.hydrate();
   const select = (profileId: string, patch: Partial<AgentSelection> = {}) => internals.receive({
     type: "agentSelection",
     selection: {
@@ -106,7 +107,7 @@ function sidebarHarness(options: {
 
 describe("sidebar agent selection synchronization", () => {
   it("deduplicates Pi discovery and preserves a newer selection after a late reply", async () => {
-    const h = sidebarHarness({ provider: "pi" }); h.storage.resolve();
+    const h = await sidebarHarness({ provider: "pi" }); h.storage.resolve();
     await h.select("pi"); await h.select("codex"); await h.select("pi"); await h.select("claude");
     expect(h.discoverHarnessModels).toHaveBeenCalledOnce();
     h.discovery.resolve();
@@ -116,7 +117,7 @@ describe("sidebar agent selection synchronization", () => {
   });
 
   it("keeps Pi cached models on failure and retries discovery when selected again", async () => {
-    const h = sidebarHarness({ provider: "pi" }); h.storage.resolve();
+    const h = await sidebarHarness({ provider: "pi" }); h.storage.resolve();
     await h.select("pi"); h.discovery.reject(new Error("Pi missing"));
     await vi.waitFor(() => expect(h.states()).toHaveLength(1));
     expect(h.states()[0]?.agentProfiles[0]?.models).toEqual(["cached-model"]);
@@ -124,7 +125,7 @@ describe("sidebar agent selection synchronization", () => {
     await vi.waitFor(() => expect(h.discoverHarnessModels).toHaveBeenCalledTimes(2));
   });
   it("publishes and commits DeepSeek before storage and model discovery complete", async () => {
-    const h = sidebarHarness();
+    const h = await sidebarHarness();
     const request = h.select("deepseek-harness");
     await vi.waitFor(() => expect(h.states()[0]?.agentSelection.profileId).toBe("deepseek-harness"));
     expect(h.selection().profileId).toBe("deepseek-harness");
@@ -138,7 +139,7 @@ describe("sidebar agent selection synchronization", () => {
   });
 
   it("keeps the latest selection when discovery completes after switching away", async () => {
-    const h = sidebarHarness();
+    const h = await sidebarHarness();
     h.storage.resolve();
     await h.select("deepseek-harness");
     await h.select("claude");
@@ -149,7 +150,7 @@ describe("sidebar agent selection synchronization", () => {
   });
 
   it("shares pending discovery across rapid switches back to DeepSeek", async () => {
-    const h = sidebarHarness();
+    const h = await sidebarHarness();
     h.storage.resolve();
     await h.select("deepseek-harness");
     await h.select("codex");
@@ -160,7 +161,7 @@ describe("sidebar agent selection synchronization", () => {
   });
 
   it("keeps cached models and the accepted selection when discovery fails", async () => {
-    const h = sidebarHarness();
+    const h = await sidebarHarness();
     h.storage.resolve();
     await h.select("deepseek-harness");
     h.discovery.reject(new Error("ACP unavailable"));
@@ -176,7 +177,7 @@ describe("sidebar agent selection synchronization", () => {
   });
 
   it("validates skills against the installed catalog and preserves an absent field", async () => {
-    const h = sidebarHarness();
+    const h = await sidebarHarness();
     h.storage.resolve();
     await h.select("codex", { skills: ["ponytail", "missing", "ponytail"] });
     const id = h.internals.conversation.controller.active().id;
@@ -195,7 +196,7 @@ describe("sidebar agent selection synchronization", () => {
 
   it("rejects a late agent selection while the active conversation is running", async () => {
     const gates: Array<() => void> = [];
-    const h = sidebarHarness({
+    const h = await sidebarHarness({
       executeConversation: async () => {
         await new Promise<void>((resolve) => gates.push(resolve));
         return emptyResponse();
@@ -225,7 +226,7 @@ describe("sidebar agent selection synchronization", () => {
 describe("conversation composer selection", () => {
   it("clears uninstalled Skills from active and closed saved conversations while preserving other controls", async () => {
     const h = createConversationHarness({ layout: { openConversationIds: ["one"], activeConversationId: "one" } });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const one = { ...defaultSelection, profileId: "codex", model: "one-model", skills: ["review", "keep"] };
     const two = { ...defaultSelection, profileId: "claude", model: "two-model", skills: ["review"] };
     h.controller.setSelection("one", one);
@@ -239,7 +240,7 @@ describe("conversation composer selection", () => {
   });
 
   it("reconciles execution and saved selection when Resources removes an installed Skill", async () => {
-    const h = sidebarHarness(); h.storage.resolve();
+    const h = await sidebarHarness(); h.storage.resolve();
     await h.select("codex", { skills: ["ponytail"] });
     h.application.skills.list = () => [];
     await h.sidebar.resourcesChanged();
@@ -265,7 +266,7 @@ describe("conversation composer selection", () => {
 
   it("keeps each conversation's controls isolated when switching tabs", async () => {
     const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "one" } });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const one = { ...defaultSelection, profileId: "codex", model: "one-model" };
     const two = { ...defaultSelection, profileId: "deepseek-harness", model: "two-model" };
     h.controller.setSelection("one", one);
@@ -299,7 +300,7 @@ describe("conversation composer selection", () => {
       application: { currentSelection: () => ({ ...defaultSelection }), setAgentSelection: vi.fn(), endAgentSession: vi.fn() },
       execution: { running: () => false, postActiveExecution: async () => undefined }
     });
-    reloaded.hydrate();
+    await reloaded.hydrate();
     expect(reloaded.active().id).toBe(id);
     expect(reloaded.selection(id)).toEqual(next);
     reloaded.dispose();

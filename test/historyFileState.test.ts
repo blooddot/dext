@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HistoryFileState, openFileHistoryStore } from "../src/features/conversations/host/historyFileState.js";
+import { HistoryFiles, openFileHistoryStore } from "../src/features/conversations/host/historyFileState.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
 class Memento {
@@ -29,6 +30,25 @@ function session(id: string, process: AgentStreamEvent[] = []) {
   ] };
 }
 
+function turn(input: string) {
+  return { id: `turn-${input}`, createdAt: 1, input, output: "", process: [] };
+}
+
+/** The name the old per-key Memento dump used. */
+function legacyName(key: string): string {
+  return `${createHash("sha256").update(key).digest("hex")}.json`;
+}
+
+function bodyName(id: string): string {
+  return `${Buffer.from(id, "utf8").toString("hex")}.jsonl`;
+}
+
+async function bodyFile(path: string): Promise<string> {
+  return join(path, (await readdir(path)).find((name) => name.endsWith(".jsonl"))!);
+}
+
+const workflow = { kind: "workflow" as const, executions: [] };
+
 describe("file history storage", () => {
   it("backs up raw history, compacts interleaved snapshots and retires all Memento history keys", async () => {
     const legacy = new Memento();
@@ -44,7 +64,7 @@ describe("file history storage", () => {
     legacy.values.set("dext.conversationLayout", { activeConversationId: "old" });
     const path = await directory();
     const store = await openFileHistoryStore(path, legacy);
-    expect(store.list()[0]).toMatchObject({ providerSessions: { pi: "native-thread" }, turns: [
+    expect((await store.sessions())[0]).toMatchObject({ providerSessions: { pi: "native-thread" }, turns: [
       { input: "original input", output: "original output", process: [
         { phase: "reasoning", text }, { phase: "status", usage: { outputTokens: 999 } }
       ] }
@@ -53,27 +73,30 @@ describe("file history storage", () => {
     expect(legacy.writes).toEqual([["dext.history", undefined]]);
     const backupNames = await readdir(join(path, "legacy-backup"));
     expect(JSON.parse(await readFile(join(path, "legacy-backup", backupNames[0]!), "utf8"))).toEqual({ key: "dext.history", value: [original] });
-    const disk = await HistoryFileState.open(path);
-    const diskSize = JSON.stringify(disk.get("dext.history.session:old", {})).length;
-    expect(diskSize).toBeLessThan(JSON.stringify(original).length / 100);
+    // The index and one line-per-turn body replace the whole-session JSON.
+    expect(await readdir(path)).toContain("index.json");
+    const disk = await HistoryFiles.open(path);
+    expect((await disk.read("old"))?.turns[0]?.input).toBe("original input");
+    expect((await stat(await bodyFile(path))).size).toBeLessThan(JSON.stringify(original).length / 100);
     await store.addSuccess("new input", [], { kind: "workflow", executions: [] }, "old");
     expect(legacy.writes).toHaveLength(1);
     const reopened = await openFileHistoryStore(path, legacy);
-    expect(reopened.list()[0]?.turns.map((turn) => turn.input)).toEqual(["original input", "new input"]);
+    expect((await reopened.sessions())[0]?.turns.map((entry) => entry.input)).toEqual(["original input", "new input"]);
   });
 
   it("keeps a turn another window committed after this window loaded", async () => {
     const path = await directory();
     const first = await openFileHistoryStore(path, new Memento());
     await first.addSuccess("one", [], { kind: "workflow", executions: [] }, "shared");
-    // The second window loads two-turn history before the first window commits again.
+    // The second window loads one-turn history before the first window commits again.
     const second = await openFileHistoryStore(path, new Memento());
     await first.addSuccess("two", [], { kind: "workflow", executions: [] }, "shared");
     // Renaming in the older window must not write its shorter copy back.
-    expect(await second.renameTurn("shared", second.list()[0]!.turns[0]!.id, "renamed")).toBe(true);
+    expect(await second.renameTurn("shared", (await second.sessions())[0]!.turns[0]!.id, "renamed")).toBe(true);
     const reopened = await openFileHistoryStore(path, new Memento());
-    expect(reopened.list()[0]!.turns.map((turn) => turn.input)).toEqual(["one", "two"]);
-    expect(reopened.list()[0]!.turns[0]!.title).toBe("renamed");
+    const shared = (await reopened.sessions())[0]!;
+    expect(shared.turns.map((entry) => entry.input)).toEqual(["one", "two"]);
+    expect(shared.turns[0]!.title).toBe("renamed");
   });
 
   it("recovers unindexed session keys from an interrupted old migration and prefers their newer state", async () => {
@@ -82,30 +105,33 @@ describe("file history storage", () => {
     legacy.values.set("dext.history.session:same", { ...session("same"), archivedAt: 3 });
     legacy.values.set("dext.history.session:orphan", session("orphan"));
     const store = await openFileHistoryStore(await directory(), legacy);
-    expect(store.list(true).map((value) => value.id)).toEqual(["same", "second", "orphan"]);
-    expect(store.list(true)[0]?.archivedAt).toBe(3);
+    const sessions = await store.sessions(true);
+    expect(sessions.map((value) => value.id)).toEqual(["same", "second", "orphan"]);
+    expect(sessions[0]?.archivedAt).toBe(3);
     expect(legacy.keys()).toEqual([]);
   });
 
-  it("recovers a session file committed just before an interrupted index write", async () => {
+  it("recovers a conversation body committed just before an interrupted index write", async () => {
     const path = await directory();
-    const disk = await HistoryFileState.open(path);
-    await disk.update("dext.history.session:unindexed", session("unindexed"));
+    await writeFile(join(path, bodyName("unindexed")), `${JSON.stringify(turn("kept"))}\n`);
     const legacy = new Memento();
     const store = await openFileHistoryStore(path, legacy);
-    expect(store.list().map((session) => session.id)).toEqual(["unindexed"]);
+    expect((await store.sessions()).map((value) => value.id)).toEqual(["unindexed"]);
     await store.remove("unindexed");
-    expect((await openFileHistoryStore(path, legacy)).list()).toEqual([]);
+    expect(await (await openFileHistoryStore(path, legacy)).sessions()).toEqual([]);
   });
 
-  it("rebuilds a corrupted order index from the session files", async () => {
+  it("rebuilds a corrupted index from the conversation bodies", async () => {
     const legacy = new Memento();
     legacy.values.set("dext.history", [session("old")]);
     const path = await directory();
     await openFileHistoryStore(path, legacy);
-    const disk = await HistoryFileState.open(path);
-    await disk.update("dext.history.order", { broken: true });
-    expect((await openFileHistoryStore(path, new Memento())).list().map((value) => value.id)).toEqual(["old"]);
+    await writeFile(join(path, "index.json"), "{ broken");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await (await openFileHistoryStore(path, new Memento())).sessions()).map((value) => value.id)).toEqual(["old"]);
+      expect(warn).toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
   });
 
   it("retires the raw import backup after a week and keeps a newer one", async () => {
@@ -118,7 +144,7 @@ describe("file history storage", () => {
       const when = new Date(Date.now() - ageMs);
       await utimes(join(backup, (await readdir(backup))[0]!), when, when);
       const store = await openFileHistoryStore(path, legacy);
-      expect(store.list().map((value) => value.id)).toEqual(["old"]);
+      expect((await store.sessions()).map((value) => value.id)).toEqual(["old"]);
       return backup;
     };
     await expect(readdir(await importOnce(8 * 24 * 60 * 60 * 1000))).rejects.toThrow();
@@ -141,6 +167,7 @@ describe("file history storage", () => {
     await utimes(stale, when, when);
     await writeFile(join(overflow, "fresh.txt"), "new");
 
+    // Pruning reads the index, so it still knows the spill file is referenced.
     await openFileHistoryStore(path, new Memento(), limits);
     expect((await readdir(overflow)).sort()).toEqual([basename(spillPath), "fresh.txt"].sort());
   });
@@ -152,11 +179,10 @@ describe("file history storage", () => {
     const update = legacy.update.bind(legacy);
     legacy.update = async () => { throw new Error("cleanup failed"); };
     await expect(openFileHistoryStore(path, legacy)).rejects.toThrow("cleanup failed");
-    const disk = await HistoryFileState.open(path);
-    await disk.update("dext.history.session:old", undefined);
-    await disk.update("dext.history.order", []);
+    // The user deleted the conversation while the cleanup kept failing.
+    await (await HistoryFiles.open(path)).remove("old");
     legacy.update = update;
-    expect((await openFileHistoryStore(path, legacy)).list()).toEqual([]);
+    expect(await (await openFileHistoryStore(path, legacy)).sessions()).toEqual([]);
     expect(legacy.keys()).toEqual([]);
   });
 
@@ -164,20 +190,20 @@ describe("file history storage", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const path = await directory();
-      const disk = await HistoryFileState.open(path);
-      await disk.update("dext.history.session:kept", session("kept"));
-      await disk.update("dext.history.order", ["kept", "other"]);
+      const kept = "dext.history.session:kept";
+      await writeFile(join(path, legacyName(kept)), JSON.stringify({ key: kept, value: session("kept") }));
       // Neither a damaged body nor a name that does not match its key may take
       // the whole History down: the user would lose the entry to delete it.
       await writeFile(join(path, `${"a".repeat(64)}.json`), JSON.stringify({ key: "dext.history.session:other", value: session("other") }));
       await writeFile(join(path, `${"b".repeat(64)}.json`), "corrupt");
       const skipped: string[] = [];
-      const reopened = await HistoryFileState.open(path, (names) => skipped.push(...names));
-      expect(reopened.get("dext.history.session:kept", undefined)).toMatchObject({ id: "kept" });
-      expect(reopened.get("dext.history.session:other", undefined)).toBeUndefined();
-      // Both broken files are named for the activation warning, and logged too.
+      const reopened = await HistoryFiles.open(path, (names) => skipped.push(...names));
+      expect(reopened.summaries().map((value) => value.id)).toEqual(["kept"]);
+      // Both broken files are named for the activation warning, logged too, and
+      // left in place for inspection.
       expect([...skipped].sort()).toEqual(["a".repeat(64) + ".json", "b".repeat(64) + ".json"]);
       expect(warn).toHaveBeenCalledTimes(2);
+      expect(await readdir(path)).toEqual(expect.arrayContaining(["a".repeat(64) + ".json", "b".repeat(64) + ".json"]));
     } finally {
       warn.mockRestore();
     }
@@ -191,14 +217,55 @@ describe("file history storage", () => {
     await writeFile(blocked, "file");
     await expect(openFileHistoryStore(blocked, legacy)).rejects.toThrow();
     expect(legacy.writes).toEqual([]);
-    const disk = await HistoryFileState.open(path);
-    await disk.update("dext.history.order", ["old"]);
-    const name = (await readdir(path)).find((name) => name.endsWith(".json"))!;
-    await writeFile(join(path, name), "corrupt");
+    await writeFile(join(path, `${"c".repeat(64)}.json`), "corrupt");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       // The damaged file is skipped, so activation still succeeds and imports.
-      expect((await openFileHistoryStore(path, legacy)).list().map((value) => value.id)).toEqual(["old"]);
+      expect((await (await openFileHistoryStore(path, legacy)).sessions()).map((value) => value.id)).toEqual(["old"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("lists conversations from the index and does not read bodies", async () => {
+    const path = await directory();
+    const store = await openFileHistoryStore(path, new Memento());
+    await store.addSuccess("first", [], workflow, "session-1");
+    await store.addSuccess("second", [], workflow, "session-2");
+    for (const name of await readdir(path)) if (name.endsWith(".jsonl")) await rm(join(path, name));
+    const files = await HistoryFiles.open(path);
+    expect(files.summaries().map((summary) => [summary.id, summary.turnCount, summary.firstInput]))
+      .toEqual([["session-1", 1, "first"], ["session-2", 1, "second"]]);
+  });
+
+  it("appends a new turn as one more line instead of rewriting the body", async () => {
+    const path = await directory();
+    const store = await openFileHistoryStore(path, new Memento());
+    await store.addSuccess("first", [], workflow, "session-1");
+    const file = await bodyFile(path);
+    const before = await readFile(file, "utf8");
+    await store.addSuccess("second", [], workflow, "session-1");
+    const after = await readFile(file, "utf8");
+    expect(after.startsWith(before)).toBe(true);
+    expect(after.trimEnd().split("\n")).toHaveLength(2);
+  });
+
+  it("skips a damaged turn line, keeps the rest and heals the index from the body", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const path = await directory();
+      const store = await openFileHistoryStore(path, new Memento());
+      await store.addSuccess("first", [], workflow, "session-1");
+      await store.addSuccess("second", [], workflow, "session-1");
+      const file = await bodyFile(path);
+      // A crash between the append and the index write, plus a torn line.
+      await writeFile(file, `${(await readFile(file, "utf8")).trimEnd()}\n${JSON.stringify(turn("third"))}\n{ torn\n`);
+      const reopened = await openFileHistoryStore(path, new Memento());
+      expect((await reopened.sessions())[0]?.turns.map((entry) => entry.input)).toEqual(["first", "second", "third"]);
+      expect(reopened.summaries()[0]?.turnCount).toBe(3);
+      expect(warn).toHaveBeenCalled();
+      // The repaired count is in the index now, so the next window needs no body.
+      expect((await HistoryFiles.open(path)).summaries()[0]?.turnCount).toBe(3);
     } finally {
       warn.mockRestore();
     }

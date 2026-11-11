@@ -252,7 +252,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async setActivePlan(reference: string | undefined): Promise<void> {
-    this.conversation.controller.hydrate();
+    await this.conversation.controller.hydrate();
     await this.conversation.plans.setActivePlan(reference);
   }
 
@@ -277,7 +277,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async choosePlan(): Promise<void> {
-    this.conversation.controller.hydrate();
+    await this.conversation.controller.hydrate();
     const items: Array<vscode.QuickPickItem & { reference?: string }> = [{ label: "$(add) New plan", description: "Create a new plan document" }];
     const roots: Array<{ uri: vscode.Uri; prefix: string }> = [{ uri: vscode.Uri.joinPath(this.application.storage.globalStorageUri, "plans"), prefix: ".dext-global/plans" }];
     const folder = vscode.workspace.workspaceFolders?.[0];
@@ -439,7 +439,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async newConversation(): Promise<void> {
-    this.conversation.controller.hydrate();
+    await this.conversation.controller.hydrate();
     await this.startConversation();
   }
 
@@ -508,7 +508,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async closeTab(sessionId: string): Promise<void> {
-    this.conversation.controller.hydrate();
+    await this.conversation.controller.hydrate();
     const wasActive = this.activeSession.id === sessionId;
     await this.conversation.controller.close(sessionId);
     // Closing the visible tab repaints the shared sidebar state for the
@@ -517,9 +517,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async retryTurn(sessionId: string, turnId: string): Promise<void> {
-    this.conversation.controller.hydrate();
+    await this.conversation.controller.hydrate();
     if (this.running(sessionId)) throw new Error("Stop this Dext turn before retrying a conversation turn.");
-    const session = this.sessionInMap(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const session = this.sessionInMap(sessionId) ?? await this.history.session(sessionId);
     const turn = session?.turns.find((item) => item.id === turnId);
     if (!session || !turn) throw new Error("Conversation turn not found.");
     if (session.archivedAt) {
@@ -537,11 +537,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   async continueTurn(sessionId: string, turnId: string): Promise<void> {
-    this.conversation.controller.hydrate();
+    await this.conversation.controller.hydrate();
     if (this.running(sessionId)) throw new Error("Stop this Dext turn before continuing a conversation turn.");
     const continuation = this.conversation.coordinator.takeContinuation(sessionId, turnId);
     if (!continuation) throw new Error("This Code turn cannot be continued after the extension was reloaded. Retry it instead.");
-    const session = this.sessionInMap(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const session = this.sessionInMap(sessionId) ?? await this.history.session(sessionId);
     const turn = session?.turns.find((item) => item.id === turnId);
     if (!session || !turn || turn.mode !== "code") throw new Error("Conversation Code turn not found.");
     if (session.archivedAt) {
@@ -573,10 +573,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.postWhenReady({ type: "insertFileReferences", expressions: [`@${attachment.relativePath}`] });
   }
 
-  editTurnInput(sessionId: string, turnId: string): void {
-    this.conversation.controller.hydrate();
+  async editTurnInput(sessionId: string, turnId: string): Promise<void> {
+    await this.conversation.controller.hydrate();
     const execution = this.conversation.coordinator.active(sessionId);
-    const session = this.sessionInMap(sessionId) ?? this.history.list(true).find((item) => item.id === sessionId);
+    const session = this.sessionInMap(sessionId) ?? await this.history.session(sessionId);
     const source = execution?.turnId === turnId
       ? execution.source
       : session?.turns.find((turn) => turn.id === turnId)?.input;
@@ -685,7 +685,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           this.fileSearch?.dispose();
           this.fileSearch = new FileSearchController(response => this.post(response));
           const pendingMessages = this.messageQueue.markReady();
-          this.conversation.controller.hydrate();
+          await this.conversation.controller.hydrate();
           this.updateRunningContext();
           await this.refresh();
           await this.conversation.controller.postConversationState();
@@ -1174,7 +1174,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[], resourceSource?: "describe" | "import"): Promise<void> {
-    this.conversation.controller.hydrate();
+    await this.conversation.controller.hydrate();
     await this.conversation.coordinator.execute(this.activeSession, mode, normalizeInputReferenceSource(source), {
       ...(planPath !== undefined ? { planPath } : {}),
       executePlan,
@@ -1289,8 +1289,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   /** Attachment files saved history still points at, so pruning never breaks an
    * old conversation's image or log. */
-  private referencedAttachments(): ReadonlySet<string> {
-    return referencedAttachmentNames(this.history.list(true).map((session) => JSON.stringify(session)).join("\n"));
+  private async referencedAttachments(): Promise<ReadonlySet<string>> {
+    // Attachments live as long as any conversation mentions them, so this is the
+    // one path that still reads every body.
+    return referencedAttachmentNames((await this.history.sessions(true)).map((session) => JSON.stringify(session)).join("\n"));
   }
 
   /** `limit` is the base64 bridge's own ceiling for a pasted video; the

@@ -4,6 +4,7 @@ import { CliAgentRunner, parseClaudeStreamEvents } from "../src/features/agents/
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 import { agentTodoProgress, agentTodoRows, latestAgentTodos, renderAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 
 function claudeHarness() {
@@ -136,16 +137,12 @@ describe("agent task progress", () => {
   });
 
   it("persists interrupted progress and renders the last snapshot above Process after reloading", async () => {
-    const stored = new Map<string, unknown>();
-    const state = {
-      get: <T>(key: string, fallback: T): T => (stored.has(key) ? stored.get(key) as T : fallback),
-      update: async (key: string, value: unknown) => { if (value === undefined) stored.delete(key); else stored.set(key, value); }
-    };
-    const history = new DextHistoryStore(state as never);
+    const backend = new MemoryHistoryBackend();
+    const history = new DextHistoryStore(backend);
     const initial = agentTodoEvent([{ id: "1", text: "Old title", status: "pending" }]);
     const latest = agentTodoEvent([{ id: "1", text: "New title", status: "in_progress" }]);
     await history.addFailure("Build", [initial, latest, { phase: "tool", text: "npm test" }], new Error("Cancelled"), "session", "plan");
-    const turn = new DextHistoryStore(state as never).list()[0]!.turns[0]!;
+    const turn = (await new DextHistoryStore(backend).sessions())[0]!.turns[0]!;
     expect(latestAgentTodos(turn.process)).toEqual(latest.todos);
     const html = renderHistoryRecord(turn);
     expect(html).toContain("New title");

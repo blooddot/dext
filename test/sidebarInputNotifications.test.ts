@@ -13,6 +13,7 @@ vi.mock("vscode", () => ({
 
 import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 import { conversation, createConversationHarness, defaultSelection, HarnessState } from "./conversationHarness.js";
@@ -65,11 +66,17 @@ function harness(options: { executeConversation?: (mode: "agent" | "ask" | "plan
  */
 async function sidebarHarness(visible: boolean) {
   const state = new HarnessState();
-  const history = new DextHistoryStore(state as never);
+  const history = new DextHistoryStore(new MemoryHistoryBackend());
   const preferences = new DextConversationPreferences(state as never);
   for (const id of ["foreground", "background"]) {
     await history.addSuccess("hello", [], { kind: "workflow", executions: [] }, id, "agent", `turn-${id}`);
   }
+  // Both are open tabs: a background turn belongs to a conversation this
+  // window has loaded, it is only not the one on screen.
+  await preferences.setConversationLayout({
+    openConversationIds: ["foreground", "background"],
+    activeConversationId: "foreground"
+  });
   const gates: Array<() => void> = [];
   const executeConversation = vi.fn(async (_mode: string, _source: string, metadata: ExecutionMetadata): Promise<InputExecutionResponse> => {
     metadata.onAgentEvent?.(waiting);
@@ -94,7 +101,7 @@ async function sidebarHarness(visible: boolean) {
     view: { visible: boolean; webview: { postMessage(message: WebviewResponse): Promise<boolean> } };
     messageQueue: { markReady(): void };
     conversation: {
-      controller: { hydrate(): void; activate(session: unknown): void; session(id: string): unknown };
+      controller: { hydrate(): Promise<void>; activate(session: unknown): void; session(id: string): unknown };
       coordinator: { execute(session: unknown, mode: "agent", source: string): Promise<void>; running(id: string): boolean; turnOf(id: string): string | undefined };
     };
   };
@@ -103,7 +110,7 @@ async function sidebarHarness(visible: boolean) {
     webview: { postMessage: async (message) => { messages.push(message); return true; } }
   };
   internals.messageQueue.markReady();
-  internals.conversation.controller.hydrate();
+  await internals.conversation.controller.hydrate();
   internals.conversation.controller.activate(internals.conversation.controller.session("foreground"));
   let choose!: (action?: string) => void;
   host.showInformationMessage.mockImplementation(() => new Promise<string | undefined>((resolve) => { choose = resolve; }));
@@ -120,7 +127,7 @@ describe("sidebar input notifications", () => {
   it("notifies for a background question, opens it only on user action, and hands focus to that conversation", async () => {
     const gate = gatedTurn(waiting);
     const { h, seed, choose } = harness({ executeConversation: gate.executeConversation });
-    seed();
+    await seed();
     const background = h.controller.session("background")!;
 
     const execution = h.coordinator.execute(background, "agent", "background question");
@@ -157,7 +164,7 @@ describe("sidebar input notifications", () => {
   it("does not notify twice for one UI form and ignores an answered one", async () => {
     const gate = gatedTurn();
     const { h, seed, choose } = harness({ executeConversation: gate.executeConversation });
-    seed();
+    await seed();
     const execution = h.coordinator.execute(h.controller.session("background")!, "agent", "ui question");
     await vi.waitFor(() => expect(h.coordinator.running("background")).toBe(true));
     const turnId = h.coordinator.turnOf("background")!;
@@ -186,7 +193,7 @@ describe("sidebar input notifications", () => {
   it("does not navigate if the turn ends while the notification is being accepted", async () => {
     const gate = gatedTurn(waiting);
     const { h, seed, choose } = harness({ executeConversation: gate.executeConversation });
-    seed();
+    await seed();
     const execution = h.coordinator.execute(h.controller.session("background")!, "agent", "background question");
     await vi.waitFor(() => expect(h.notify).toHaveBeenCalledOnce());
     const turnId = h.coordinator.turnOf("background")!;
@@ -208,7 +215,7 @@ describe("sidebar input notifications", () => {
 
   it.each([false, true])("reveals Dext only when it is not already on screen (visible: %s)", async (visible) => {
     const h = await sidebarHarness(visible);
-    const background = h.internals.conversation.controller.session("background")!;
+    const background = h.internals.conversation.controller.session("background");
     const execution = h.internals.conversation.coordinator.execute(background, "agent", "background question");
     await vi.waitFor(() => expect(h.internals.conversation.coordinator.running("background")).toBe(true));
     await vi.waitFor(() => expect(host.showInformationMessage).toHaveBeenCalledOnce());

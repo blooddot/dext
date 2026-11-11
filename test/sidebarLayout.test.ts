@@ -469,7 +469,7 @@ describe("sidebar panel layout", () => {
     // History opens an already-open conversation by activating that same
     // in-memory session (host initiated), never by creating a second tab.
     const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "one" } });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const existing = h.controller.session("two")!;
     const beforeOpen = h.messages.length;
     await h.controller.open({ ...existing, turns: [] });
@@ -489,11 +489,11 @@ describe("sidebar panel layout", () => {
 
   it("closes a conversation tab without dropping the conversation from history", async () => {
     const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "two" } });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const beforeClose = h.messages.length;
     await h.controller.close("two");
     // The session store backs history, so closing a tab must never delete it.
-    expect(h.history.list(true).map((session) => session.id).sort()).toEqual(["one", "two"]);
+    expect((await h.history.sessions(true)).map((session) => session.id).sort()).toEqual(["one", "two"]);
     expect(h.controller.session("two")).toBeDefined();
     expect(h.controller.layout().openConversationIds).toEqual(["one"]);
     // The neighbour replaces the closed tab instead of leaving a blank view.
@@ -517,7 +517,7 @@ describe("sidebar panel layout", () => {
     // A pin restores a tab even when the saved layout predates open tabs.
     const h = createConversationHarness({ layout: { openConversationIds: ["a", "c"], activeConversationId: "c" } });
     await h.preferences.setPinned("b", true);
-    h.seed([conversation("a", [turn("a1")]), conversation("b", [turn("b1")]), conversation("c", [turn("c1")])]);
+    await h.seed([conversation("a", [turn("a1")]), conversation("b", [turn("b1")]), conversation("c", [turn("c1")])]);
     expect(h.controller.ordered()).toEqual(["b", "a", "c"]);
     expect(h.controller.layout().openConversationIds).toContain("b");
     await h.controller.pin("c", true);
@@ -727,7 +727,7 @@ describe("sidebar panel layout", () => {
     const turnId = h.coordinator.turnOf(active.id)!;
     execution.release();
     await running;
-    const stored = h.history.list(true).find((session) => session.id === active.id)!.turns.at(-1)!;
+    const stored = (await h.history.sessions(true)).find((session) => session.id === active.id)!.turns.at(-1)!;
     expect(stored).toMatchObject({ id: turnId, mode: "plan", input: "retry me" });
     expect(active.turns.at(-1)?.id).toBe(turnId);
     h.dispose();
@@ -777,7 +777,7 @@ describe("sidebar panel layout", () => {
     execution.release();
     await running;
     expect(h.coordinator.running(active.id)).toBe(false);
-    expect(h.history.list(true).find((session) => session.id === active.id)!.turns.at(-1)?.error).toContain("stopped by user");
+    expect((await h.history.sessions(true)).find((session) => session.id === active.id)!.turns.at(-1)?.error).toContain("stopped by user");
     expect(sidebar).toMatch(/private updateRunningContext\(\): void \{[\s\S]*?"dext\.running",[\s\S]*?this\.running\(this\.activeSession\.id\)/);
     expect(sidebar).toMatch(/stopExecution\(\): void \{[\s\S]*?this\.conversation\.coordinator\.abort\(this\.activeSession\.id\)/);
     h.dispose();
@@ -933,7 +933,7 @@ describe("sidebar panel layout", () => {
       layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
       executeConversation: execution.executeConversation
     });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const first = h.coordinator.execute(h.controller.session("one")!, "agent", "first");
     const second = h.coordinator.execute(h.controller.session("two")!, "agent", "second");
     await vi.waitFor(() => {
@@ -949,8 +949,8 @@ describe("sidebar panel layout", () => {
     execution.release();
     execution.release();
     await Promise.all([first, second]);
-    expect(h.history.list(true).find((session) => session.id === "one")!.turns.at(-1)?.error).toContain("stopped by user");
-    expect(h.history.list(true).find((session) => session.id === "two")!.turns.at(-1)?.error).toBeUndefined();
+    expect((await h.history.sessions(true)).find((session) => session.id === "one")!.turns.at(-1)?.error).toContain("stopped by user");
+    expect((await h.history.sessions(true)).find((session) => session.id === "two")!.turns.at(-1)?.error).toBeUndefined();
     h.dispose();
   });
 
@@ -972,7 +972,7 @@ describe("sidebar panel layout", () => {
         return emptyResponse();
       }
     });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const first = h.coordinator.execute(h.controller.session("one")!, "agent", "first");
     const second = h.coordinator.execute(h.controller.session("two")!, "agent", "second");
     await vi.waitFor(() => {
@@ -991,8 +991,8 @@ describe("sidebar panel layout", () => {
     await Promise.all([first, second]);
     expect(h.messages.some((message) => message.type === "agentEvent" && message.sessionId === "one")).toBe(true);
     expect(h.messages.some((message) => message.type === "agentEvent" && message.sessionId === "two")).toBe(false);
-    expect(h.history.list(true).find((session) => session.id === "one")!.turns.at(-1)).toMatchObject({ id: firstTurn, mode: "agent" });
-    expect(h.history.list(true).find((session) => session.id === "two")!.turns.at(-1)).toMatchObject({ id: secondTurn, mode: "agent" });
+    expect((await h.history.sessions(true)).find((session) => session.id === "one")!.turns.at(-1)).toMatchObject({ id: firstTurn, mode: "agent" });
+    expect((await h.history.sessions(true)).find((session) => session.id === "two")!.turns.at(-1)).toMatchObject({ id: secondTurn, mode: "agent" });
     h.dispose();
     expect(protocol).toContain('running: boolean;');
     expect(protocol).toContain('{ type: "agentEvent"; sessionId: string; event: AgentStreamEvent }');
@@ -1034,7 +1034,7 @@ describe("sidebar panel layout", () => {
       layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
       executeConversation: execution.executeConversation
     });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const one = h.controller.session("one")!;
     const two = h.controller.session("two")!;
     const running = h.coordinator.execute(one, "agent", "work");
@@ -1066,7 +1066,7 @@ describe("sidebar panel layout", () => {
     // payloads carry hostInitiated so the Webview accepts an active-id change
     // it did not request, while ordinary stale responses keep their guards.
     const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "two" } });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const beforeOpen = h.messages.length;
     await h.controller.open(h.controller.session("one")!);
     await vi.waitFor(() => expect(h.messages.slice(beforeOpen)).toEqual(expect.arrayContaining([
@@ -1105,7 +1105,7 @@ describe("sidebar panel layout", () => {
       layout: { openConversationIds: ["one", "two"], activeConversationId: "one" },
       executeConversation: execution.executeConversation
     });
-    h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
+    await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
     const one = h.controller.session("one")!;
     const two = h.controller.session("two")!;
     const running = h.coordinator.execute(one, "agent", "work");

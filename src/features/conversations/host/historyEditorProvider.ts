@@ -57,14 +57,15 @@ export class DextHistoryPanel implements vscode.Disposable {
         void vscode.env.clipboard.writeText(message.text);
       }
       if (message.type === "loadHistorySession" && typeof message.sessionId === "string") {
-        const session = this.history.list(true).find((item) => item.id === message.sessionId);
-        if (session) {
+        const sessionId = message.sessionId;
+        void this.history.session(sessionId).then((session) => {
+          if (!session) return;
           void this.panel?.webview.postMessage({
             type: "historySessionBody",
             sessionId: session.id,
             html: renderHistorySessionBody(session)
           });
-        }
+        });
       }
       if (message.type === "openFileReference" && typeof message.reference === "string") {
         void openDextFileReference(message.reference, this.storage);
@@ -117,8 +118,8 @@ export class DextHistoryPanel implements vscode.Disposable {
     void this.panel?.webview.postMessage({ type: "dextAppearance", theme });
   }
 
-  refreshTurnTitle(sessionId: string, turnId: string): void {
-    const turn = this.history.list(true).find((session) => session.id === sessionId)?.turns.find((item) => item.id === turnId);
+  async refreshTurnTitle(sessionId: string, turnId: string): Promise<void> {
+    const turn = (await this.history.session(sessionId))?.turns.find((item) => item.id === turnId);
     if (!turn) return;
     // Update the label in place so renaming never collapses the expanded turn.
     void this.panel?.webview.postMessage({
@@ -148,12 +149,12 @@ export class DextHistoryPanel implements vscode.Disposable {
     const mermaid = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "mermaid.js"));
     const ordering = this.preferences.historyOrdering();
     const favorites = new Set(ordering.favorites);
-    // For the active view this is equivalent to orderHistorySessions(this.history.list(), ordering);
-    // reading all sessions is also necessary when the archived view is selected.
+    // For the active view this is equivalent to orderHistorySessions(this.history.summaries(), ordering);
+    // reading the index is also necessary when the archived view is selected.
     // An opened tab with no turn yet has nothing to render, so History lists only
     // conversations that recorded one.
-    const sessions = orderHistorySessions(this.history.list(true), ordering)
-      .filter((session) => session.turns.length > 0);
+    const sessions = orderHistorySessions(this.history.summaries(true), ordering)
+      .filter((summary) => summary.turnCount > 0);
     const empty = ordering.archivedOnly
       ? "No archived Dext conversations."
       : ordering.favoritesOnly

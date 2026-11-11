@@ -60,13 +60,13 @@ describe("Plan execution task initialization", () => {
     expect(turn.planPath).toBe("old.plan.md");
     expect(turn.executePlan).toBe(true);
     expect(turn.planOutcome).toMatchObject({ status: "incomplete", rounds: 4 });
-    expect(harness.history.list()[0]?.turns[0]?.planOutcome).toMatchObject({ status: "incomplete", rounds: 4 });
+    expect((await harness.history.sessions())[0]?.turns[0]?.planOutcome).toMatchObject({ status: "incomplete", rounds: 4 });
 
     const todos = turn.process.filter((event) => event.phase === "todo").at(-1)?.todos;
     expect(todos?.map((item) => item.status)).toEqual(["completed", "pending"]);
     expect(session.planProgress?.path).toBe("old.plan.md");
     expect(session.planProgress?.todos.map((item) => item.status)).toEqual(["completed", "pending"]);
-    expect(harness.history.list()[0]?.planProgress?.todos.map((item) => item.status)).toEqual(["completed", "pending"]);
+    expect((await harness.history.sessions())[0]?.planProgress?.todos.map((item) => item.status)).toEqual(["completed", "pending"]);
 
     const agentEvents = harness.messages.flatMap((message): AgentStreamEvent[] =>
       message.type === "agentEvent" ? [message.event] : []);

@@ -4,6 +4,7 @@ import type { ConversationHistoryStore, DextHistorySession } from "../src/featur
 import type { ConversationLayout } from "../src/features/conversations/contracts/preferences.js";
 import type { ConversationWebviewResponse } from "../src/features/conversations/contracts/protocol.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { AgentEventStream } from "../src/features/conversations/host/agentEventStream.js";
 import { ConversationController } from "../src/features/conversations/host/conversationController.js";
@@ -58,7 +59,8 @@ export interface ConversationHarnessOptions {
  * and patch controllers, event stream and interactions, with no VS Code. */
 export function createConversationHarness(options: ConversationHarnessOptions = {}) {
   const state = new HarnessState();
-  const history = new DextHistoryStore(state as never);
+  const backend = new MemoryHistoryBackend();
+  const history = new DextHistoryStore(backend);
   const preferences = new DextConversationPreferences(state as never);
   if (options.layout) void preferences.setConversationLayout({ openConversationIds: [], ...options.layout });
   for (const sessionId of options.pinned ?? []) void preferences.setPinned(sessionId, true);
@@ -170,22 +172,17 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
   executionRef.coordinator = coordinator;
 
   /** Stores sessions, then hydrates the controller so they become the tabs. */
-  function seed(sessions: readonly DextHistorySession[]): void {
-    const stored = state.get<DextHistorySession[]>("dext.history", []);
-    const ids = new Set(sessions.map((session) => session.id));
-    state.set("dext.history", [
-      ...stored.filter((session) => !ids.has(session.id)),
-      ...sessions.map((session) => structuredClone(session))
-    ]);
+  async function seed(sessions: readonly DextHistorySession[]): Promise<void> {
+    backend.seed(sessions);
     // Without an explicit layout, seed the tabs the test just created so they
     // are open and the last one is active.
     if (!options.layout && sessions.length) {
-      void preferences.setConversationLayout({
+      await preferences.setConversationLayout({
         openConversationIds: sessions.map((session) => session.id),
         activeConversationId: sessions.at(-1)!.id
       });
     }
-    controller.hydrate();
+    await controller.hydrate();
   }
 
   return {

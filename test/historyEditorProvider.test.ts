@@ -30,6 +30,7 @@ vi.mock("../src/platform/vscode/contextHost.js", () => ({ openDextFileReference:
 
 import { DextHistoryPanel } from "../src/features/conversations/host/historyEditorProvider.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import type { DextStorage } from "../src/platform/vscode/dextStorage.js";
 
@@ -44,7 +45,7 @@ let history: DextHistoryStore;
 beforeEach(async () => {
   vi.clearAllMocks();
   const memory = new MemoryState() as unknown as VSCode.Memento;
-  history = new DextHistoryStore(memory);
+  history = new DextHistoryStore(new MemoryHistoryBackend());
   await history.addSuccess("question", [], { kind: "workflow", executions: [] }, "session-1", "ask", "turn-1");
   panel = new DextHistoryPanel({} as VSCode.Uri, history, new DextConversationPreferences(memory), {} as DextStorage);
   await panel.showInActiveEditor();
@@ -70,17 +71,17 @@ describe("History turn action routing", () => {
   it("includes the actions and saved name when the session is expanded lazily", async () => {
     await history.renameTurn("session-1", "turn-1", "New title");
     state.receive?.({ type: "loadHistorySession", sessionId: "session-1" });
-    expect(state.post).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(state.post).toHaveBeenCalledWith({
       type: "historySessionBody", sessionId: "session-1",
       html: expect.stringContaining('class="output-turn-title"><span class="output-turn-title-name">New title</span>')
-    });
+    }));
     expect(state.post).toHaveBeenCalledWith(expect.objectContaining({ html: expect.stringContaining('data-history-command="dext.history.copyTurn"') }));
   });
 
   it("updates just the renamed turn's label and leaves the document intact", async () => {
     const html = state.html;
     await history.renameTurn("session-1", "turn-1", "Renamed");
-    panel.refreshTurnTitle("session-1", "turn-1");
+    await panel.refreshTurnTitle("session-1", "turn-1");
     expect(state.html).toBe(html);
     expect(state.post).toHaveBeenCalledExactlyOnceWith({
       type: "historyTurnTitle", sessionId: "session-1", turnId: "turn-1", title: "Renamed", named: true

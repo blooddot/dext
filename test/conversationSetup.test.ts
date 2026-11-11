@@ -3,6 +3,7 @@ import type { AgentSelection } from "../src/features/agents/contracts/agent.js";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
+import { MemoryHistoryBackend } from "./historyBackend.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { createConversationServices } from "../src/app/conversationSetup.js";
 import { HarnessState, conversation, defaultSelection } from "./conversationHarness.js";
@@ -11,8 +12,7 @@ vi.mock("vscode", () => ({}));
 
 function services(options: { executeConversation?: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse> } = {}) {
   const state = new HarnessState();
-  state.set("dext.history", [conversation("session")]);
-  const history = new DextHistoryStore(state as never);
+  const history = new DextHistoryStore(new MemoryHistoryBackend({ sessions: [conversation("session")] }));
   const preferences = new DextConversationPreferences(state as never);
   const posted: WebviewResponse[] = [];
   const selection: AgentSelection = { ...defaultSelection };
@@ -52,7 +52,7 @@ describe("createConversationServices", () => {
   it("creates one stack and runs a turn through the host ports", async () => {
     const h = services();
     const controller = h.services.controller;
-    controller.hydrate();
+    await controller.hydrate();
     const session = controller.session("session")!;
     controller.activate(session);
     await h.services.coordinator.execute(controller.active(), "agent", "hello");
@@ -61,7 +61,7 @@ describe("createConversationServices", () => {
     expect(h.posted).toContainEqual(expect.objectContaining({ type: "execution" }));
     expect(h.posted).toContainEqual(expect.objectContaining({ type: "executing", value: false }));
     expect(h.runningChanged).toHaveBeenCalled();
-    expect(h.history.list()[0]?.turns[0]?.input).toBe("hello");
+    expect((await h.history.sessions())[0]?.turns[0]?.input).toBe("hello");
     // The same controller instance owns the conversation for plan and patch work.
     expect(h.services.plans).toBeDefined();
     expect(h.services).not.toHaveProperty("patches");
@@ -78,7 +78,7 @@ describe("createConversationServices", () => {
         return { kind: "workflow", executions: [] };
       }
     });
-    h.services.controller.hydrate();
+    await h.services.controller.hydrate();
     const session = h.services.controller.session("session")!;
     h.services.controller.activate(session);
     const turn = h.services.coordinator.execute(h.services.controller.active(), "agent", "long");

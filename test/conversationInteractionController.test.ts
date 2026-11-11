@@ -76,7 +76,7 @@ describe("InteractionController", () => {
 
   it("does not store secret answers in history", async () => {
     const h = createConversationHarness();
-    h.seed([conversation("session")]);
+    await h.seed([conversation("session")]);
     const process: AgentStreamEvent[] = [{
       phase: "input", text: "", userInput: {
         id: "question", status: "answered", blocking: false,
@@ -88,9 +88,9 @@ describe("InteractionController", () => {
       }
     }];
     await h.history.addSuccess("prompt", process, { kind: "workflow", executions: [] }, "session", "agent", "turn");
-    const stored = h.history.list()[0]?.turns[0]?.process[0]?.userInput;
+    const stored = (await h.history.sessions())[0]?.turns[0]?.process[0]?.userInput;
     expect(stored?.answers?.open).toEqual({ answers: ["visible"] });
     expect(stored?.answers?.secret).toBeUndefined();
-    expect(JSON.stringify(h.history.list())).not.toContain("hunter2");
+    expect(JSON.stringify(await h.history.sessions())).not.toContain("hunter2");
   });
 });

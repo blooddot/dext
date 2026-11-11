@@ -4,7 +4,7 @@ import { conversation, createConversationHarness } from "./conversationHarness.j
 describe("turn renaming across History and Conversation", () => {
   it("updates the persisted turn and cached session without replacing running conversation state", async () => {
     const harness = createConversationHarness();
-    harness.seed([
+    await harness.seed([
       conversation("session-1", [
         { id: "turn-1", createdAt: 1, input: "original input", process: [], output: "", mode: "ask" },
         { id: "turn-2", createdAt: 2, input: "sibling input", process: [], output: "", mode: "ask" }
@@ -25,7 +25,7 @@ describe("turn renaming across History and Conversation", () => {
     expect(firstTurn.title).toBe("Custom name");
     expect(firstTurn.input).toBe("original input");
     expect(cachedSession.turns[1]).toEqual(siblingTurn);
-    expect(harness.history.list()[0]?.turns[0]?.title).toBe("Custom name");
+    expect((await harness.history.sessions())[0]?.turns[0]?.title).toBe("Custom name");
     expect(harness.messages.at(-1)).toEqual({
       type: "turnRenamed", sessionId: "session-1", turnId: "turn-1", title: "Custom name", displayTitle: "Custom name"
     });
@@ -41,7 +41,7 @@ describe("turn renaming across History and Conversation", () => {
 
     await harness.controller.renameTurn("session-1", "turn-1", "");
     expect(firstTurn.title).toBeUndefined();
-    expect(harness.history.list()[0]?.turns[0]?.title).toBeUndefined();
+    expect((await harness.history.sessions())[0]?.turns[0]?.title).toBeUndefined();
     expect(harness.messages.at(-1)).toEqual({
       type: "turnRenamed", sessionId: "session-1", turnId: "turn-1", displayTitle: "original input"
     });

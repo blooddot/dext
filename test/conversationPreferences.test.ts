@@ -109,10 +109,10 @@ describe("conversation preferences", () => {
     expect(store.conversationSelection("many")?.skills).toHaveLength(64);
   });
 
-  it("restores the saved tabs and active conversation when the controller is created again", () => {
+  it("restores the saved tabs and active conversation when the controller is created again", async () => {
     const layout = { openConversationIds: ["one", "two"], activeConversationId: "two" };
     const first = createConversationHarness({ layout });
-    first.seed([conversation("one"), conversation("two")]);
+    await first.seed([conversation("one"), conversation("two")]);
     // The layout is persisted by the controller whenever a tab changes.
     expect(first.preferences.conversationLayout()).toEqual({ openConversationIds: ["one", "two"], activeConversationId: "two" });
     // A store created over the same memento restores both tabs and the active one.
@@ -124,7 +124,7 @@ describe("conversation preferences", () => {
     const panel = await readFile(resolve("src/features/conversations/host/historyEditorProvider.ts"), "utf8");
 
     expect(panel).toContain("const ordering = this.preferences.historyOrdering();");
-    expect(panel).toContain("orderHistorySessions(this.history.list(), ordering)");
+    expect(panel).toContain("orderHistorySessions(this.history.summaries(true), ordering)");
     expect(panel).toContain("const name = this.preferences.title(session.id);");
     expect(panel).toContain("favorite: favorites.has(session.id)");
     // Filtering to favorites needs to say why the list came back empty.
@@ -133,7 +133,7 @@ describe("conversation preferences", () => {
 
   it("keeps a renamed conversation addressable by the id its agent session uses", async () => {
     const h = createConversationHarness();
-    h.seed([conversation("session-1")]);
+    await h.seed([conversation("session-1")]);
     h.controller.activate(h.controller.session("session-1")!);
 
     await h.preferences.setTitle("session-1", "  Auth refactor  ");
