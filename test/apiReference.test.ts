@@ -127,7 +127,8 @@ describe("API reference catalog", () => {
       expect(entry.api).toBeUndefined();
     }
     expect(entries[0]!.description).toBe("Utilities for working with file and directory paths.");
-    expect(entries[1]!.description).toBe("1 member from the TypeScript declaration");
+    // A module with one member needs no count: its row shows that declaration.
+    expect(entries[1]!.description).toBeUndefined();
     expect(apiReferenceEntries(undefined)).toEqual([]);
   });
 
@@ -138,6 +139,9 @@ describe("API reference catalog", () => {
     expect(html).toMatch(/data-resource-node="js"[\s\S]*>JSON</);
     // A member is searchable even though the row is the module that documents it.
     expect(html).toMatch(/data-resource-search-text="js\.JSON[^"]*parse/);
+    // A reference row carries the highlighted declarations a callable row shows.
+    expect(html).toContain('class="resource-entry-signature"><span class="tok-function">parse</span>(<span class="tok-propertyName">text</span>: <span class="tok-typeName">string</span>): <span class="tok-typeName">any</span>');
+    expect(html).toContain('class="tok-typeName">string</span>');
     const top = html.slice(html.indexOf('data-resource-node="."'), html.indexOf('data-resource-node="js"'));
     expect(top).not.toContain("node:path");
   });
@@ -145,22 +149,28 @@ describe("API reference catalog", () => {
   it("renders every member's own signature and JSDoc on the detail page", () => {
     const entry = apiReferenceEntries(catalog())[0]!;
     const html = renderResourceDefinition({ entry, content: "", source: entry.source });
+    /** The page's text without its token spans, so a signature reads as declared. */
+    const text = (page: string) => page.replace(/<[^>]+>/g, "");
     expect(html).toContain('<code>node:path</code>');
     expect(html).toContain('data-resource-copy="node:path"');
     // Members are grouped, and each one carries the declaration's signature and docs.
     expect(html).toContain("Functions");
-    expect(html).toContain("join(...paths: string[]): string");
+    expect(text(html)).toContain("join(...paths: string[]): string");
+    expect(text(html)).toContain("interface PlatformPath");
+    expect(text(html)).toContain("sep: string");
+    // The signature is coloured by the same lexical highlighter as the source preview,
+    // and a declaration also colours its name and parameters.
+    expect(html).toContain('<code class="resource-api-member-signature"><span class="tok-keyword">interface</span> <span class="tok-typeName">PlatformPath</span></code>');
+    expect(html).toContain('<code class="resource-api-member-signature"><span class="tok-function">join</span>(...<span class="tok-propertyName">paths</span>: <span class="tok-typeName">string</span>[]): <span class="tok-typeName">string</span></code>');
     expect(html).toContain("Joins all given path segments together.");
     expect(html).toContain("The path segments to join.");
     expect(html).toContain("The joined path.");
-    expect(html).toContain("interface PlatformPath");
-    expect(html).toContain("sep: string");
     expect(html).toContain("Deprecated");
     // The nested namespace of a global is expanded, and an example is kept as code.
     const jsonEntry = apiReferenceEntries(catalog())[1]!;
     const json = renderResourceDefinition({ entry: jsonEntry, content: "", source: jsonEntry.source });
     expect(json).toContain("An intrinsic object that converts values to and from JSON.");
-    expect(json).toContain("parse(text: string): any");
+    expect(text(json)).toContain("parse(text: string): any");
     expect(json).toContain("JSON.parse(&quot;{}&quot;)");
     // A reference has no Dext call to insert and no source file to show.
     expect(html).not.toContain("insertResourceReference");

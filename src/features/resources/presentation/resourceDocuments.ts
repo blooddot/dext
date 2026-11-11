@@ -111,13 +111,22 @@ export function renderResourceNavigation(options: ResourcePanelOptions): string 
 }
 
 
-/** Lightweight lexical colouring for the read-only source preview, shared by both pages. */
-export function highlightResourceSource(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\b\d+(?:\.\d+)?\b|[^A-Za-z_$\d"'`/]+|./g, (token: string) => {
+/**
+ * Lightweight lexical colouring for the read-only source preview, shared by both pages.
+ * A declaration also colours the two positions that make it read as a signature — the
+ * called name and the name before its type — so a reference row matches the API rows
+ * beside it instead of staying flat.
+ */
+export function highlightResourceSource(source: string, declaration = false): string {
+  return source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\b[A-Za-z_$][\w$]*\b|\b\d+(?:\.\d+)?\b|[^A-Za-z_$\d"'`/]+|./g, (token: string, offset: number) => {
+    const name = declaration && /^[A-Za-z_$][\w$]*$/.test(token);
+    const rest = name ? source.slice(offset + token.length) : "";
     const kind = token.startsWith("//") || token.startsWith("/*") ? "comment"
       : /^["'`]/.test(token) ? "string"
-      : /^(?:import|from|export|default|async|await|function|return|const|let|var|if|else|throw|new|type|interface|extends|typeof|keyof|as)$/.test(token) ? "keyword"
+      : /^(?:import|from|export|default|async|await|function|return|const|let|var|if|else|throw|new|type|interface|extends|typeof|keyof|as|class|namespace|static|readonly|declare|abstract|implements|enum)$/.test(token) ? "keyword"
       : /^(?:true|false|null|undefined)$/.test(token) ? "bool"
+      : name && /^\s*\(/.test(rest) ? "function"
+      : name && /^\s*\??\s*:/.test(rest) ? "propertyName"
       : /^(?:string|number|boolean|void|unknown|never|any|bigint|[A-Z][\w$]*)$/.test(token) ? "typeName"
       : /^\d/.test(token) ? "number" : undefined;
     const text = escapeResourceHtml(token);
@@ -269,8 +278,22 @@ export function renderSkillVisibility(entry: ResourceEntry, prefix: string): str
   return `<input type="checkbox" class="resource-entry-visibility" data-resource-command="${escapeResourceHtml(prefix)}.toggleSkillVisibility" data-resource-id="${escapeResourceHtml(entry.id)}" title="Show in the Input skills menu" aria-label="Show in the Input skills menu"${entry.hidden ? "" : " checked"}>`;
 }
 
+/** The declarations a reference row shows, the way a callable row shows its own
+ * signature: a module's own functions, or the constructor and methods beneath a
+ * class or namespace global, which is where that name is actually called. */
+export function referenceSignatures(module: ApiReferenceModule, limit = 3): string[] {
+  const callable = (member: ApiReferenceMember) => member.kind === "function" || member.kind === "method" || member.kind === "constructor";
+  return module.members.flatMap((member) => callable(member) ? [member] : (member.members ?? []).filter(callable))
+    .slice(0, limit)
+    .map((member) => member.signature.split("\n")[0]!);
+}
+
+
 export function renderTreeEntry(entry: ResourceEntry, prefix = "dext"): string {
-  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span></span>${entry.api ? `<code class="resource-entry-signature">${apiEntries(entry).map(item => renderApiSignature(item, true)).join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button>${renderSkillVisibility(entry, prefix)}${renderResourceActions(entry, prefix)}</li>`;
+  const signatures = entry.api ? apiEntries(entry).map(item => renderApiSignature(item, true))
+    : entry.reference ? referenceSignatures(entry.reference).map((signature) => highlightResourceSource(signature, true))
+    : [];
+  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span></span>${signatures.length ? `<code class="resource-entry-signature">${signatures.join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button>${renderSkillVisibility(entry, prefix)}${renderResourceActions(entry, prefix)}</li>`;
 }
 
 
@@ -496,7 +519,7 @@ export function renderReferenceMember(member: ApiReferenceMember): string {
   const example = member.example
     ? `<pre class="resource-api-example"><code>${escapeResourceHtml(member.example)}</code></pre>` : "";
   return `<li class="resource-api-member" data-resource-member="${escapeResourceHtml(member.name)}">`
-    + `<code class="resource-api-member-signature">${escapeResourceHtml(member.signature)}</code>`
+    + `<code class="resource-api-member-signature">${highlightResourceSource(member.signature, true)}</code>`
     + documentation + parameters + returns + deprecated + example + nested + `</li>`;
 }
 

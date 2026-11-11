@@ -103,11 +103,12 @@ export function apiEntry(method: ApiCallable): ResourceEntry {
 
 
 /** A one-line summary for a reference module's list row: the declaration's own
- * first paragraph, or how much API the module carries. */
+ * first paragraph, or how many members it carries. The row's signature lines
+ * already cover a module with a single member. */
 export function referenceSummary(module: ApiReferenceModule): string {
   const text = module.documentation?.split("\n\n")[0]?.replace(/\s+/g, " ").trim();
   if (text) return text.length > 200 ? `${text.slice(0, 199).trimEnd()}…` : text;
-  return `${module.members.length} ${module.members.length === 1 ? "member" : "members"} from the TypeScript declaration`;
+  return module.members.length > 1 ? `${module.members.length} members from the TypeScript declaration` : "";
 }
 
 
@@ -115,6 +116,7 @@ export function referenceSummary(module: ApiReferenceModule): string {
  * with no callable contract, so it carries the declaration's own documentation. */
 export function apiReferenceEntry(module: ApiReferenceModule): ResourceEntry {
   const path = `${module.id}.json`;
+  const summary = referenceSummary(module);
   return {
     id: resourceEntryId({ kind: "api", scope: "global", path }),
     kind: "api",
@@ -123,7 +125,7 @@ export function apiReferenceEntry(module: ApiReferenceModule): ResourceEntry {
     displayName: module.name,
     path,
     group: module.family,
-    description: referenceSummary(module),
+    ...(summary ? { description: summary } : {}),
     reference: module,
     // A reference entry ships inside the extension's own declarations rather than
     // in a resource directory, so it is listed but not editable or openable.
