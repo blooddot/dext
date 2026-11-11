@@ -1752,6 +1752,10 @@ body.image-page {
   grid-column: 1 / -1;
   min-width: 0;
   min-height: 26px;
+  /* The note is a textarea so Shift+Enter can break the line; this grows it to
+     the text instead of hiding the rest behind a scrollbar. */
+  field-sizing: content;
+  resize: none;
 }
 
 .image-annotator-error {

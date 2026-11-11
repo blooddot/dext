@@ -276,7 +276,7 @@ export class ImageAnnotator {
 
   private focusNote(index: number): void {
     if (!Number.isInteger(index)) return;
-    this.list.querySelectorAll<HTMLInputElement>(".image-annotator-row input")[index]?.focus();
+    this.list.querySelectorAll<HTMLTextAreaElement>(".image-annotator-row textarea")[index]?.focus();
   }
 
   private pointerMove(event: PointerEvent): void {
@@ -321,7 +321,7 @@ export class ImageAnnotator {
     this.renderRows();
     this.save();
     // Focus the note of the mark that was just added, not the first one.
-    this.list.lastElementChild?.querySelector("input")?.focus();
+    this.list.lastElementChild?.querySelector("textarea")?.focus();
   }
 
   private save(): void {
@@ -382,9 +382,11 @@ export class ImageAnnotator {
       label.textContent = mark.kind === "region"
         ? `${mark.box.width}\u00d7${mark.box.height} at ${mark.box.x},${mark.box.y}`
         : `point ${mark.point.x},${mark.point.y}`;
-      const note = document.createElement("input");
+      // A note is often more than one line: a textarea takes Shift+Enter, and
+      // `field-sizing: content` in the stylesheet grows it with the text.
+      const note = document.createElement("textarea");
       note.className = "ui-dialog-input";
-      note.type = "text";
+      note.rows = 1;
       note.placeholder = "What changes here?";
       note.value = mark.note;
       note.addEventListener("input", () => {

@@ -142,7 +142,7 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
   // The row repeats the chip and gives the note the whole column, not a sliver beside a label.
   const row = await evaluate(`{const r=document.querySelector('.image-annotator-row');
     ({head:document.querySelector('.image-annotator-list-head').textContent,chip:r.querySelector('.image-annotator-index').textContent,
-      note:Math.round(r.querySelector('input').getBoundingClientRect().width),list:Math.round(r.getBoundingClientRect().width)})}`);
+      note:Math.round(r.querySelector('textarea').getBoundingClientRect().width),list:Math.round(r.getBoundingClientRect().width)})}`);
   assert.equal(row.chip, '1', 'the row carries the same chip as its box');
   assert.match(row.head, /^Annotations \(\d+\)$/, `the list names itself and counts: ${row.head}`);
   assert.ok(row.note > row.list * 0.9, `the note field spans the column: ${row.note} of ${row.list}`);
@@ -161,8 +161,25 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
   const centre = await evaluate(`{const r=document.querySelector('.image-annotator-mark').getBoundingClientRect();[r.left+r.width/2,r.top+r.height/2]}`);
   await press(centre);
   assert.equal(await evaluate(`document.querySelectorAll('.image-annotator-mark').length`), 1, 'a press on a mark draws nothing');
-  assert.equal(await evaluate(`document.activeElement===document.querySelector('.image-annotator-row input')`), true, 'a press on a mark focuses its note');
+  assert.equal(await evaluate(`document.activeElement===document.querySelector('.image-annotator-row textarea')`), true, 'a press on a mark focuses its note');
   console.log('PASS pressing a mark focuses its note');
+
+  // A note is often more than one line: Shift+Enter breaks it, and the field has
+  // to grow with the line instead of hiding it behind a scrollbar.
+  const noteBox = () => evaluate(`{const n=document.querySelector('.image-annotator-row textarea'),r=n.getBoundingClientRect();
+    ({value:n.value,height:Math.round(r.height),scrolls:n.scrollHeight>n.clientHeight+1})}`);
+  const noteBefore = await noteBox();
+  const enter = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, modifiers: 8 };
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', ...enter, text: '\r' });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', ...enter });
+  await settle();
+  const noteAfter = await noteBox();
+  assert.match(noteAfter.value, /\n/, `Shift+Enter breaks the note line: ${JSON.stringify(noteAfter.value)}`);
+  assert.ok(noteAfter.height > noteBefore.height + 8, `the note field grows with its lines: ${noteBefore.height} -> ${noteAfter.height}`);
+  assert.equal(noteAfter.scrolls, false, 'the grown field shows every line it holds');
+  assert.match(await evaluate(`(window.posted??[]).filter(m=>m.type==='saveAnnotations').at(-1)?.marks[0]?.note ?? ''`), /\n/,
+    'the multi-line note reaches the host');
+  console.log(`PASS Shift+Enter breaks the note and grows the field to ${noteAfter.height}px`);
 
   // The toolbar: original size, then back to fit, with the mark still recorded.
   await evaluate(`document.querySelector('.image-annotator-tools [aria-label="Original size"]').click()`);
@@ -221,7 +238,7 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
   await settle();
   assert.equal(await evaluate(`document.querySelectorAll('.image-annotator-mark').length`), 1, 'delete removes one mark');
   assert.equal(await evaluate(`document.querySelector('.image-annotator-list-head').textContent`), 'Annotations (1)');
-  assert.equal(await evaluate(`document.activeElement===document.querySelector('.image-annotator-row input')`), true, 'focus stays in the list after a delete');
+  assert.equal(await evaluate(`document.activeElement===document.querySelector('.image-annotator-row textarea')`), true, 'focus stays in the list after a delete');
   assert.deepEqual(await evaluate(`[...document.querySelectorAll('.image-annotator-index')].map(n=>n.textContent)`), ['1', '1'], 'the surviving mark and its row are renumbered');
   console.log('PASS delete keeps focus and renumbers');
 }, false);
