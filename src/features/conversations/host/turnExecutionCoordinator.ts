@@ -4,6 +4,7 @@ import type {
   AgentInputAnswers,
   AgentInputRequest,
   AgentStreamEvent,
+  AgentWakeReport,
   InputExecutionResponse,
   McpProcessEvent,
   PlanExecutionOutcome,
@@ -22,6 +23,7 @@ import { splitCommandInput } from "../../workflow/contracts/skill.js";
 import type {
   ActiveExecution,
   ConversationSessionPort,
+  ExecutionSnapshot,
   TurnExecutionHost,
   TurnInteractionPort,
   TurnNotifier
@@ -37,6 +39,29 @@ import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault
  * log is evicted; each log can hold several large responses. */
 // shortcut: a global count cap, per-session cleanup needs a delete hook.
 const MAX_CODE_CONTINUATIONS = 8;
+
+/** A run Pi started on its own after the turn settled, for example because a
+ * background subagent finished and woke it with the result. */
+interface Wake {
+  turnId: string; startedAt: number; label: string;
+  events: AgentStreamEvent[]; controller: AbortController;
+}
+
+/** The notice Pi received is long Markdown; its first line names the run. */
+function wakeLabel(notice: string): string {
+  return notice.split("\n").map((line) => line.trim()).find(Boolean)?.slice(0, 200) ?? "Background activity";
+}
+
+/** A wake run has no Dext request behind it, so the turn carries the notice as
+ * its input and the run's final text as the Agent result. */
+function wakeResponse(input: string, text: string, durationMs: number): InputExecutionResponse {
+  return { kind: "workflow", executions: [{
+    invocation: { kind: "invocation", method: "agent", arguments: [{ name: "input", value: input }], source: "chat" },
+    method: { id: "agent", title: "Agent", kind: "command", source: "builtin" },
+    result: { kind: "agent", text },
+    durationMs
+  }] };
+}
 
 /** Turns copied into a fork are only UI history until they are sent to a new
  * provider task. Keep a readable, bounded transcript that can bootstrap that
@@ -99,6 +124,8 @@ export interface ExecuteTurnOptions {
  * conversations run concurrently. */
 export class TurnExecutionCoordinator implements TurnInteractionPort {
   private readonly activeExecutions = new Map<string, ActiveExecution>();
+  /** Runs Pi started after a turn settled, keyed by conversation. */
+  private readonly wakes = new Map<string, Wake>();
   /** Live Code continuations. They intentionally stay in memory because they
    * carry the runtime environment produced by earlier steps. */
   private readonly codeContinuations = new Map<string, readonly DextReplayEntry[]>();
@@ -125,14 +152,84 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
   abort(sessionId: string): boolean {
     const execution = this.activeExecutions.get(sessionId);
     if (!execution) return false;
-    execution.controller.abort();
+    this.stop(execution);
     return true;
+  }
+
+  /** Reports a provider run that started after its turn settled. */
+  private agentWake(sessionId: string, report: AgentWakeReport): void {
+    if (!this.options.sessions.session(sessionId)) return;
+    const wake = this.wakes.get(sessionId);
+    if (report.state === "notice") {
+      if (!wake) this.startWake(sessionId, wakeLabel(report.text));
+      return;
+    }
+    // A late report after a stopped or dropped wake has nothing left to record.
+    if (!wake) {
+      if (report.state === "event") this.startWake(sessionId, "Background activity");
+      return;
+    }
+    if (report.state === "event") { this.options.events.append(sessionId, wake.events, report.event); return; }
+    void this.finishWake(sessionId, wake, report.text, report.error);
+  }
+
+  /** Starts the turn a wake run is recorded as. A user turn that is already
+   * running consumes the wake's own frames, so it never starts twice.
+   * shortcut: a wake that arrives while a turn record is still being written is
+   * dropped; recording it needs a per-conversation wake queue. */
+  private startWake(sessionId: string, label: string): Wake | undefined {
+    if (this.activeExecutions.has(sessionId)) return undefined;
+    const wake: Wake = { turnId: randomBytes(12).toString("hex"), startedAt: Date.now(), label, events: [], controller: new AbortController() };
+    this.wakes.set(sessionId, wake);
+    const snapshot: ExecutionSnapshot = { sessionId, turnId: wake.turnId, mode: "agent", source: label, startedAt: wake.startedAt };
+    this.activeExecutions.set(sessionId, { ...snapshot, controller: wake.controller, events: wake.events });
+    // Both posts are best effort: the run itself is already in flight.
+    void this.options.sessions.postConversationState().catch(() => undefined);
+    void this.options.notifier.started(snapshot).catch(() => undefined);
+    return wake;
+  }
+
+  private async finishWake(sessionId: string, wake: Wake, text: string, error?: string): Promise<void> {
+    if (this.wakes.get(sessionId) !== wake) return; // Already settled.
+    this.wakes.delete(sessionId);
+    try {
+      const session = this.options.sessions.session(sessionId);
+      if (!session || (!error && !text.trim())) return;
+      if (error) {
+        const turn = await this.options.history.addFailure(wake.label, wake.events, new Error(error), sessionId, "agent", wake.turnId);
+        this.options.sessions.recordTurn(sessionId, turn);
+        await this.options.notifier.failed(sessionId, wake.turnId, error);
+      } else {
+        const response = wakeResponse(wake.label, text, Date.now() - wake.startedAt);
+        const turn = await this.options.history.addSuccess(wake.label, wake.events, response, sessionId, "agent", wake.turnId);
+        this.options.sessions.recordTurn(sessionId, turn);
+        await this.options.notifier.executed(sessionId, wake.turnId, response);
+      }
+    } catch (failure) {
+      await this.options.notifier.failed(sessionId, wake.turnId, failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      this.options.events.flush();
+      if (this.activeExecutions.get(sessionId)?.turnId === wake.turnId) this.activeExecutions.delete(sessionId);
+      // Publish after the turn is gone so a finished tab cannot keep spinning.
+      await this.options.sessions.postConversationState();
+      await this.options.notifier.finished(sessionId, wake.turnId);
+    }
   }
 
   abortTurn(turnId: string): void {
     for (const execution of this.activeExecutions.values()) {
-      if (execution.turnId === turnId) execution.controller.abort();
+      if (execution.turnId === turnId) this.stop(execution);
     }
+  }
+
+  /** A wake has no request of its own to cancel, so stopping it ends the
+   * provider session and records what already arrived. */
+  private stop(execution: ActiveExecution): void {
+    execution.controller.abort();
+    const wake = this.wakes.get(execution.sessionId);
+    if (wake?.turnId !== execution.turnId) return;
+    this.options.host.endAgentSession?.(execution.sessionId);
+    void this.finishWake(execution.sessionId, wake, "", "Execution was cancelled.");
   }
 
   /** Disposal aborts every live turn. The caller ends provider sessions. */
@@ -283,7 +380,10 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         onAgentSessionId: (provider: string, providerSessionId: string) => {
           session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
           void this.options.history.setProviderSession(sessionId, provider, providerSessionId);
-        }
+        },
+        // Survives this turn: Pi can wake the agent after it settled, and that
+        // output is recorded as a turn instead of being dropped.
+        onAgentWake: (report: AgentWakeReport) => this.agentWake(sessionId, report)
       };
       let response: InputExecutionResponse;
       let roundSource = todoProgress ? `${taskSource}\n\nCurrent host task state (takes precedence over the document's unchecked boxes):\n${planTodoInstruction(todoProgress.snapshot())}` : taskSource;

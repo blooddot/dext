@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentStreamEvent, ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
+import type { AgentStreamEvent, AgentWakeReport, ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import { conversation, createConversationHarness, defaultSelection } from "./conversationHarness.js";
 
 function deferred() {
@@ -81,6 +81,54 @@ describe("TurnExecutionCoordinator", () => {
       agentPermission: "full-access",
       conversationProviderSessionId: "dsh1:stored"
     });
+  });
+
+  it("records a provider run that starts after the turn settled as its own turn", async () => {
+    let wake: ((report: AgentWakeReport) => void) | undefined;
+    const h = createConversationHarness({
+      executeConversation: async (_mode, _source, metadata): Promise<InputExecutionResponse> => {
+        wake = metadata.onAgentWake;
+        return { kind: "workflow", executions: [] };
+      }
+    });
+    h.seed([conversation("session")]);
+    h.controller.activate(h.controller.session("session")!);
+    await h.coordinator.execute(h.controller.session("session")!, "agent", "start the worker");
+    expect(h.coordinator.running("session")).toBe(false);
+    wake!({ state: "notice", text: "Background task completed: **worker**\n\nPreview of the child output." });
+    wake!({ state: "event", event: { phase: "message", id: "wake:1", text: "analysing", replace: true } });
+    expect(h.coordinator.running("session")).toBe(true);
+    expect(h.messages.some((message) => message.type === "executing" && message.value)).toBe(true);
+    wake!({ state: "end", text: "all twelve frames show the same bug" });
+    await vi.waitFor(() => expect(h.coordinator.running("session")).toBe(false));
+    const turns = h.history.list().find((session) => session.id === "session")!.turns;
+    expect(turns.map((turn) => turn.input)).toEqual(["start the worker", "Background task completed: **worker**"]);
+    expect(turns[1]?.process.map((event) => event.text)).toEqual(["analysing"]);
+    expect(turns[1]?.response?.executions[0]).toMatchObject({ result: { kind: "agent", text: "all twelve frames show the same bug" } });
+  });
+
+  it("stops a background wake turn and ends the provider session", async () => {
+    let wake: ((report: AgentWakeReport) => void) | undefined;
+    const h = createConversationHarness({
+      executeConversation: async (_mode, _source, metadata): Promise<InputExecutionResponse> => {
+        wake = metadata.onAgentWake;
+        return { kind: "workflow", executions: [] };
+      }
+    });
+    h.seed([conversation("session")]);
+    await h.coordinator.execute(h.controller.session("session")!, "agent", "start the worker");
+    wake!({ state: "notice", text: "Background task completed: **worker**" });
+    wake!({ state: "event", event: { phase: "message", id: "wake:1", text: "analysing" } });
+    expect(h.coordinator.abort("session")).toBe(true);
+    expect(h.endAgentSession).toHaveBeenCalledWith("session");
+    await vi.waitFor(() => expect(h.coordinator.running("session")).toBe(false));
+    const turns = h.history.list().find((session) => session.id === "session")!.turns;
+    expect(turns.map((turn) => turn.input)).toEqual(["start the worker", "Background task completed: **worker**"]);
+    expect(turns[1]?.error).toBe("Execution was cancelled.");
+    // A frame arriving after the stop must not start a third turn.
+    wake!({ state: "end", text: "too late" });
+    await vi.waitFor(() => expect(h.coordinator.running("session")).toBe(false));
+    expect(h.history.list().find((session) => session.id === "session")!.turns).toHaveLength(2);
   });
 
   it("publishes a non-running tab summary when a turn finishes", async () => {

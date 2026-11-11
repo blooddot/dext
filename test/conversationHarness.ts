@@ -79,6 +79,7 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     response: { kind: "workflow", executions: [] }
   })));
   const executionRef: { coordinator?: TurnExecutionCoordinator } = {};
+  const endAgentSession = vi.fn();
   const controller = new ConversationController({
     history,
     preferences,
@@ -86,7 +87,7 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     application: {
       currentSelection: () => selection,
       setAgentSelection: vi.fn(),
-      endAgentSession: vi.fn()
+      endAgentSession
     },
     execution: {
       running: (sessionId) => executionRef.coordinator?.running(sessionId) ?? false,
@@ -132,6 +133,7 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
       executeConversation,
       executeInput,
       draftResource,
+      endAgentSession,
       ...(options.resolveSkillCommand ? { resolveSkillCommand: options.resolveSkillCommand } : {})
     },
     sessions: controller,
@@ -188,7 +190,7 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
 
   return {
     state, history, preferences, controller, coordinator, plans, interactions, events,
-    messages, post, postWhenReady, executeConversation, executeInput, draftResource, open, notify, seed,
+    messages, post, postWhenReady, executeConversation, executeInput, draftResource, open, notify, endAgentSession, seed,
     dispose: () => {
       events.dispose();
       interactions.dispose();

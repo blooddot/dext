@@ -56,6 +56,9 @@ export interface TurnExecutionHost {
     source: string,
     metadata: Readonly<ExecutionMetadata>
   ) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
+  /** Ends a conversation's provider session, e.g. to stop a run that has no
+   * Dext request of its own. */
+  endAgentSession?: (sessionId: string) => void;
   /** Resolves an installed `/command` against the turn's selected skills.
    * Absent in hostless tests, where slash text stays ordinary input. */
   resolveSkillCommand?: (

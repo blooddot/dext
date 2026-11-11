@@ -337,6 +337,9 @@ export interface ExecutionMetadata {
   onAgentSessionId?: (provider: string, sessionId: string) => void;
   signal?: AbortSignal;
   onAgentEvent?: (event: AgentStreamEvent) => void;
+  /** A run Pi started on its own after the turn settled, so its output is not
+   * dropped. Absent means such a run is not recorded. */
+  onAgentWake?: (report: AgentWakeReport) => void;
   /** A plan task report from a provider tool that mirrors the dext-todo comment. */
   planTodo?: (report: unknown) => void;
   requestAgentInput?: (request: AgentInputRequest, signal: AbortSignal) => Promise<AgentInputAnswers | null>;
@@ -432,6 +435,14 @@ export interface AgentStreamEvent {
   userInput?: AgentInputState;
   uiInteraction?: UiInteractionState;
 }
+
+/** A run a provider starts on its own after its turn settled, typically when a
+ * plugin wakes the agent with a background result. `notice` is the message Pi
+ * received, which becomes the recorded turn's input. */
+export type AgentWakeReport =
+  | { state: "notice"; text: string }
+  | { state: "event"; event: AgentStreamEvent }
+  | { state: "end"; text: string; error?: string };
 
 export interface RuntimeResponse {
   /** Persisted automatic application outcome; never a pending proposal. */

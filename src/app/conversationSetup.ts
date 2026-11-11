@@ -119,6 +119,7 @@ export function createConversationServices(dependencies: ConversationSetupDepend
       executeConversation: dependencies.executeConversation,
       executeInput: dependencies.executeInput,
       draftResource: dependencies.draftResource,
+      endAgentSession: dependencies.endAgentSession,
       ...(dependencies.resolveSkillCommand ? { resolveSkillCommand: dependencies.resolveSkillCommand } : {})
     },
     sessions: controller,

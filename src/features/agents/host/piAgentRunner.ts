@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { AgentModelOption, AgentProfile } from "../contracts/agent.js";
 import { piObject, piText, type PiBridgeRequest, type PiRecord, type PiState } from "../contracts/pi.js";
+import type { AgentWakeReport } from "../../../shared/contracts/types.js";
 import { PiEvents } from "../domain/piEvents.js";
 import { decodePiSession, encodePiSession, parsePiModelId, piModelId, piModelOptions, piModels, piThinkingLevels } from "../domain/piModels.js";
 import { agentTimeout, DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, type AgentTimeout } from "../domain/agentTimeout.js";
@@ -32,7 +33,10 @@ interface Active {
   submitted?: string; resolve(): void; reject(error: Error): void; done: boolean; retryError?: string;
   uiIds: Set<string>;
 }
-interface Session { binding: string; transport: PiRpcTransport; bridge: PiBridge; state: PiState; fresh: boolean; active?: Active | undefined }
+interface Session { binding: string; transport: PiRpcTransport; bridge: PiBridge; state: PiState; fresh: boolean; active?: Active | undefined;
+  /** Pi keeps running after `agent_settled` when a plugin wakes it; this reports
+   * those runs so the host records them instead of dropping their output. */
+  wake?: ((report: AgentWakeReport) => void) | undefined; wakeRun?: { events: PiEvents } | undefined }
 interface Queued { key: string; controller: AbortController }
 const stateFrom = (value: unknown): PiState => {
   const raw = piObject(value);
@@ -138,7 +142,7 @@ export class PiAgentRunner implements AgentRunner {
   }
   private record(session: Session, frame: PiRecord): void {
     const active = session.active;
-    if (!active || active.done || active.controller.signal.aborted) return;
+    if (!active || active.done || active.controller.signal.aborted) return this.recordWake(session, frame);
     active.timeout.activity();
     if (frame.type === "extension_ui_request" && typeof frame.id === "string" && typeof frame.method === "string") {
       if (active.uiIds.has(frame.id)) return; active.uiIds.add(frame.id);
@@ -157,6 +161,23 @@ export class PiAgentRunner implements AgentRunner {
       else if (["toolUse", "pending"].includes(active.events.stopReason)) active.reject(new Error("Pi stopped before producing a final response."));
       else active.resolve();
     }
+  }
+  /** Collects a run Pi started on its own after the turn settled. The turn is
+   * over, so nothing else will consume these frames. */
+  private recordWake(session: Session, frame: PiRecord): void {
+    const report = session.wake;
+    if (!report) return;
+    if (!session.wakeRun) {
+      if (frame.type !== "agent_start") return;
+      session.wakeRun = { events: new PiEvents(`wake:${randomUUID()}`) };
+    }
+    const run = session.wakeRun, message = piObject(frame.message);
+    if (frame.type === "message_start" && message.role === "custom" && typeof message.content === "string") report({ state: "notice", text: message.content });
+    for (const event of run.events.consume(frame)) report({ state: "event", event });
+    if (frame.type !== "agent_settled") return;
+    session.wakeRun = undefined;
+    report({ state: "end", text: run.events.finalText,
+      ...(frame.aborted === true ? { error: "Pi stopped the background run." } : run.events.error ? { error: run.events.error } : {}) });
   }
   private async stop(session: Session): Promise<void> {
     for (const command of ["clear_queue", "abort_retry", "abort"]) {
@@ -266,6 +287,7 @@ export class PiAgentRunner implements AgentRunner {
       const completed = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; }); void completed.catch(() => {});
       active = { request, controller, timeout, events: new PiEvents(`${key}:${randomUUID()}`), resolve: resolveTurn, reject: rejectTurn, done: false, uiIds: new Set() };
       session.active = active; session.transport.onActivity = timeout.activity; session.bridge.beginTurn();
+      session.wake = request.metadata.onAgentWake; session.wakeRun = undefined;
       if (!request.allowWorkspaceWrite && request.mcpServers?.length) request.onEvent?.({ phase: "status", text: "The configured MCP servers stay off for this read-only turn; Dext's own MCP tools remain available. Code MCP calls remain available through Dext." });
       try { active.events.setBaseline(await session.transport.request("get_session_stats", {}, 1000, controller.signal)); } catch { /* Message-level usage remains available. */ }
       if (controller.signal.aborted) throw controller.signal.reason;
@@ -283,7 +305,8 @@ export class PiAgentRunner implements AgentRunner {
       if (session.state.sessionFile && request.metadata.agentSessionId) request.metadata.onAgentSessionId?.("pi", encodePiSession({ path: await this.validateSession(session.state.sessionFile), binding }));
       return text;
     } catch (error) {
-      if (session) { this.sessions.delete(key); await this.stop(session); }
+      // Frames still in flight during shutdown are not a new run to record.
+      if (session) { session.wake = undefined; this.sessions.delete(key); await this.stop(session); }
       throw controller.signal.aborted ? controller.signal.reason : error;
     } finally {
       if (active) active.done = true;

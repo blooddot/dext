@@ -89,6 +89,18 @@ async function receive(request) {
       }, 60); return;
     }
     if (text === "fixture:compact") { send({ type: "compaction_start", reason: "threshold" }); input += 4; output += 1; send({ type: "compaction_end", reason: "threshold", result: { summary: "short" }, aborted: false }); }
+    if (text === "fixture:wake") {
+      // A plugin wakes Pi after its turn settled, exactly like a finished
+      // background subagent: a custom message starts a new run.
+      setTimeout(() => {
+        const notice = { role: "custom", customType: "subagent-notify", display: false, content: "Background task completed: **worker**\n\nPreview of the child output." };
+        send({ type: "agent_start" });
+        send({ type: "message_start", message: notice });
+        send({ type: "message_end", message: notice });
+        message("background analysis done");
+        send({ type: "agent_settled", aborted: false });
+      }, 30);
+    }
     if (text === "fixture:todo") {
       message('<!-- dext-todo: {"updates":[{"id":"plan-1","status":"in_progress"}]} -->\nImplementing');
     } else if (text === "fixture:question") {

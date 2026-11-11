@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
-import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
+import type { AgentStreamEvent, AgentWakeReport } from "../src/shared/contracts/types.js";
 import { PiAgentRunner, type PiRunnerOptions } from "../src/features/agents/host/piAgentRunner.js";
 import { PiRpcTransport } from "../src/features/agents/host/piRpcTransport.js";
 import { decodePiSession, encodePiSession } from "../src/features/agents/domain/piModels.js";
@@ -68,6 +68,14 @@ describe("Pi conversation runner", { timeout: 30000 }, () => {
     const h = await setup();
     await expect(h.runner.runConversation(h.request("write", { allowWorkspaceWrite: true, permission: "workspace-write" }))).rejects.toThrow("Explicitly select Full access");
     expect(await h.log()).toEqual([]);
+  });
+  it("reports a run Pi starts after the turn settled instead of dropping it", async () => {
+    const h = await setup(), reports: AgentWakeReport[] = [];
+    await h.runner.runConversation(h.request("fixture:wake", { metadata: { agentSessionId: "chat", onAgentWake: (report) => reports.push(report) } }));
+    await vi.waitFor(() => expect(reports.filter((report) => report.state === "end")).toHaveLength(1), { timeout: 10000 });
+    expect(reports.find((report) => report.state === "notice")).toMatchObject({ text: expect.stringContaining("Background task completed: **worker**") });
+    expect(reports.flatMap((report) => report.state === "event" ? [report.event.text] : [])).toContain("background analysis done");
+    expect(reports.at(-1)).toMatchObject({ state: "end", text: "background analysis done" });
   });
   it("discovers models without prompting or persisting a provider session", async () => {
     const h = await setup(), request = h.request("");
