@@ -8,6 +8,7 @@ vi.mock("vscode", () => ({
   workspace: {
     findFiles: async () => [{ path: "src/current.ts" }],
     asRelativePath: (uri: { path: string }) => uri.path,
+    getWorkspaceFolder: (uri: { path: string }) => ({ uri }),
     createFileSystemWatcher: () => ({ onDidCreate: () => ({ dispose() { } }), onDidDelete: () => ({ dispose() { } }), dispose() { } })
   },
   window: { ...host, createOutputChannel: () => ({ appendLine: (line: string) => { output.lines.push(line); } }) },

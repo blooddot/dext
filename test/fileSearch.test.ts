@@ -47,6 +47,7 @@ describe("composer file search ranking", () => {
 });
 
 const searchHost = vi.hoisted(() => ({ findFiles: vi.fn(), asRelativePath: (uri: { path: string }) => uri.path,
+  getWorkspaceFolder: (uri: { path: string }) => uri.path.startsWith("../") ? undefined : { uri },
   createFileSystemWatcher: vi.fn(() => ({ onDidCreate: () => ({ dispose() {} }), onDidDelete: () => ({ dispose() {} }), dispose() {} })) }));
 vi.mock("vscode", () => ({ workspace: searchHost }));
 
@@ -84,4 +85,18 @@ it("a reopened page can restart request ids while the closed page's index finish
   await pending;
   expect(post.mock.calls).toEqual([[{ type: "searchFilesResult", requestId: 1, files: ["src/current.ts"] }]]);
   current.dispose();
+});
+
+it("indexes names with a colon or a leading dot-dot directory and skips files outside the workspace", async () => {
+  const { FileSearchController } = await import("../src/features/workspace/host/fileSearchController.js");
+  searchHost.findFiles.mockResolvedValueOnce([
+    { path: "notes:2024.md" },
+    { path: "..cache/build.md" },
+    { path: "../outside.ts" }
+  ]);
+  const post = vi.fn(async () => {});
+  const controller = new FileSearchController(post);
+  await controller.search({ type: "searchFiles", requestId: 1, query: "" });
+  expect(post.mock.calls).toEqual([[{ type: "searchFilesResult", requestId: 1, files: ["notes:2024.md", "..cache/build.md"] }]]);
+  controller.dispose();
 });

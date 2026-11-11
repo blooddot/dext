@@ -29,8 +29,9 @@ export class FileSearchController {
   }
   /** A file outside every workspace folder has no reference Dext can build. */
   private relativePath(uri: vscode.Uri): string | undefined {
-    const relative = vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/");
-    return relative.startsWith("..") || relative.includes(":") ? undefined : relative;
+    // A file outside every workspace folder has no reference Dext can build.
+    if (!vscode.workspace.getWorkspaceFolder(uri)) return undefined;
+    return vscode.workspace.asRelativePath(uri, false).replaceAll("\\", "/");
   }
   private async workspaceFileIndex(): Promise<readonly string[]> {
     if (this.fileIndex) return this.fileIndex;
