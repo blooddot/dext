@@ -1884,6 +1884,8 @@ function startAgentProgress(startedAt = Date.now()): void {
   agentRunStartedAt = startedAt;
   agentStreamPanel();
   updateAgentProgress("Thinking");
+  // A second turn's status message must not leave the previous interval running.
+  if (agentRunTimer) clearInterval(agentRunTimer);
   agentRunTimer = setInterval(() => updateAgentProgress(agentProgressState), 100);
 }
 
