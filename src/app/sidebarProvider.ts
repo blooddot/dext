@@ -1367,7 +1367,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async openReference(reference: string): Promise<void> {
     const normalized = reference.replaceAll("\\", "/");
     const uri = this.application.storage.uriForReference("attachments", normalized);
-    if (uri && IMAGE_MIME_TYPES[extname(uri.fsPath).toLowerCase()]) {
+    if (uri && (IMAGE_MIME_TYPES[extname(uri.fsPath).toLowerCase()] || isVideoAttachment(uri.fsPath))) {
       this.imageAnnotatorTab().open(normalized);
       return;
     }
@@ -1380,7 +1380,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       extensionUri: this.extensionUri,
       storage: this.application.storage,
       ...(this.application.globalState ? { state: this.application.globalState } : {}),
-      onInsert: (text, previous) => this.postWhenReady({ type: "insertAnnotations", text, ...(previous ? { previous } : {}) })
+      onInsert: (text, previous) => this.postWhenReady({ type: "insertAnnotations", text, ...(previous ? { previous } : {}) }),
+      // A video frame is stored exactly like a pasted still, so the block the
+      // tab inserts can point an agent at the picture it describes.
+      storeFrame: (data, mimeType) => this.storeImage(data, mimeType)
     });
   }
 

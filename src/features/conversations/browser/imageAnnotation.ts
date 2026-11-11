@@ -182,23 +182,28 @@ export function boxFromPoints(from: ImagePoint, to: ImagePoint): ImageBox {
 /** Marks kept from an earlier visit to the same attachment. A stored value is
  * checked for shape before it is drawn, so a stale entry cannot break the list. */
 export function parseMarks(json: string): ImageMark[] {
-  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-  const point = (value: unknown): ImagePoint | undefined => {
-    const record = value as Record<string, unknown> | undefined;
-    return record && finite(record.x) && finite(record.y) ? { x: record.x, y: record.y } : undefined;
-  };
-  const box = (value: unknown): ImageBox | undefined => {
-    const record = value as Record<string, unknown> | undefined;
-    return record && finite(record.x) && finite(record.y) && finite(record.width) && finite(record.height)
-      ? { x: record.x, y: record.y, width: record.width, height: record.height }
-      : undefined;
-  };
   let value: unknown;
   try {
     value = JSON.parse(json);
   } catch {
     return [];
   }
+  return marksFromValue(value);
+}
+
+/** The shape check on its own: a video keeps one such array per frame. */
+export function marksFromValue(value: unknown): ImageMark[] {
+  const finite = (entry: unknown): entry is number => typeof entry === "number" && Number.isFinite(entry);
+  const point = (entry: unknown): ImagePoint | undefined => {
+    const record = entry as Record<string, unknown> | undefined;
+    return record && finite(record.x) && finite(record.y) ? { x: record.x, y: record.y } : undefined;
+  };
+  const box = (entry: unknown): ImageBox | undefined => {
+    const record = entry as Record<string, unknown> | undefined;
+    return record && finite(record.x) && finite(record.y) && finite(record.width) && finite(record.height)
+      ? { x: record.x, y: record.y, width: record.width, height: record.height }
+      : undefined;
+  };
   const marks: ImageMark[] = [];
   for (const entry of Array.isArray(value) ? value : []) {
     const record = entry as Record<string, unknown> | undefined;
@@ -211,13 +216,16 @@ export function parseMarks(json: string): ImageMark[] {
   return marks;
 }
 
+/** One numbered line per mark: a screenshot and a video frame describe the same
+ * mark the same way, so an agent reads one format. */
+export function markLine(mark: ImageMark, index: number): string {
+  const where = mark.kind === "region"
+    ? `region (${mark.box.x},${mark.box.y})-(${mark.box.x + mark.box.width},${mark.box.y + mark.box.height})`
+    : `point (${mark.point.x},${mark.point.y})`;
+  const note = mark.note.trim();
+  return `${index + 1}. ${where}${note ? `: ${note}` : ""}`;
+}
+
 export function composeAnnotationText(imagePath: string, marks: readonly ImageMark[]): string {
-  const lines = marks.map((mark, index) => {
-    const where = mark.kind === "region"
-      ? `region (${mark.box.x},${mark.box.y})-(${mark.box.x + mark.box.width},${mark.box.y + mark.box.height})`
-      : `point (${mark.point.x},${mark.point.y})`;
-    const note = mark.note.trim();
-    return `${index + 1}. ${where}${note ? `: ${note}` : ""}`;
-  });
-  return [`Image annotations for @${imagePath} (pixel coordinates, origin top-left):`, ...lines].join("\n");
+  return [`Image annotations for @${imagePath} (pixel coordinates, origin top-left):`, ...marks.map(markLine)].join("\n");
 }

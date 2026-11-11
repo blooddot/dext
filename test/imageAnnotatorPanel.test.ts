@@ -33,7 +33,8 @@ vi.mock("vscode", () => ({
 }));
 vi.mock("../src/features/conversations/host/attachmentImage.js", () => ({
   attachmentImageDataUrl: async (storage: { uriForReference(): unknown }, path: string) =>
-    storage.uriForReference() ? `data:image/png;base64,${path}` : Promise.reject(new Error("That attachment is not a Dext image."))
+    storage.uriForReference() ? `data:image/png;base64,${path}` : Promise.reject(new Error("That attachment is not a Dext image.")),
+  isVideoAttachment: (path: string) => /\.(?:mp4|m4v|mov|webm)$/i.test(path)
 }));
 
 import { ImageAnnotatorPanel } from "../src/features/conversations/host/imageAnnotatorPanel.js";
@@ -67,6 +68,74 @@ describe("image annotator tab", () => {
     state.receive?.({ type: "insertAnnotations", text: "second" });
     expect(onInsert).toHaveBeenNthCalledWith(1, "first", undefined);
     expect(onInsert).toHaveBeenNthCalledWith(2, "second", "first");
+  });
+});
+
+describe("video annotator tab", () => {
+  const memory = new Map<string, unknown>();
+  const memento = {
+    get: <T>(key: string, fallback?: T): T => (memory.has(key) ? memory.get(key) as T : fallback as T),
+    update: async (key: string, value: unknown) => { memory.set(key, value); }
+  };
+  const savedFrames = (): unknown => JSON.parse(
+    (/name="dext-video-marks" content="([^"]*)"/.exec(state.html)?.[1] ?? "[]").replaceAll("&quot;", '"')
+  ) as unknown;
+
+  it("opens a player page with the attachment as its source", () => {
+    const panel = new ImageAnnotatorPanel({ extensionUri: {} as never, storage, onInsert });
+    panel.open(".dext-global/attachments/clip.mp4");
+    expect(state.html).toContain("videoAnnotator.js");
+    expect(state.html).not.toContain("imageAnnotator.js");
+    // The page fetches the file for a same-origin blob, then plays that blob.
+    expect(state.html).toContain("media-src test: blob:");
+    expect(state.html).toContain("connect-src test:");
+    expect(state.html).toContain('name="dext-video-src"');
+    expect(state.html).toContain('content=".dext-global/attachments/clip.mp4"');
+  });
+
+  it("keeps one marks list per frame after the tab is closed", async () => {
+    const panel = new ImageAnnotatorPanel({ extensionUri: {} as never, storage, state: memento, onInsert });
+    const frames = [
+      { timeMs: 12400, marks: [{ kind: "region", box: { x: 1, y: 2, width: 3, height: 4 }, note: "wrong label" }] },
+      { timeMs: 45100, marks: [{ kind: "point", point: { x: 5, y: 6 }, note: "" }] }
+    ];
+    panel.open(".dext-global/attachments/frames.mp4");
+    expect(savedFrames()).toEqual([]);
+    state.receive?.({ type: "saveVideoFrames", frames });
+    await vi.waitFor(() => expect(memory.get("dext.imageAnnotations"))
+      .toEqual({ ".dext-global/attachments/frames.mp4": { frames } }));
+    state.onDispose?.();
+    panel.open(".dext-global/attachments/frames.mp4");
+    expect(savedFrames()).toEqual(frames);
+  });
+
+  it("stores an exported frame and answers with its attachment path", async () => {
+    const storeFrame = vi.fn(async () => ({ relativePath: ".dext-global/attachments/frame.jpg" }));
+    const panel = new ImageAnnotatorPanel({ extensionUri: {} as never, storage, onInsert, storeFrame });
+    panel.open(".dext-global/attachments/export.mp4");
+    state.receive?.({ type: "frameImage", requestId: 7, data: "data:image/jpeg;base64,AA", mimeType: "image/jpeg" });
+    await vi.waitFor(() => expect(state.post).toHaveBeenCalledWith({
+      type: "frameImageResult",
+      requestId: 7,
+      relativePath: ".dext-global/attachments/frame.jpg"
+    }));
+    expect(storeFrame).toHaveBeenCalledWith("data:image/jpeg;base64,AA", "image/jpeg");
+  });
+
+  it("reports a frame it could not store instead of leaving the page waiting", async () => {
+    const panel = new ImageAnnotatorPanel({
+      extensionUri: {} as never,
+      storage,
+      onInsert,
+      storeFrame: async () => { throw new Error("Attachments must be 5242880 bytes or smaller."); }
+    });
+    panel.open(".dext-global/attachments/big.mp4");
+    state.receive?.({ type: "frameImage", requestId: 8, data: "data:image/jpeg;base64,AA", mimeType: "image/jpeg" });
+    await vi.waitFor(() => expect(state.post).toHaveBeenCalledWith({
+      type: "frameImageResult",
+      requestId: 8,
+      error: "Attachments must be 5242880 bytes or smaller."
+    }));
   });
 });
 

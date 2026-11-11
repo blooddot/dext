@@ -1783,6 +1783,165 @@ body.image-page {
 
 .image-annotator-error[hidden] { display: none; }
 
+/* Video annotation page: the player is fitted to the stage and the marks sit over
+   it, so one rectangle serves both the overlay and the hand-drawn boxes. The notes
+   take the same right-hand column a screenshot's notes do. */
+.video-annotator {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "stage list"
+    "transport actions";
+  gap: 6px;
+  padding: 6px;
+}
+
+.video-annotator-stage {
+  grid-area: stage;
+  position: relative;
+  display: flex;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #000;
+}
+
+.video-annotator-video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  cursor: crosshair;
+}
+
+.video-annotator-transport {
+  grid-area: transport;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The transport is the only chrome a video page has: the primary button colour
+   matches Insert annotations, so the play button reads as the main action. */
+.video-annotator-play {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.video-annotator-play:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.video-annotator-play:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.video-annotator-play:focus-visible,
+.video-annotator-timeline:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.video-annotator-timeline {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  margin: 0;
+  background: transparent;
+  /* Chromium fills the played part of the track with the accent colour. */
+  accent-color: var(--vscode-progressBar-background, #0e70c0);
+  cursor: pointer;
+}
+
+.video-annotator-timecode {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.video-annotator .ui-dialog-actions {
+  grid-area: actions;
+  padding: 0;
+}
+
+/* One group per moment: the header is the way back to that frame, its rows are
+   nested under it so the whole video reads as one tree. */
+.video-annotator-frame-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.video-annotator-frame-group .image-annotator-row {
+  margin-left: 8px;
+}
+
+.video-annotator-frame {
+  display: block;
+  width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+
+.video-annotator-frame:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.video-annotator-frame:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* The frame being edited: its marks are the ones drawn on the picture. */
+.video-annotator-frame.is-active {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.video-annotator-hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  /* One shortcut per line: seconds on the first, frames on the second. */
+  white-space: pre-line;
+  /* Sits against the action button instead of floating after the timecode. */
+  text-align: right;
+}
+
+.video-annotator-progress {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .execution-result.has-next {
   margin-bottom: 10px;
   padding-bottom: 10px;

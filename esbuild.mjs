@@ -42,6 +42,9 @@ const contexts = await Promise.all([
       // The image-annotator editor tab is its own document; it shares the built
       // `main.css` but none of the composer bundle.
       imageAnnotator: "src/features/conversations/browser/imageAnnotatorPage.ts",
+      // A video attachment opens its own page in the same kind of tab: a player
+      // and a per-frame annotation overlay.
+      videoAnnotator: "src/features/conversations/browser/videoAnnotatorPage.ts",
       // The API detail pages and the conversation page both display Mermaid, and
       // they are separate Webview documents. This single shared entry keeps one
       // copy of Mermaid in the VSIX; both pages lazy-load it only when a diagram
