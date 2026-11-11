@@ -226,6 +226,8 @@ button.primary.plan-build.conflict:hover:not(:disabled) {
 .agent-todo-item > .codicon { flex: 0 0 16px; margin-top: 2px; color: var(--vscode-descriptionForeground); }
 .agent-todo-text.markdown-body { flex: 1; min-width: 0; margin: 0; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 .agent-todo-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
+/* Upstream sizes code at 85%, which is 11.9px on the todo row's 14px. */
+.agent-todo-text.markdown-body code { font-size: 12px; }
 .agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
 .agent-todo-item.active {
   --todo-accent: var(--vscode-progressBar-background, var(--vscode-focusBorder));
