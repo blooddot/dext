@@ -7,6 +7,10 @@
   --dext-plan-fill: #d4b52c;
   --dext-plan-foreground: #202020;
   --dext-plan-label: #e0c34c;
+  /* Ink for a number chip filled with the warning colour. */
+  --dext-mark-foreground: #1e1e1e;
+  /* Composer accent for Code mode: the ANSI cyan is too pale on a light theme. */
+  --dext-code-accent: #4fc1ff;
   /* Keep Full access distinct from Plan's warm gold. Lifted for AA contrast
      on dark sidebar and editor grounds (7.1:1 at #1e1e1e). */
   --dext-full-access-accent: #d99a8f;
@@ -22,6 +26,7 @@
 
 body.vscode-light {
   --dext-plan-label: #806b00;
+  --dext-code-accent: #0a6b7f;
 }
 
 body.vscode-light,
@@ -42,6 +47,7 @@ body.vscode-high-contrast-light {
   /* A customized contrastBorder in an ordinary theme is not a request for
      high-contrast chrome. Reserve those outlines for actual HC themes. */
   --dext-full-access-accent: var(--vscode-foreground);
+  --dext-mark-foreground: var(--vscode-editor-background);
   --dext-quiet-divider: var(--vscode-contrastBorder, var(--vscode-foreground));
 }
 
@@ -1685,7 +1691,7 @@ body.image-page {
   border-color: var(--vscode-editorWarning-foreground, #d7ba7d);
   border-radius: 50%;
   background: var(--vscode-editorWarning-foreground, #d7ba7d);
-  color: #1e1e1e;
+  color: var(--dext-mark-foreground);
   font-size: 12px;
   font-weight: 600;
   line-height: 1;
@@ -1697,7 +1703,7 @@ body.image-page {
   padding: 0 5px;
   border-radius: 999px;
   background: var(--vscode-editorWarning-foreground, #d7ba7d);
-  color: #1e1e1e;
+  color: var(--dext-mark-foreground);
   font-size: 12px;
   font-weight: 600;
   line-height: 16px;
@@ -2248,7 +2254,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) #permission-control.
 }
 
 .input-section[data-mode="code"] {
-  --composer-accent: var(--vscode-terminal-ansiCyan, #4fc1ff);
+  --composer-accent: var(--dext-code-accent);
 }
 
 /* The accents are mid-tone colors, so the editor background reads against them
@@ -2447,7 +2453,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
 }
 
 .composer-menu-option-mode-code {
-  --mode-menu-color: var(--vscode-terminal-ansiCyan, #4fc1ff);
+  --mode-menu-color: var(--dext-code-accent);
 }
 
 .composer-menu-option-mode-agent,

@@ -437,7 +437,8 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.input-section\[data-mode="ask"\] \{\r?\n {2}--composer-accent: var\(--vscode-terminal-ansiGreen/);
     expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent: var\(--dext-plan-label\);[\s\S]*?--composer-accent-fill: var\(--dext-plan-fill\)/);
     expect(css).toMatch(/\.input-section\[data-mode="plan"\] \{[\s\S]*?--composer-accent-foreground: var\(--dext-plan-foreground\)/);
-    expect(css).toMatch(/\.input-section\[data-mode="code"\] \{\r?\n {2}--composer-accent: var\(--vscode-terminal-ansiCyan/);
+    expect(css).toMatch(/\.input-section\[data-mode="code"\] \{\r?\n {2}--composer-accent: var\(--dext-code-accent\)/);
+    expect(css).toMatch(/body\.vscode-light \{\r?\n {2}--dext-plan-label: #806b00;\r?\n {2}--dext-code-accent: #0a6b7f;/);
     expect(css).toMatch(/#run \{[\s\S]*?color: var\(--composer-accent-foreground, var\(--vscode-button-foreground\)\);[\s\S]*?background: var\(--composer-accent-fill, var\(--vscode-button-background\)\);/);
     expect(css).toMatch(/#run:hover:not\(:disabled\) \{[\s\S]*?color-mix\([\s\S]*?var\(--composer-accent-fill/);
     // The mode control reads the same accent rather than repeating the colors.

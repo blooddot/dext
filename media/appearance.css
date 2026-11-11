@@ -223,16 +223,20 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --dext-full-access-accent: #7f4338;
   --dext-row-action-background: #fffaf1;
   --dext-quiet-divider: #d8cbb8;
+  --dext-mark-foreground: #fffaf1;
+  --dext-code-accent: #1f6b6b;
   --resource-api-accent: #1769b5;
   --resource-mcp-accent: #7546b6;
   --resource-rule-accent: #886000;
   --resource-skill-accent: #08796d;
   --resource-button-foreground: #ffffff;
-  --resource-syntax-keyword: #af00db;
+  /* Deepened from VS Code's light values: the cream ground costs about one
+     contrast step, which dropped number/type/keyword under 4.5:1. */
+  --resource-syntax-keyword: #9700bd;
   --resource-syntax-string: #a31515;
-  --resource-syntax-number: #098658;
+  --resource-syntax-number: #0a6b45;
   --resource-syntax-function: #795e26;
-  --resource-syntax-type: #267f99;
+  --resource-syntax-type: #1a6076;
   --resource-syntax-parameter: #001080;
   --resource-syntax-boolean: #0000ff;
 }
@@ -370,8 +374,9 @@ body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast
   --dext-plan-foreground: #202020;
   --dext-plan-label: #e0c34c;
   --dext-full-access-accent: #d99a8f;
-  --dext-row-action-background: #252526;
+  --dext-row-action-background: #29251f;
   --dext-quiet-divider: #3a342b;
+  --dext-code-accent: #8fd6dc;
   --resource-api-accent: #79b8ff;
   --resource-mcp-accent: #c2a3ff;
   --resource-rule-accent: #dfb45c;
