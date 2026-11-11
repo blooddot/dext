@@ -721,10 +721,13 @@ describe("Dext history rendering", () => {
     expect(conversationTitle(session)).toBe('agent(input="Explain a.ts');
     expect(conversationTitle({ ...session, turns: [] })).toBe("New conversation");
     expect(renderHistorySession(session)).toContain('agent(input=&quot;Explain a.ts');
+    // The row carries the name and every prompt for the in-page search.
+    expect(renderHistorySession(session)).toContain('data-history-search-text="agent(input=&quot;explain a.ts');
 
     const renamed = renderHistorySession(session, { name: "Auth refactor" });
     const summary = renamed.slice(0, renamed.indexOf("history-session-body"));
     expect(summary).toContain('class="history-summary-input named">Auth refactor<');
+    expect(renamed).toContain('data-history-search-text="auth refactor agent(input=&quot;explain a.ts');
     // The chosen name replaces the first message in the conversation header,
     // while the turn below still shows what was actually asked.
     expect(summary).not.toContain("Explain a.ts");

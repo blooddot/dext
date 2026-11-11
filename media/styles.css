@@ -717,6 +717,24 @@ main {
   overflow: hidden;
 }
 
+.history-toolbar {
+  flex: none;
+  padding: 0 0 6px;
+}
+
+.history-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-widget-border));
+  border-radius: 4px;
+  font: inherit;
+}
+
+.history-search:focus { outline: 1px solid var(--vscode-focusBorder); }
+
 .history-content {
   flex: 1 1 auto;
   min-height: 0;

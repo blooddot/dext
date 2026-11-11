@@ -382,11 +382,14 @@ export function renderHistorySession(session: DextHistorySession, view: HistoryS
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
+  // shortcut: search covers names and prompts, not answer bodies; upgrade to a
+  // host-side full-text search when replies need to be searchable too.
+  const searchText = [label, ...session.turns.map(historyTurnLabel)].join(" ").toLocaleLowerCase();
   const body = view.lazy
     ? `<div class="history-lazy-placeholder">Expand to load conversation turns.</div>`
     : renderHistorySessionBody(session);
   const lazyAttributes = view.lazy ? ` data-history-lazy="true" data-history-session-id="${escapeHtml(session.id)}"` : "";
-  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
+  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} data-history-search-text="${escapeHtml(searchText)}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
 }
 
 export function historyTurnMarkdown(record: DextHistoryRecord, index = 0): string {

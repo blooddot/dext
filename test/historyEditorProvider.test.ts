@@ -145,4 +145,35 @@ describe("History turn action routing", () => {
     expect(state.html).toContain("session-1");
     expect(state.html).not.toContain("empty-shell");
   });
+
+  it("filters rendered conversations from the search box and clears on Escape", () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const row = (text: string) => ({ text, hidden: false, getAttribute: (name: string) => name === "data-history-search-text" ? text : null });
+    const rows = [row("auth refactor explain a.ts"), row("release notes")];
+    const input = { value: "", matches: (selector: string) => selector === "[data-history-search]" };
+    const empty = { hidden: true };
+    const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(state.html)![1]!;
+    runInNewContext(script, {
+      acquireVsCodeApi: () => ({ postMessage: () => undefined }),
+      document: {
+        addEventListener: (type: string, callback: (event: unknown) => void) => listeners.set(type, callback),
+        querySelector: (selector: string) => selector === "[data-history-search]" ? input
+          : selector === "[data-history-search-empty]" ? empty : null,
+        querySelectorAll: (selector: string) => selector === "[data-history-search-text]" ? rows : []
+      },
+      window: { addEventListener: () => undefined }
+    });
+    input.value = "AUTH";
+    listeners.get("input")!({ target: input });
+    expect(rows.map((item) => item.hidden)).toEqual([false, true]);
+    expect(empty.hidden).toBe(true);
+    input.value = "missing";
+    listeners.get("input")!({ target: input });
+    expect(rows.map((item) => item.hidden)).toEqual([true, true]);
+    expect(empty.hidden).toBe(false);
+    listeners.get("keydown")!({ key: "Escape", target: input });
+    expect(input.value).toBe("");
+    expect(rows.map((item) => item.hidden)).toEqual([false, false]);
+    expect(empty.hidden).toBe(true);
+  });
 });

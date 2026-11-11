@@ -186,7 +186,9 @@ export class DextHistoryPanel implements vscode.Disposable {
 </head>
 <body class="history-panel" data-dext-theme="${this.appearance?.current ?? "auto"}">
   <section class="history-view" aria-label="Dext History">
+    <div class="history-toolbar"><input type="search" class="history-search" data-history-search placeholder="Search conversations" aria-label="Search conversations"></div>
     <div class="history-content">${body}</div>
+    <div class="history-empty" data-history-search-empty hidden>No conversations match your search.</div>
   </section>
   <script nonce="${nonce}" src="${diagrams.toString()}"></script>
   <script nonce="${nonce}" src="${appearanceScript.toString()}"></script>
@@ -195,6 +197,27 @@ export class DextHistoryPanel implements vscode.Disposable {
     const renderDiagrams = (root) => window.dextRenderDiagrams?.(root);
     const rerenderDiagrams = (root) => window.dextRerenderDiagrams?.(root);
     renderDiagrams(document.querySelector('.history-content'));
+    const filterSessions = () => {
+      const input = document.querySelector('[data-history-search]');
+      if (!input) return;
+      const needle = input.value.trim().toLocaleLowerCase();
+      let visible = 0;
+      document.querySelectorAll('[data-history-search-text]').forEach((row) => {
+        row.hidden = needle !== '' && !(row.getAttribute('data-history-search-text') || '').includes(needle);
+        if (!row.hidden) visible += 1;
+      });
+      const empty = document.querySelector('[data-history-search-empty]');
+      if (empty) empty.hidden = needle === '' || visible > 0;
+    };
+    document.addEventListener('input', (event) => {
+      if (event.target?.matches?.('[data-history-search]')) filterSessions();
+    });
+    document.addEventListener('keydown', (event) => {
+      const input = event.target?.matches?.('[data-history-search]') ? event.target : null;
+      if (!input || event.key !== 'Escape') return;
+      input.value = '';
+      filterSessions();
+    });
     document.addEventListener('dext-appearance-change', () => {
       rerenderDiagrams(document.querySelector('.history-content'));
     });

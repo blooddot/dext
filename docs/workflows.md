@@ -373,6 +373,8 @@ Dext History is scoped to the current VS Code workspace. Conversations,
 favorites, names, and open conversation tabs are restored after restarting VS
 Code, but are not shared with other projects.
 
+A search box at the top of History filters conversations by name and by each turn's prompt.
+
 History turns offer rename, fork, copy the input only, copy the turn as Markdown, add the turn to Input as an `@` reference, and delete from Dext, in that order, in both their toolbar and context menu; a turn whose stored output was truncated adds **Open truncated output** after delete. The live Conversation toolbar places edit input and retry before those actions. History's parent conversation toolbar offers continue, rename, fork, copy conversation as Markdown, add the conversation to Input, favorite, archive, and delete. Shared actions use consistent icons and relative order, with delete last except for that truncation entry. Turn titles are saved separately from the original input; clearing a title restores its default.
 
 Deleting a turn removes Dext's saved input/output record only. It does not erase CLI messages or undo file changes, and continuing the bound CLI session may still use the deleted turn's context. Dext retains CLI session IDs, including an empty conversation after its final displayed turn is deleted, so it can request the same session on restart. Resuming still requires that provider session to remain available. Retry appends a new execution to the conversation and can repeat write actions.
