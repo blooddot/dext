@@ -1,5 +1,6 @@
 import { answerChoices, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerFieldPresentation } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "../domain/historyResponse.js";
+import { turnChanges, type TurnChange } from "../domain/turnDiff.js";
 import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
@@ -75,8 +76,9 @@ function historyActionButton(icon: string, command: string, label: string, sessi
   return `<button class="history-session-action icon-button compact" type="button" data-history-command="${escapeHtml(command)}" data-session-id="${escapeHtml(sessionId)}"${target} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}"><i class="codicon codicon-${icon}"></i></button>`;
 }
 
-function historyTurnActions(sessionId: string, turnId: string, spill: boolean): string {
+function historyTurnActions(sessionId: string, turnId: string, spill: boolean, files: boolean): string {
   return `<span class="history-turn-actions">${[
+    ...(files ? [historyActionButton("diff", "dext.history.openTurnDiff", "Open changed files", sessionId, turnId)] : []),
     historyActionButton(TURN_RENAME_ACTION.icon, "dext.history.renameTurn", TURN_RENAME_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_FORK_ACTION.icon, "dext.history.forkFromTurn", TURN_FORK_ACTION.label, sessionId, turnId),
     historyActionButton(TURN_COPY_INPUT_ACTION.icon, "dext.history.copyTurnInput", TURN_COPY_INPUT_ACTION.label, sessionId, turnId),
@@ -88,8 +90,31 @@ function historyTurnActions(sessionId: string, turnId: string, spill: boolean): 
   ].join("")}</span>`;
 }
 
-function historySessionActions(session: { id: string; archivedAt?: number }, favorite: boolean): string {
-  const favoriteCommand = favorite ? "dext.history.removeFavorite" : "dext.history.addFavorite";
+/** One row per changed file, with the turn's own reason; the same class names
+ * style the live Conversation table. */
+function changedFileRows(changes: readonly TurnChange[], sessionId: string, turnId: string): string {
+  return changes.map((change) => `<tr class="output-turn-change" tabindex="0" title="${escapeHtml(`${change.path} — ${change.reason}`)}" data-history-command="dext.history.openTurnDiff" data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(turnId)}" data-turn-path="${escapeHtml(change.path)}"><td class="output-turn-change-path"><i class="codicon codicon-diff"></i>${escapeHtml(change.path)}</td><td class="output-turn-change-reason">${escapeHtml(change.reason)}</td></tr>`).join("");
+}
+
+function changedFiles(changes: readonly TurnChange[], sessionId: string | undefined, turnId: string): string {
+  if (!sessionId || !changes.length) return "";
+  return `<table class="output-turn-changes"><thead><tr><th>File</th><th>Change</th></tr></thead><tbody>${changedFileRows(changes, sessionId, turnId)}</tbody></table>`;
+}
+
+/** Only a changed file has a diff, so the answer's own inline `code` mentions of
+ * one become the same link the rows are, instead of a dead path.
+ * shortcut: answers stored without a response render as plain text and get no links; upgrade if those need them. */
+function linkChangedPaths(html: string, changes: readonly TurnChange[], sessionId: string | undefined, turnId: string): string {
+  if (!sessionId || !changes.length) return html;
+  return changes.reduce((result, change) => {
+    const code = `<code>${escapeHtml(change.path)}</code>`;
+    if (!result.includes(code)) return result;
+    const target = `data-history-command="dext.history.openTurnDiff" data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(turnId)}" data-turn-path="${escapeHtml(change.path)}"`;
+    return result.split(code).join(`<a class="output-turn-change-link" href="#" ${target}>${code}</a>`);
+  }, html);
+}
+
+function historySessionActions(session: { id: string; archivedAt?: number }, favorite: boolean): string {  const favoriteCommand = favorite ? "dext.history.removeFavorite" : "dext.history.addFavorite";
   const favoriteLabel = favorite ? "Remove from favorites" : "Add to favorites";
   const favoriteIcon = favorite ? "star-full" : "star-empty";
   const archiveCommand = session.archivedAt ? "dext.history.unarchiveConversation" : "dext.history.archiveConversation";
@@ -315,6 +340,8 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const promptHtml = executePlan ? "" : `<span class="output-turn-prompt">${renderedInputSource(record.input)}</span>`;
   const modeHtml = executePlan ? "" : renderTurnMode(turnHtmlAdapter, presentTurnMode(record.mode)).html;
   const titleClass = `output-turn-title${record.mode === "code" ? " code-prompt" : ""}`;
+  // An executed Plan hides its prompt, so its Plan name is the row label.
+  const nameHidden = !record.title && !executePlan;
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const turn = presentTurn({ durationMs: duration, process: record.process });
   const processView = process(record.process);
@@ -341,7 +368,9 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   });
   const outputSection = renderTurnOutput(turnHtmlAdapter, [{ html: outputHtml }],
     outputCopy ? { html: copyButton(outputCopy) } : undefined).section.html;
-  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="${titleClass}"><span class="output-turn-title-name"${record.title ? "" : " hidden"}>${escapeHtml(historyTurnTitle(record))}</span>${promptHtml}</span>${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath)) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${outputSection}</div></details>`;
+  const changes = sessionId ? turnChanges(record) : [];
+  const changesHtml = changedFiles(changes, sessionId, record.id);
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="${titleClass}"><span class="output-turn-title-name"${nameHidden ? " hidden" : ""}>${escapeHtml(historyTurnTitle(record))}</span>${promptHtml}</span>${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath), record.changedFiles !== undefined) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${linkChangedPaths(outputSection, changes, sessionId, record.id)}${changesHtml}</div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line

@@ -84,7 +84,7 @@ describe("refreshing a conversation after deletion", () => {
     runInNewContext("renderOutputSession(session)", context);
     expect(context.elements.result.replaceChildren).toHaveBeenCalledOnce();
     expect([...context.outputTurns.keys()]).toEqual(["saved"]);
-    expect(context.hydrateStoredTurn).toHaveBeenCalledWith(context.session.turns[0], context.outputTurns.get("saved"));
+    expect(context.hydrateStoredTurn).toHaveBeenCalledWith(context.session.turns[0], context.outputTurns.get("saved"), "session");
     // The next refresh is still cheap once the visible row IDs match.
     runInNewContext("renderOutputSession(session)", context);
     expect(context.elements.result.replaceChildren).toHaveBeenCalledOnce();

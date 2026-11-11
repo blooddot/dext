@@ -6,6 +6,7 @@ import type { ConversationSummary } from "../features/conversations/contracts/pr
 import { prepareHistoryTrace } from "../features/conversations/domain/agentTraceReplay.js";
 import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
 import { renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
+import { turnChanges } from "../features/conversations/domain/turnDiff.js";
 import {
   formatTurnTokenUsage,
   presentTurn,
@@ -375,6 +376,8 @@ const transcript = new TranscriptView({
   copyTurn: (sessionId, turnId) => vscode.postMessage({ type: "copyTurn", sessionId, turnId }),
   deleteTurn: (sessionId, turnId) => vscode.postMessage({ type: "deleteTurn", sessionId, turnId }),
   openSpill: (sessionId, turnId) => vscode.postMessage({ type: "openSpillFile", sessionId, turnId }),
+  openTurnDiff: (sessionId, turnId, path) =>
+    vscode.postMessage({ type: "openTurnDiff", sessionId, turnId, ...(path ? { path } : {}) }),
   createTodos: () => new AgentTodoView(),
   createQuestions: (turnId, sessionId) => createTurnQuestions(turnId, sessionId),
   openReference: (reference) => openInputReference(reference),
@@ -2000,14 +2003,16 @@ function storedResponse(record: DextHistoryRecord): InputExecutionResponse | und
  * still exposes the input title and turn actions, while expensive Markdown,
  * syntax highlighting, diffs, and streamed process events stay out of the
  * tab-switch critical path. */
-function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): void {
+function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, sessionId: string | undefined): void {
   if (turn.hydrated) return;
-  withIsolatedAgentTrace(turn, () => renderStoredTurn(record, turn));
+  withIsolatedAgentTrace(turn, () => renderStoredTurn(record, turn, sessionId));
   turn.hydrated = true;
 }
 
-function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements): void {
+function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, sessionId: string | undefined): void {
   const response = storedResponse(record);
+  // The reasons come from the same stored text, so they arrive with the row.
+  if (turn.changes) transcript.setChanges(turn, sessionId, record.id, turnChanges(record));
 
   // Plan turns use a more useful title once their response has been parsed.
   // Keep that JSON parse off the tab-switch path and update the lightweight
@@ -2127,11 +2132,12 @@ function renderOutputSession(session: DextHistorySession): void {
       mode: record.mode,
       ...(record.executePlan ? { executePlan: true, ...(record.planPath ? { planPath: record.planPath } : {}) } : {}),
       ...(record.title ? { title: record.title } : {}),
-      ...(record.spillPath ? { spill: true } : {})
+      ...(record.spillPath ? { spill: true } : {}),
+      ...(record.changedFiles !== undefined ? { diff: true } : {})
     });
     // Closed history rows need their final status before deferred hydration.
     if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome);
-    turn.hydrate = () => hydrateStoredTurn(record, turn);
+    turn.hydrate = () => hydrateStoredTurn(record, turn, session.id);
     if (latest) latestTurn = turn;
   }
   if (liveTurn && liveTurnId) {
@@ -2689,7 +2695,10 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       if (activeTurnId === message.turnId) activeTurnId = undefined;
       if (activeExecutionSessionId === message.sessionId) activeExecutionSessionId = undefined;
       stopping = false;
-      transcript.select(message.turnId);
+      const ended = transcript.select(message.turnId);
+      // The live row never reads a stored record, so its changed files arrive
+      // with this message instead.
+      if (ended && message.changes?.length) transcript.setChanges(ended, message.sessionId, message.turnId, message.changes);
       finishAgentProgress();
       if (transcript.active) {
         transcript.active.processDisclosure.open = false;

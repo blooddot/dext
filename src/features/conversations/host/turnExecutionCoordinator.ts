@@ -106,6 +106,9 @@ export interface TurnExecutionCoordinatorOptions {
   selection: (sessionId: string) => AgentSelection;
   /** A resource operation in flight blocks a turn for that conversation. */
   resourceBusy: (sessionId: string) => boolean;
+  /** Workspace paths this turn wrote, as of `since`; absent when the workspace
+   * offers no baseline to compare against. */
+  changedFiles?: (since: number, sessionId: string, turnId: string) => Promise<string[] | undefined>;
   /** Called when no conversation is running any more. */
   onIdle?: () => Promise<void>;
 }
@@ -192,17 +195,20 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
   private async finishWake(sessionId: string, wake: Wake, text: string, error?: string): Promise<void> {
     if (this.wakes.get(sessionId) !== wake) return; // Already settled.
     this.wakes.delete(sessionId);
+    let saved: DextHistoryRecord | undefined;
     try {
       const session = this.options.sessions.session(sessionId);
       if (!session || (!error && !text.trim())) return;
+      const changed = await this.options.changedFiles?.(wake.startedAt, sessionId, wake.turnId);
+      const turnContext: TurnRecordContext = changed?.length ? { changedFiles: changed } : {};
       if (error) {
-        const turn = await this.options.history.addFailure(wake.label, wake.events, new Error(error), sessionId, "agent", wake.turnId);
-        this.options.sessions.recordTurn(sessionId, turn);
+        saved = await this.options.history.addFailure(wake.label, wake.events, new Error(error), sessionId, "agent", wake.turnId, turnContext);
+        this.options.sessions.recordTurn(sessionId, saved);
         await this.options.notifier.failed(sessionId, wake.turnId, error);
       } else {
         const response = wakeResponse(wake.label, text, Date.now() - wake.startedAt);
-        const turn = await this.options.history.addSuccess(wake.label, wake.events, response, sessionId, "agent", wake.turnId);
-        this.options.sessions.recordTurn(sessionId, turn);
+        saved = await this.options.history.addSuccess(wake.label, wake.events, response, sessionId, "agent", wake.turnId, turnContext);
+        this.options.sessions.recordTurn(sessionId, saved);
         await this.options.notifier.executed(sessionId, wake.turnId, response);
       }
     } catch (failure) {
@@ -212,7 +218,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       if (this.activeExecutions.get(sessionId)?.turnId === wake.turnId) this.activeExecutions.delete(sessionId);
       // Publish after the turn is gone so a finished tab cannot keep spinning.
       await this.options.sessions.postConversationState();
-      await this.options.notifier.finished(sessionId, wake.turnId);
+      await this.options.notifier.finished(sessionId, wake.turnId, saved);
     }
   }
 
@@ -313,13 +319,20 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     await this.options.notifier.started({ sessionId, turnId, mode, source, startedAt, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
     let failed = false;
     let cancelled = false;
+    // Handed to `finished` so the live row can show its changed files.
+    let saved: DextHistoryRecord | undefined;
     let outcome: PlanExecutionOutcome | undefined = planExecution?.planOutcome;
-    const recordContext = (): TurnRecordContext => ({
-      ...planExecution,
-      ...(selectedSkills.length ? { skills: selectedSkills } : {}),
-      ...(command ? { command } : {}),
-      ...(session.resource ? { resourceSource } : {})
-    });
+    const recordContext = async (): Promise<TurnRecordContext> => {
+      const changed = await this.options.changedFiles?.(startedAt, sessionId, turnId);
+      return {
+        ...planExecution,
+        ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+        ...(command ? { command } : {}),
+        ...(session.resource ? { resourceSource } : {}),
+        // Empty means Git saw no file this turn touched: no diff to offer.
+        ...(changed?.length ? { changedFiles: changed } : {})
+      };
+    };
     try {
       if (todoProgress) {
         const initial = todoProgress.initial();
@@ -447,7 +460,8 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         this.options.events.append(sessionId, events, notice);
         roundSource = planRun.prompt(taskSource, answers.join("\n"));
       }
-      const turn = await this.options.history.addSuccess(source, events, response, sessionId, mode, turnId, recordContext());
+      const turn = await this.options.history.addSuccess(source, events, response, sessionId, mode, turnId, await recordContext());
+      saved = turn;
       await this.options.sessions.saveProviderSessions(session);
       if (mode === "plan" && !executePlan) {
         const savedPath = response.executions.find((execution) => execution.result.kind === "plan" && execution.result.planPath)?.result;
@@ -466,7 +480,8 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         planExecution.planOutcome = { status: "cancelled", reason: "Stopped by user. Plan progress is preserved.", rounds: planRun?.rounds ?? 0 };
         outcome = planExecution.planOutcome;
       }
-      const turn = await this.options.history.addFailure(source, events, error, sessionId, mode, turnId, recordContext());
+      const turn = await this.options.history.addFailure(source, events, error, sessionId, mode, turnId, await recordContext());
+      saved = turn;
       // A failed Code turn keeps the calls it managed to make, so Continue replays
       // them instead of repeating work that already succeeded. A stop is not a
       // failure to continue from: the user asked for it to end.
@@ -495,7 +510,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         await this.options.sessions.postConversationState();
         if (!this.activeExecutions.size) await this.options.onIdle?.();
       } finally {
-        await this.options.notifier.finished(sessionId, turnId);
+        await this.options.notifier.finished(sessionId, turnId, saved);
       }
     }
   }

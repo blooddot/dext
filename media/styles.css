@@ -928,6 +928,64 @@ main {
   box-sizing: border-box;
 }
 
+/* One row per changed file: the path, then the turn's own reason for touching
+   it. History and the live conversation share these classes. */
+.output-turn-changes {
+  width: 100%;
+  margin: 8px 0 0;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+
+.output-turn-changes th {
+  padding: 2px 4px;
+  color: var(--vscode-descriptionForeground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+}
+
+.output-turn-change {
+  cursor: pointer;
+}
+
+.output-turn-change td {
+  padding: 2px 4px;
+  font-size: 12px;
+  vertical-align: top;
+}
+
+.output-turn-change:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+/* The table rules above outrank the UA rule, so `hidden` needs one of its own. */
+.output-turn-changes[hidden],
+.output-turn-action[hidden] {
+  display: none;
+}
+
+.output-turn-change:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.output-turn-change .codicon {
+  margin-right: 6px;
+  font-size: 12px;
+}
+
+.output-turn-change-path {
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.output-turn-change-reason {
+  color: var(--vscode-descriptionForeground);
+}
+
 /* History uses the same turn renderer as the live conversation, but its turns
    live inside nested details rather than the conversation flex column. Keep
    every layer shrinkable and give the rendered body the available width;

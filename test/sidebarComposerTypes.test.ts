@@ -57,7 +57,8 @@ function sidebarHarness(): { sidebar: DextSidebarProvider; posted: WebviewRespon
       state: () => ({ agentSelection: selection }),
       setAgentSelection: vi.fn(),
       endAgentSession: vi.fn(),
-      agentProfiles: () => []
+      agentProfiles: () => [],
+      storage: { globalStorageUri: { fsPath: "/global-storage" } }
     } as never,
     new DextHistoryStore(new MemoryState() as never),
     new DextConversationPreferences(new MemoryState() as never)

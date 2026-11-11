@@ -52,7 +52,7 @@ beforeEach(async () => {
 });
 
 describe("History turn action routing", () => {
-  it.each(["renameTurn", "forkFromTurn", "copyTurn", "openSpill", "deleteTurn"])("routes %s with the clicked turn and session", (action) => {
+  it.each(["openTurnDiff", "renameTurn", "forkFromTurn", "copyTurn", "openSpill", "deleteTurn"])("routes %s with the clicked turn and session", (action) => {
     state.receive?.({ type: "historyCommand", command: `dext.history.${action}`, sessionId: "session-1", turnId: "turn-1" });
     expect(state.execute).toHaveBeenCalledExactlyOnceWith(`dext.history.${action}`, { sessionId: "session-1", turnId: "turn-1" });
   });
@@ -101,7 +101,7 @@ describe("History turn action routing", () => {
     ];
     class Element {
       dataset = { historyCommand: "dext.history.copyTurn", sessionId: "session-1", turnId: "turn-1" };
-      closest(selector: string) { return selector === "button[data-history-command]" ? this : null; }
+      closest(selector: string) { return selector === "[data-history-command]" ? this : null; }
     }
     const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(state.html)![1]!;
     class Details {}
@@ -127,7 +127,7 @@ describe("History turn action routing", () => {
     clickListeners.get("click")!(event);
     expect(event.preventDefault).toHaveBeenCalled();
     expect(event.stopPropagation).toHaveBeenCalled();
-    expect(postMessage).toHaveBeenCalledWith({ type: "historyCommand", command: "dext.history.copyTurn", sessionId: "session-1", turnId: "turn-1" });
+    expect(postMessage).toHaveBeenCalledWith({ type: "historyCommand", command: "dext.history.copyTurn", sessionId: "session-1", turnId: "turn-1", path: "" });
     windowListeners.get("message")!({ data: { type: "historyTurnTitle", sessionId: "session-1", turnId: "turn-1", title: "<New title>", named: true } });
     expect(label.textContent).toBe("<New title>");
     expect(label.hidden).toBe(false);
@@ -176,5 +176,28 @@ describe("History turn action routing", () => {
     expect(input.value).toBe("");
     expect(rows.map((item) => item.hidden)).toEqual([false, false]);
     expect(empty.hidden).toBe(true);
+  });
+
+  it("opens a changed-file row from the keyboard", () => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const row = { matches: (selector: string) => selector === ".output-turn-change[data-history-command]", click: vi.fn() };
+    const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(state.html)![1]!;
+    runInNewContext(script, {
+      acquireVsCodeApi: () => ({ postMessage: () => undefined }),
+      document: {
+        addEventListener: (type: string, callback: (event: unknown) => void) => listeners.set(type, callback),
+        querySelector: () => null,
+        querySelectorAll: () => []
+      },
+      window: { addEventListener: () => undefined }
+    });
+    const event = { key: "Enter", target: row, preventDefault: vi.fn() };
+    listeners.get("keydown")!(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(row.click).toHaveBeenCalledTimes(1);
+    listeners.get("keydown")!({ key: " ", target: row, preventDefault: vi.fn() });
+    expect(row.click).toHaveBeenCalledTimes(2);
+    listeners.get("keydown")!({ key: "a", target: row, preventDefault: vi.fn() });
+    expect(row.click).toHaveBeenCalledTimes(2);
   });
 });

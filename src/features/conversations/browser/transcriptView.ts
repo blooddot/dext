@@ -1,4 +1,5 @@
 import type { DextHistoryRecord } from "../contracts/history.js";
+import { type TurnChange } from "../domain/turnDiff.js";
 import {
   contextReferenceLabel,
   inputReferenceDisplayParts,
@@ -38,6 +39,11 @@ export interface OutputTurnElements {
   todos: AgentTodoView;
   questions: AgentInputView;
   output: HTMLElement;
+  /** The changed-file rows this turn explains; filled once its response parses. */
+  changes: HTMLElement;
+  /** Shown once the turn is known to have changed files, which a live turn
+   * only learns when it ends. */
+  diffAction: HTMLButtonElement;
   /** The whole-section copy controls live in the title bar. Their payloads are
    * filled in as the turn streams or when a stored turn is hydrated. */
   setProcessCopy?: (text: string) => void;
@@ -56,6 +62,8 @@ export interface TranscriptTurnOptions {
   mode?: DextHistoryRecord["mode"];
   /** This stored turn has truncated text in an overflow file. */
   spill?: boolean;
+  /** This stored turn recorded the files it changed. */
+  diff?: boolean;
 }
 
 export interface TranscriptHost {
@@ -78,6 +86,7 @@ export interface TranscriptHost {
   addTurnToInput(sessionId: string, turnId: string): void;
   copyTurn(sessionId: string, turnId: string): void;
   openSpill(sessionId: string, turnId: string): void;
+  openTurnDiff(sessionId: string, turnId: string, path?: string): void;
   deleteTurn(sessionId: string, turnId: string): void;
   createTodos(): AgentTodoView;
   createQuestions(turnId: string, sessionId: string | undefined): AgentInputView;
@@ -209,7 +218,12 @@ export class TranscriptView {
     body.className = "output-turn-body";
     const actions = document.createElement("span");
     actions.className = "output-turn-actions";
+    const diffAction = this.actionButton("diff", "Open changed files", () => {
+      if (sessionId) this.host.openTurnDiff(sessionId, turnId);
+    }, true);
+    diffAction.hidden = !options.diff;
     actions.append(
+      diffAction,
       this.actionButton(TURN_EDIT_ACTION.icon, TURN_EDIT_ACTION.label, () => {
         this.host.edit(source);
         this.host.openInput();
@@ -264,7 +278,10 @@ export class TranscriptView {
     const todos = this.host.createTodos();
     const questions = this.host.createQuestions(turnId, this.host.activeSessionId());
     const output = renderTurnOutput(turnDomAdapter(document), [], outputCopy);
-    body.append(todos.element, questions.element, process.disclosure, output.section);
+    // The changed-file rows come last: they close the turn with what it did, and
+    // a live turn keeps them empty until it ends.
+    const changes = this.changesList();
+    body.append(todos.element, questions.element, process.disclosure, output.section, changes);
     disclosure.append(summary, body);
     // An open turn keeps its actions over the short Worked line instead of
     // covering the prompt, which is the row label now.
@@ -283,6 +300,8 @@ export class TranscriptView {
       todos,
       questions,
       output: output.body,
+      changes,
+      diffAction,
       setProcessCopy: (text: string) => {
         processCopyText.value = text;
         processCopy.hidden = text.length === 0;
@@ -319,6 +338,78 @@ export class TranscriptView {
       icon: reference.kind === "dir" ? "folder" : reference.kind === "symbol" ? "symbol-method" : "file",
       ...(reference.kind === "file" ? { onOpen: () => this.host.openReference(reference) } : {})
     });
+  }
+
+  /** Filled by stored-turn hydration, which is where a turn's own words are
+   * parsed; empty until then so the row order never shifts. */
+  private changesList(): HTMLElement {
+    const table = this.host.document.createElement("table");
+    table.className = "output-turn-changes";
+    table.hidden = true;
+    const head = this.host.document.createElement("thead");
+    const row = this.host.document.createElement("tr");
+    for (const label of ["File", "Change"]) {
+      const cell = this.host.document.createElement("th");
+      cell.textContent = label;
+      row.append(cell);
+    }
+    head.append(row);
+    table.append(head, this.host.document.createElement("tbody"));
+    return table;
+  }
+
+  /** One clickable row per changed file; each file opens its own diff in the
+   * turn's diff tab. */
+  setChanges(turn: OutputTurnElements, sessionId: string | undefined, turnId: string, files: readonly TurnChange[]): void {
+    const list = turn.changes;
+    list.hidden = files.length === 0;
+    if (files.length) turn.diffAction.hidden = false;
+    const rows = files.map((file) => {
+      const item = this.host.document.createElement("tr");
+      item.className = "output-turn-change";
+      item.tabIndex = 0;
+      item.title = `${file.path} — ${file.reason}`;
+      const open = () => {
+        if (sessionId) this.host.openTurnDiff(sessionId, turnId, file.path);
+      };
+      item.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        open();
+      });
+      item.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        open();
+      });
+      const path = this.host.document.createElement("td");
+      path.className = "output-turn-change-path";
+      const glyph = this.host.document.createElement("i");
+      glyph.className = "codicon codicon-diff";
+      path.append(glyph, file.path);
+      const text = this.host.document.createElement("td");
+      text.className = "output-turn-change-reason";
+      text.textContent = file.reason;
+      item.append(path, text);
+      return item;
+    });
+    list.querySelector("tbody")?.replaceChildren(...rows);
+    // The answer's own inline mentions of these files open the same diff.
+    const changed = new Set(files.map((file) => file.path));
+    for (const code of turn.output.querySelectorAll("code")) {
+      const path = code.textContent ?? "";
+      if (!changed.has(path)) continue;
+      const link = this.host.document.createElement("a");
+      link.href = "#";
+      link.className = "output-turn-change-link";
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (sessionId) this.host.openTurnDiff(sessionId, turnId, path);
+      });
+      code.replaceWith(link);
+      link.append(code);
+    }
   }
 
   /** Turn actions live in the summary, which is a click target of its own, so

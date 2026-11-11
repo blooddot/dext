@@ -8,6 +8,7 @@ const host = vi.hoisted(() => ({ executeCommand: vi.fn().mockResolvedValue(undef
 vi.mock("vscode", () => ({
   commands: host,
   window: { showInformationMessage: vi.fn() },
+  extensions: { getExtension: () => undefined },
   workspace: { getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback }) }
 }));
 
@@ -69,7 +70,8 @@ async function sidebarHarness(options: {
     draftResource: vi.fn(),
     applyMethod: vi.fn(),
     isTrustedLocalWorkspace: () => true,
-    planUri: () => undefined
+    planUri: () => undefined,
+    storage: { globalStorageUri: { fsPath: "/global-storage" } }
   };
   const sidebar = new DextSidebarProvider({} as never, application as never, history, preferences);
   Object.assign(sidebar as unknown as { post(message: WebviewResponse): Promise<void> }, {

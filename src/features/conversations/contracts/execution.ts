@@ -100,5 +100,5 @@ export interface TurnNotifier {
   started: (snapshot: ExecutionSnapshot) => Promise<void>;
   executed: (sessionId: string, turnId: string, response: InputExecutionResponse) => Promise<void>;
   failed: (sessionId: string, turnId: string, message: string, planOutcome?: PlanExecutionOutcome) => Promise<void>;
-  finished: (sessionId: string, turnId: string) => Promise<void>;
+  finished: (sessionId: string, turnId: string, turn?: DextHistoryRecord) => Promise<void>;
 }

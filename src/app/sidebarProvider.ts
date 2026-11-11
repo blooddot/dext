@@ -36,6 +36,8 @@ type SelectionTarget
 } from "../platform/vscode/attachments.js";
 import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "../platform/vscode/clipboardFiles.js";
 import { openDextFileReference, openExternalLink } from "../platform/vscode/contextHost.js";
+import { changedWorkspaceFiles } from "../platform/vscode/gitChanges.js";
+import { TurnSnapshots } from "../platform/vscode/turnSnapshots.js";
 import { dextBuiltinNames } from "../features/workflow/domain/dextTypesStatus.js";
 import type { WebviewResponse } from "../platform/webviewProtocol.js";
 import { webviewRequestSchema } from "../platform/webviewProtocol.js";
@@ -113,6 +115,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     /** Absent in lightweight host tests that do not exercise appearance. */
     private readonly appearance?: DextAppearanceController
   ) {
+    // Every turn keeps a copy of the files it changed, so its diff is the turn's
+    // own before/after rather than the last commit.
+    const snapshots = new TurnSnapshots(application.storage.globalStorageUri);
     this.conversation = createConversationServices({
       history,
       preferences,
@@ -133,6 +138,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       disposed: () => this.disposed,
       maxEventTextLength: () => vscode.workspace.getConfiguration("dext").get<number>("history.maxOutputLength", DEFAULT_HISTORY_LIMITS.maxOutputLength),
       resourceBusy: (sessionId) => this.resourceOperations.has(sessionId),
+      changedFiles: async (since: number, sessionId: string, turnId: string) => {
+        const files = await changedWorkspaceFiles(since);
+        if (files?.length) await snapshots.save(sessionId, turnId, files);
+        return files;
+      },
       notifyInput: async () => await vscode.window.showInformationMessage(
         "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
       ) === "View question",
@@ -810,6 +820,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           else await vscode.window.showTextDocument(vscode.Uri.file(path));
           break;
         }
+        case "openTurnDiff":
+          await vscode.commands.executeCommand("dext.history.openTurnDiff", {
+            sessionId: request.sessionId, turnId: request.turnId, ...(request.path ? { path: request.path } : {})
+          });
+          break;
         case "buildPlan":
           await this.conversation.plans.build(request.planPath);
           break;

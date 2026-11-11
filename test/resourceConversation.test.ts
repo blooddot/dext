@@ -56,7 +56,8 @@ vi.mock("vscode", () => {
       showInformationMessage: vi.fn(),
       createOutputChannel: () => ({ appendLine: vi.fn() })
     },
-    commands: { executeCommand: vi.fn() }
+    commands: { executeCommand: vi.fn() },
+    extensions: { getExtension: () => undefined }
   };
 });
 

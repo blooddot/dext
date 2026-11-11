@@ -4,6 +4,7 @@ import { UI_LIMITS, uiFormResultSchema } from "../../../shared/contracts/uiForm.
 import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
 import type { DextHistorySession, PlanStatus } from "./history.js";
+import type { TurnChange } from "../domain/turnDiff.js";
 
 /** Conversation, execution, plan and patch messages. The global protocol in
  * `src/platform/webviewProtocol.ts` composes this list with the other features, so a
@@ -41,6 +42,9 @@ const conversationSchemaList = [
   z.object({ type: z.literal("copyTurn"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("addTurnToDext"), turnId: z.string().min(1), sessionId: z.string().min(1) }),
   z.object({ type: z.literal("openSpillFile"), sessionId: z.string().min(1), turnId: z.string().min(1) }),
+  z.object({
+    type: z.literal("openTurnDiff"), sessionId: z.string().min(1), turnId: z.string().min(1), path: z.string().min(1).optional()
+  }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("correctPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("choosePlan") }),
@@ -124,4 +128,4 @@ export type ConversationWebviewResponse =
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
   | { type: "focusAgentInput"; sessionId: string; turnId: string; requestId: string; kind: "agent" | "ui" }
   | { type: "agentEvents"; sessionId: string; events: AgentStreamEvent[]; switchId?: number }
-  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; mode?: "agent" | "ask" | "plan" | "code"; planPath?: string; executePlan?: boolean; startedAt?: number; switchId?: number; hostInitiated?: true };
+  | { type: "executing"; sessionId: string; value: boolean; turnId: string; source?: string; mode?: "agent" | "ask" | "plan" | "code"; planPath?: string; executePlan?: boolean; startedAt?: number; switchId?: number; hostInitiated?: true; changes?: TurnChange[] };

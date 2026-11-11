@@ -10,7 +10,7 @@ import type { ExecutionMetadata } from "../src/shared/contracts/types.js";
 import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 
 const host = vi.hoisted(() => ({ executeCommand: vi.fn().mockResolvedValue(undefined), showInformationMessage: vi.fn() }));
-vi.mock("vscode", () => ({ commands: host, window: host }));
+vi.mock("vscode", () => ({ commands: host, window: host, extensions: { getExtension: () => undefined } }));
 
 class MemoryState {
   private values = new Map<string, unknown>();
@@ -34,6 +34,7 @@ function sidebarFixture(options: {
     setAgentSelection: vi.fn(),
     endAgentSession: vi.fn(),
     agentProfiles: () => [],
+    storage: { globalStorageUri: { fsPath: "/global-storage" } },
     ...options.application
   };
   const preferences = options.preferences ?? new DextConversationPreferences(new MemoryState() as never);
@@ -58,7 +59,8 @@ describe("shared History and Conversation actions", () => {
     const preferences = new DextConversationPreferences(new MemoryState() as never);
     const sidebar = new DextSidebarProvider({} as never, {
       state: () => ({ agentSelection: { ...selection, profileId: "deepseek-harness", agentPreset: "standard" } }),
-      setAgentSelection: vi.fn(), endAgentSession: vi.fn(), agentProfiles: () => []
+      setAgentSelection: vi.fn(), endAgentSession: vi.fn(), agentProfiles: () => [],
+      storage: { globalStorageUri: { fsPath: "/global-storage" } }
     } as never, history, preferences);
     const controller = (sidebar as unknown as { conversation: { controller: { hydrate(): Promise<void>; open(session: DextHistorySession): Promise<void>; selection(id: string): AgentSelection | undefined } } }).conversation.controller;
     await controller.hydrate();

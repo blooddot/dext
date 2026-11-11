@@ -708,6 +708,27 @@ describe("sidebar panel layout", () => {
     expect(actionOrder).toEqual([
       "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_INPUT_ACTION", "TURN_COPY_ACTION", "TURN_ADD_TO_INPUT_ACTION", "TURN_DELETE_ACTION"
     ]);
+    // A turn that recorded its changed files opens the same diff from the live
+    // toolbar, ahead of edit and retry.
+    expect(transcript.indexOf("diffAction.hidden = !options.diff")).toBeLessThan(transcript.indexOf("TURN_EDIT_ACTION.icon"));
+    expect(transcript).toMatch(/actionButton\("diff", "Open changed files"[\s\S]*?this\.host\.openTurnDiff\(sessionId, turnId\)/);
+    expect(main).toContain("...(record.changedFiles !== undefined ? { diff: true } : {})");
+    expect(main).toMatch(/openTurnDiff: \(sessionId, turnId, path\) =>[\s\S]*?type: "openTurnDiff", sessionId, turnId/);
+    expect(sidebar).toMatch(/case "openTurnDiff":[\s\S]*?dext\.history\.openTurnDiff[\s\S]*?sessionId: request\.sessionId, turnId: request\.turnId, \.\.\.\(request\.path/);
+    // The reasons close the turn body too: one flat row per file, clickable.
+    expect(transcript).toMatch(/setChanges\(turn: OutputTurnElements[\s\S]*?openTurnDiff\(sessionId, turnId, file\.path\)/);
+    expect(transcript).toMatch(/body\.append\(todos\.element, questions\.element, process\.disclosure, output\.section, changes\)/);
+    // The same files, named inline in the answer, open the same diff.
+    expect(transcript).toMatch(/changed\.has\(path\)[\s\S]*?openTurnDiff\(sessionId, turnId, path\)/);
+    expect(main).toMatch(/if \(turn\.changes\) transcript\.setChanges\(turn, sessionId, record\.id, turnChanges\(record\)\)/);
+    // Clicking another file of the same turn switches the shown diff in that tab:
+    // VS Code matches multi-diff editors on the source URI, one per turn.
+    const extension = await source("src/extension.ts");
+    expect(extension).toContain("multiDiffSourceUri: snapshots.turnDirectory(session.id, turn.id)");
+    expect(extension).toContain('"_workbench.openMultiDiffEditor"');
+    expect(extension).toContain("reveal: { modifiedUri: reveal.after }");
+    // Reasons stay in the turn body; the diff opens no second editor beside it.
+    expect(extension).not.toContain("ViewColumn.Beside");
     // Only destructive actions on the active turn go dead while a turn is
     // running; copying and editing older turns remains available.
     expect(main).toMatch(/function syncTurnActions[\s\S]*?data-disable-while-running[\s\S]*?button\.disabled = executing &&/);

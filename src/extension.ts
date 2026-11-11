@@ -14,6 +14,10 @@ import { managedResourcePath, removeManagedResource } from "./features/resources
 import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
 import { DextHistoryPanel } from "./features/conversations/host/historyEditorProvider.js";
 import { conversationMarkdown, conversationTitle, historyTranscript, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
+import { turnChanges } from "./features/conversations/domain/turnDiff.js";
+import { workspaceFileUri } from "./platform/vscode/contextHost.js";
+import { gitHeadUri } from "./platform/vscode/gitChanges.js";
+import { TurnSnapshots } from "./platform/vscode/turnSnapshots.js";
 import type { DextHistoryRecord, DextHistorySession } from "./features/conversations/contracts/history.js";
 import { DEFAULT_HISTORY_LIMITS } from "./features/conversations/contracts/history.js";
 import { openFileHistoryStore } from "./features/conversations/host/historyFileState.js";
@@ -81,6 +85,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // preferences object exists; clear what trimming left behind at startup.
   await preferences.pruneConversations(history.summaries(true).map((summary) => summary.id));
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage, appearance);
+  // Same root the sidebar writes to; the class only holds the path.
+  const snapshots = new TurnSnapshots(application.storage.globalStorageUri);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences, appearance);
   // Unified editor tabs: Resources and History all go through one manager so
   // a stable key can never open twice, whichever recovery path runs first.
@@ -389,6 +395,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   interface ConversationContext {
     sessionId?: string;
     turnId?: string;
+    /** Set when the user clicked one changed file instead of the turn action. */
+    path?: string;
     dextTabTitle?: string;
   }
   // The body is read only when a command actually needs it.
@@ -632,6 +640,76 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           return;
         }
         await vscode.window.showTextDocument(vscode.Uri.file(path));
+      })
+    ),
+    vscode.commands.registerCommand("dext.history.openTurnDiff", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = await historySession(context);
+        const turn = session.turns.find((item) => item.id === context?.turnId);
+        if (!turn) throw new Error("Conversation turn not found.");
+        const index = session.turns.indexOf(turn);
+        const changes = turnChanges(turn);
+        if (!changes.length) {
+          await vscode.window.showInformationMessage("This turn recorded no changed files.");
+          return;
+        }
+        // `vscode.changes` takes three URIs per entry, so the reasons travel
+        // separately; this is only the list of comparable files.
+        const files: { path: string; reason: string; before: vscode.Uri; after: vscode.Uri }[] = [];
+        for (const change of changes) {
+          const workspace = workspaceFileUri(change.path)?.uri;
+          const after = await snapshots.find(session.id, turn.id, change.path) ?? workspace;
+          // The turn's own starting point is the closest earlier turn that saved
+          // this file; only a file no turn touched before falls back to HEAD.
+          let before: vscode.Uri | undefined;
+          for (const earlierTurn of session.turns.slice(0, index).reverse()) {
+            before = await snapshots.find(session.id, earlierTurn.id, change.path);
+            if (before) break;
+          }
+          before ??= workspace ? await gitHeadUri(workspace) : undefined;
+          if (before && after) files.push({ path: change.path, reason: change.reason, before, after });
+        }
+        if (!files.length) {
+          await vscode.window.showWarningMessage(
+            "These files cannot be compared: the workspace is not in a Git repository, or they no longer exist."
+          );
+          return;
+        }
+        const title = `Dext turn — ${historyTurnTitle(turn)}`;
+        // The file the caller clicked, if any: the tab is the same, only the
+        // shown diff changes.
+        const reveal = files.find((file) => file.path === context?.path);
+        // A multi diff renders a flat collapse list unless VS Code's file list is
+        // on; turn it on so the turn opens as a folder tree beside the diffs.
+        // shortcut: global UI state, and editors created before it need a reload.
+        try {
+          const multiDiff = vscode.workspace.getConfiguration("multiDiffEditor");
+          if (!multiDiff.get<boolean>("experimental.fileList")) {
+            await multiDiff.update("experimental.fileList", true, vscode.ConfigurationTarget.Global);
+          }
+          await vscode.commands.executeCommand("multiDiffEditor.viewFileListAsTree");
+          await vscode.commands.executeCommand("multiDiffEditor.positionFileListLeft");
+        } catch {
+          // A VS Code without that file list still opens the diffs below.
+        }
+        // One tab per turn, holding every file of the turn: a stable source URI is
+        // what VS Code matches on, and `reveal` is how the clicked file is shown in
+        // it. The reason is not part of it — `vscode.changes` takes URIs only.
+        try {
+          await vscode.commands.executeCommand("_workbench.openMultiDiffEditor", {
+            title,
+            multiDiffSourceUri: snapshots.turnDirectory(session.id, turn.id),
+            resources: files.map((file) => ({ originalUri: file.before, modifiedUri: file.after })),
+            ...(reveal ? { reveal: { modifiedUri: reveal.after } } : {})
+          });
+        } catch {
+          // Older VS Code: no reveal, so every click is its own tab.
+          await vscode.commands.executeCommand(
+            "vscode.changes",
+            title,
+            files.map((file): [vscode.Uri, vscode.Uri, vscode.Uri] => [file.after, file.before, file.after])
+          );
+        }
       })
     ),
     vscode.commands.registerCommand("dext.history.retryTurn", (context?: ConversationContext) =>

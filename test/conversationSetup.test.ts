@@ -10,7 +10,7 @@ import { HarnessState, conversation, defaultSelection } from "./conversationHarn
 
 vi.mock("vscode", () => ({}));
 
-function services(options: { executeConversation?: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse> } = {}) {
+function services(options: { executeConversation?: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>; changedFiles?: (since: number, sessionId: string, turnId: string) => Promise<string[] | undefined> } = {}) {
   const state = new HarnessState();
   const history = new DextHistoryStore(new MemoryHistoryBackend({ sessions: [conversation("session")] }));
   const preferences = new DextConversationPreferences(state as never);
@@ -37,6 +37,7 @@ function services(options: { executeConversation?: (mode: "agent" | "ask" | "pla
     activeSessionId: () => ref.services!.controller.active().id,
     disposed: () => false,
     resourceBusy: () => false,
+    ...(options.changedFiles ? { changedFiles: options.changedFiles } : {}),
     notifyInput: async () => false,
     openInputTarget: async () => undefined,
     postActiveExecution: async () => undefined,
@@ -66,6 +67,20 @@ describe("createConversationServices", () => {
     expect(h.services.plans).toBeDefined();
     expect(h.services).not.toHaveProperty("patches");
     expect(h.services.interactions).toBeDefined();
+  });
+
+  it("hands a finished turn's changed files to the live row", async () => {
+    const h = services({ changedFiles: async () => ["src/a.ts"] });
+    await h.services.controller.hydrate();
+    h.services.controller.activate(h.services.controller.session("session")!);
+    await h.services.coordinator.execute(h.services.controller.active(), "agent", "edit a");
+    // The live row never reads a stored record, so the end of the turn carries
+    // the paths and the reasons the record already explains.
+    expect(h.posted).toContainEqual(expect.objectContaining({
+      type: "executing",
+      value: false,
+      changes: [{ path: "src/a.ts", reason: "no stated reason" }]
+    }));
   });
 
   it("releases a running turn when the services are disposed", async () => {

@@ -143,6 +143,7 @@ describe("Dext history rendering", () => {
     expect(html).not.toContain("INTERNAL_PLAN_PROMPT");
     expect(html).not.toContain("<span>Input</span>");
     expect(html).toContain("Plan: build.plan.md");
+    expect(html).toContain('<span class="output-turn-title-name">Plan: build.plan.md</span>');
     expect(html).toContain(`<span class="plan-status">${error ? "Failed" : "Incomplete"}</span>`);
     expect(html).toContain(error ?? "Finished");
   });
@@ -181,6 +182,12 @@ describe("Dext history rendering", () => {
     const spilledActions = [...spilled.slice(0, spilled.indexOf("</summary>")).matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1]);
     // The spill button trails the row, matching the live turn toolbar.
     expect(spilledActions.at(-1)).toBe("dext.history.openSpill");
+    // A turn that recorded its changed files puts the diff first; one that did
+    // not keeps exactly the actions above.
+    const changed = renderHistoryRecord({ ...turn, changedFiles: [] }, "session-1");
+    const changedActions = [...changed.slice(0, changed.indexOf("</summary>")).matchAll(/data-history-command="([^"]+)"/g)].map((match) => match[1]);
+    expect(changedActions[0]).toBe("dext.history.openTurnDiff");
+    expect(changedActions.slice(1)).toEqual(actions.map((match) => match[1]));
     const sessionHtml = renderHistorySession({ id: "session-1", createdAt: 2, updatedAt: 2, turns: [turn] });
     const sessionSummary = sessionHtml.slice(0, sessionHtml.indexOf("</summary>"));
     // Both copy-as-Markdown actions share one glyph.
@@ -189,6 +196,47 @@ describe("Dext history rendering", () => {
       "dext.history.continueConversation", "dext.history.renameConversation", "dext.history.forkConversation",
       "dext.history.copyConversation", "dext.history.addConversationToDext", "dext.history.addFavorite", "dext.history.archiveConversation", "dext.history.deleteConversation"
     ]);
+  });
+
+  it("lists each changed file with the turn's own reason and the path to open", () => {
+    const turn: DextHistoryRecord = {
+      id: "turn-2", createdAt: 2, input: "fix docs", output: "answer", changedFiles: ["docs/workflows.md", "src/a.ts"],
+      process: [{ phase: "message", text: "Updated docs/workflows.md and the helper." }]
+    };
+    const html = renderHistoryRecord(turn, "session-1");
+    const rows = [...html.matchAll(/<tr class="output-turn-change"[^>]*data-turn-path="([^"]+)"[^>]*><td class="output-turn-change-path"><i class="codicon codicon-diff"><\/i>([^<]+)<\/td><td class="output-turn-change-reason">([^<]+)<\/td>/g)];
+    expect(rows.map(([, path, label, reason]) => [path, label, reason])).toEqual([
+      ["docs/workflows.md", "docs/workflows.md", "Updated docs/workflows.md and the helper."],
+      ["src/a.ts", "src/a.ts", "no stated reason"]
+    ]);
+    // A flat table, no folder rows.
+    expect(html).not.toContain("output-turn-change-folder");
+    // The table closes the body, after the turn's timeline and output.
+    expect(html).toContain('<table class="output-turn-changes"><thead><tr><th>File</th><th>Change</th></tr></thead><tbody>');
+    expect(html.indexOf('class="output-turn-changes"')).toBeGreaterThan(html.indexOf('data-turn-section="process"'));
+    // No list for a turn without changed files, and no reason leaks into the copied text.
+    const withoutFiles: DextHistoryRecord = { id: turn.id, createdAt: turn.createdAt, input: turn.input, output: turn.output, process: turn.process };
+    expect(renderHistoryRecord(withoutFiles, "session-1")).not.toContain("output-turn-changes");
+    expect(historyTurnMarkdown(turn)).not.toContain("no stated reason");
+  });
+
+  it("opens the diff from the answer's own inline path mentions", () => {
+    const record: DextHistoryRecord = {
+      id: "turn-3", createdAt: 3, input: "agent(input=\"fix\")", output: "", changedFiles: ["docs/workflows.md"], process: [],
+      response: {
+        kind: "workflow",
+        executions: [{
+          invocation: { kind: "invocation", method: "agent", source: "code", arguments: [] },
+          method: { id: "agent", title: "Agent", kind: "command", source: "builtin" },
+          result: { kind: "agent", text: "Edited `docs/workflows.md` and `src/other.ts`." },
+          durationMs: 1
+        }]
+      }
+    };
+    const html = renderHistoryRecord(record, "session-1");
+    expect(html).toContain('<a class="output-turn-change-link" href="#" data-history-command="dext.history.openTurnDiff" data-session-id="session-1" data-turn-id="turn-3" data-turn-path="docs/workflows.md"><code>docs/workflows.md</code></a>');
+    // A path this turn did not change has no diff to open, so it stays plain.
+    expect(html).toContain("<code>src/other.ts</code>");
   });
 
   it("renders an escaped custom turn title without renaming the parent or changing the copied input", () => {

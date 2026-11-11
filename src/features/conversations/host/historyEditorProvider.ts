@@ -48,7 +48,7 @@ export class DextHistoryPanel implements vscode.Disposable {
       this.panel = undefined;
     });
     this.panel.webview.onDidReceiveMessage((raw: unknown) => {
-      const message = raw as { type?: string; theme?: string; text?: string; reference?: string; command?: string; sessionId?: string; turnId?: string };
+      const message = raw as { type?: string; theme?: string; text?: string; reference?: string; command?: string; sessionId?: string; turnId?: string; path?: string };
       if (message.type === "setDextAppearance") {
         if (isDextAppearance(message.theme)) void this.appearance?.set(message.theme);
         return;
@@ -75,6 +75,7 @@ export class DextHistoryPanel implements vscode.Disposable {
         && typeof message.sessionId === "string"
         && message.sessionId.length > 0) {
         const turnCommands = [
+          "dext.history.openTurnDiff",
           "dext.history.renameTurn",
           "dext.history.forkFromTurn",
           "dext.history.copyTurn",
@@ -84,7 +85,10 @@ export class DextHistoryPanel implements vscode.Disposable {
         ];
         if (turnCommands.includes(message.command)) {
           if (typeof message.turnId !== "string" || !message.turnId) return;
-          void vscode.commands.executeCommand(message.command, { sessionId: message.sessionId, turnId: message.turnId });
+          const path = typeof message.path === "string" ? message.path : undefined;
+          void vscode.commands.executeCommand(message.command, {
+            sessionId: message.sessionId, turnId: message.turnId, ...(path ? { path } : {})
+          });
           return;
         }
         if (message.turnId) return;
@@ -215,9 +219,17 @@ export class DextHistoryPanel implements vscode.Disposable {
     });
     document.addEventListener('keydown', (event) => {
       const input = event.target?.matches?.('[data-history-search]') ? event.target : null;
-      if (!input || event.key !== 'Escape') return;
-      input.value = '';
-      filterSessions();
+      if (input) {
+        if (event.key !== 'Escape') return;
+        input.value = '';
+        filterSessions();
+        return;
+      }
+      // A changed-file row is a table row, so Enter/Space has to open it like a click.
+      const row = event.target?.matches?.('.output-turn-change[data-history-command]') ? event.target : null;
+      if (!row || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      row.click();
     });
     document.addEventListener('dext-appearance-change', () => {
       rerenderDiagrams(document.querySelector('.history-content'));
@@ -244,7 +256,7 @@ export class DextHistoryPanel implements vscode.Disposable {
         vscode.postMessage({ type: 'openFileReference', reference: reference.dataset.openFileReference || '' });
         return;
       }
-      const historyAction = target?.closest('button[data-history-command]');
+      const historyAction = target?.closest('[data-history-command]');
       if (historyAction) {
         event.preventDefault();
         event.stopPropagation();
@@ -252,7 +264,8 @@ export class DextHistoryPanel implements vscode.Disposable {
           type: 'historyCommand',
           command: historyAction.dataset.historyCommand || '',
           sessionId: historyAction.dataset.sessionId || '',
-          turnId: historyAction.dataset.turnId || ''
+          turnId: historyAction.dataset.turnId || '',
+          path: historyAction.dataset.turnPath || ''
         });
       }
     });

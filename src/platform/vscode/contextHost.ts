@@ -48,7 +48,7 @@ async function snapshot(
   };
 }
 
-function workspaceFileUri(filePath: string): { uri: vscode.Uri; range?: vscode.Range } | undefined {
+export function workspaceFileUri(filePath: string): { uri: vscode.Uri; range?: vscode.Range } | undefined {
   const parsed = parseFileReference(filePath);
   const absoluteUri = /^file:\/\//i.test(parsed.path)
     ? vscode.Uri.parse(parsed.path, true)

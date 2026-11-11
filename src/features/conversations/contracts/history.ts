@@ -53,6 +53,8 @@ export interface DextHistoryRecord {
   command?: TurnCommandSnapshot;
   /** Which creation mode produced a resource draft. */
   resourceSource?: ResourceSourceKind;
+  /** Workspace-relative paths this turn wrote, bounded; no diff content. */
+  changedFiles?: string[];
 }
 
 /** The Plan context fields a turn stores with its record. */
@@ -60,7 +62,7 @@ export type TurnPlanContext = Pick<DextHistoryRecord, "executePlan" | "planPath"
 
 /** Everything the coordinator records beside a turn's result. */
 export type TurnRecordContext = TurnPlanContext
-  & Pick<DextHistoryRecord, "skills" | "command" | "resourceSource">;
+  & Pick<DextHistoryRecord, "skills" | "command" | "resourceSource" | "changedFiles">;
 
 export interface DextHistorySession {
   id: string;

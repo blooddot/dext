@@ -13,6 +13,7 @@ import type { InputNotificationTarget } from "../features/conversations/host/inp
 import { PlanController } from "../features/conversations/host/planController.js";
 import { TurnExecutionCoordinator } from "../features/conversations/host/turnExecutionCoordinator.js";
 import { DEFAULT_HISTORY_LIMITS } from "../features/conversations/contracts/history.js";
+import { turnChanges } from "../features/conversations/domain/turnDiff.js";
 
 /** What the sidebar still owns: Webview lifecycle, VS Code adapters and the
  * features outside this round. Everything below is passed in as a narrow
@@ -41,6 +42,9 @@ export interface ConversationSetupDependencies {
   disposed: () => boolean;
   maxEventTextLength?: () => number;
   resourceBusy: (sessionId: string) => boolean;
+  /** Workspace paths a turn wrote since a timestamp; absent when the workspace
+   * has no baseline to compare the turn against. */
+  changedFiles?: (since: number, sessionId: string, turnId: string) => Promise<string[] | undefined>;
   notifyInput: () => PromiseLike<boolean>;
   openInputTarget: (target: InputNotificationTarget) => Promise<void>;
   postActiveExecution: (sessionId: string, switchId?: number, hostInitiated?: boolean) => Promise<void>;
@@ -158,13 +162,23 @@ export function createConversationServices(dependencies: ConversationSetupDepend
           message
         });
       },
-      finished: async (sessionId, turnId) => {
+      finished: async (sessionId, turnId, turn) => {
         dependencies.runningChanged();
-        await dependencies.post({ type: "executing", sessionId, value: false, turnId });
+        // The live row kept its stream, so it learns its changed files here
+        // instead of from a stored record it will never read.
+        const changes = turn ? turnChanges(turn) : [];
+        await dependencies.post({
+          type: "executing",
+          sessionId,
+          value: false,
+          turnId,
+          ...(changes.length ? { changes } : {})
+        });
       }
     },
     selection: (sessionId) => controller.selection(sessionId) ?? dependencies.currentSelection(),
     resourceBusy: dependencies.resourceBusy,
+    ...(dependencies.changedFiles ? { changedFiles: dependencies.changedFiles } : {}),
     onIdle: dependencies.flushAttachmentDeletes
   });
   executionRef.coordinator = coordinator;

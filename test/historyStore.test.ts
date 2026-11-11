@@ -301,6 +301,27 @@ describe("DextHistoryStore", () => {
     expect(await store.removeTurn("session-1", "missing")).toBe(false);
   });
 
+  it("keeps at most 20 changed files per turn, all that a Changes view can show", async () => {
+    const backend = new MemoryHistoryBackend();
+    const store = memoryStore(backend);
+    const paths = Array.from({ length: 25 }, (_, index) => `src/file-${index}.ts`);
+    await store.addSuccess("write", [], { kind: "workflow", executions: [] }, "session", "agent", "turn", { changedFiles: paths });
+    const turn = (await store.sessions())[0]!.turns[0]!;
+    expect(turn.changedFiles).toEqual(paths.slice(0, 20));
+  });
+
+  it("clips a long changed-file path without spilling a turn for it", async () => {
+    const backend = new MemoryHistoryBackend();
+    const store = memoryStore(backend, () => ({ maxTurns: 10, maxOutputLength: 12 }));
+    await store.addSuccess("write", [], { kind: "workflow", executions: [] }, "session", "agent", "turn", {
+      changedFiles: ["src/features/conversations/domain/turnDiff.ts", "src/a.ts"]
+    });
+    const turn = (await store.sessions())[0]!.turns[0]!;
+    expect(turn.changedFiles).toEqual(["src/feiff.ts", "src/a.ts"]);
+    // Only the response spilled; a clipped path never becomes an overflow write.
+    expect(backend.spilled.flat().some((part) => part.includes("turnDiff"))).toBe(false);
+  });
+
   it("migrates each legacy flat record into a one-turn conversation", async () => {
     const legacy = [{
       id: "old-1",

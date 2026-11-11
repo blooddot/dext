@@ -33,6 +33,18 @@ function clipped(value: string, maxOutputLength: number, spill: string[]): strin
   return truncateMiddle(value, maxOutputLength, "");
 }
 
+/** A turn lists the files it wrote, never their diff: 20 paths is enough for a
+ * readable Changes view and one screen of History. */
+const MAX_CHANGED_FILES = 20;
+
+/** Cut like every other stored string, but never spilled: a path list is not
+ * worth an overflow file. */
+function boundedChangedFiles(paths: readonly string[], maxOutputLength: number): string[] {
+  const limit = Math.min(maxOutputLength, 260);
+  return paths.slice(0, MAX_CHANGED_FILES)
+    .map((path) => path.length <= limit ? path : truncateMiddle(path, limit, ""));
+}
+
 function serializeResponse(response: InputExecutionResponse, maxOutputLength: number, spill: string[]): string {
   try {
     return bounded(JSON.stringify(response, null, 2), maxOutputLength, spill);
@@ -301,8 +313,10 @@ export class DextHistoryStore implements ConversationHistoryStore {
   ): Promise<DextHistoryRecord> {
     return this.mutate(async () => {
       const createdAt = Date.now();
+      const { maxOutputLength } = this.limits();
       const turn: DextHistoryRecord = {
         ...record,
+        ...(record.changedFiles ? { changedFiles: boundedChangedFiles(record.changedFiles, maxOutputLength) } : {}),
         id: requestedTurnId ?? `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
         createdAt
       };
