@@ -1,10 +1,11 @@
 import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import { PlanTodoProgress, planTodoInstruction } from "./planTodoProgress.js";
 
-/** Completed tasks survive a resume only when their stable ID and text still match. */
+/** A resumed run keeps its progress by the task's stable position id, so editing
+ * a task's wording in the plan does not wipe completed work. */
 export function resumePlanTodos(current: readonly AgentTodoItem[], previous: readonly AgentTodoItem[]): AgentTodoItem[] {
   return current.map((item) => {
-    const prior = previous.find((candidate) => candidate.id === item.id && candidate.text === item.text);
+    const prior = previous.find((candidate) => candidate.id === item.id);
     return { ...item, status: item.status === "completed" ? item.status : prior?.status ?? item.status };
   });
 }

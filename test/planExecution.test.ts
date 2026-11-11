@@ -77,10 +77,10 @@ describe("plan continuation decisions", () => {
     run.beginRound(); report(run, { updates: [{ id: "unknown", status: "completed" }], verification: "passed" });
     expect(run.progress.verified).toBe(false); expect(run.finishRound()).toBeUndefined();
   });
-  it("preserves matching progress but does not reuse changed task definitions", () => {
+  it("preserves progress by task id even when the wording changed", () => {
     const prior = tasks().map((task) => ({ ...task, status: "completed" as const }));
     expect(resumePlanTodos(tasks(), prior).every((task) => task.status === "completed")).toBe(true);
-    expect(resumePlanTodos([{ ...tasks()[0]!, text: "Changed scope" }], prior)[0]?.status).toBe("pending");
+    expect(resumePlanTodos([{ ...tasks()[0]!, text: "Changed scope" }], prior)[0]?.status).toBe("completed");
   });
   it("does not claim completion for plans without trackable tasks or old history without evidence", () => {
     const run = new PlanExecution([]); run.beginRound(); expect(run.finishRound()?.status).toBe("incomplete");
