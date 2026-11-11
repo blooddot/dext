@@ -38,7 +38,7 @@ try {
   await evaluate(`document.body.outerHTML=${JSON.stringify(body)};window.sent=[];window.uiErrors=[];window.addEventListener('error', e=>uiErrors.push(e.message));window.acquireVsCodeApi=()=>({postMessage:m=>sent.push(m),getState:()=>({}),setState:()=>{}});window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
   const font = (await readFile("dist/codicons/codicon.ttf")).toString("base64");
   const icons = (await readFile("dist/codicons/codicon.css", "utf8")).replace(/url\([^)]*\)/g, `url(data:font/ttf;base64,${font})`);
-  const css = `${icons}\n${await readFile("dist/webview/main.css", "utf8")}`;
+  const css = `${icons}\n${await readFile("dist/webview/main.css", "utf8")}\n${await readFile("media/appearance.css", "utf8")}`;
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(css)};document.head.append(style);}`);
   await evaluate(await readFile("dist/webview/main.js", "utf8"));
   await evaluate(`window.selection={profileId:'codex',mode:'agent',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:''};

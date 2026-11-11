@@ -15,12 +15,6 @@
   --dext-composer-height: clamp(96px, 12vh, 128px);
   --dext-conversation-gap: 8px;
   --dext-quiet-divider: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
-  --resource-api-accent: #79b8ff;
-  --resource-mcp-accent: #c2a3ff;
-  --resource-rule-accent: #dfb45c;
-  --resource-skill-accent: #63c9b6;
-  --resource-file-accent: var(--vscode-descriptionForeground, #a7b0bd);
-  --resource-button-foreground: #121212;
 }
 
 /* Radius scale, the only two numbers: 4px for controls and chips, 6px for
@@ -34,11 +28,6 @@ body.vscode-light,
 body.vscode-high-contrast-light {
   --dext-row-action-background: #ffffff;
   --dext-full-access-accent: #7f4338;
-  --resource-api-accent: #1769b5;
-  --resource-mcp-accent: #7546b6;
-  --resource-rule-accent: #886000;
-  --resource-skill-accent: #08796d;
-  --resource-button-foreground: #ffffff;
 }
 
 body.vscode-high-contrast {
@@ -4418,13 +4407,6 @@ details[open] > summary > .disclosure-chevron {
 .resource-toolbar .plan-status { white-space: normal; overflow-wrap: anywhere; }
 .resource-preview { background: transparent; color: var(--vscode-foreground); border: 1px solid var(--vscode-button-border, var(--vscode-widget-border)); border-radius: 4px; padding: 3px 8px; }
 .resource-directory { display: block; max-width: 300px; white-space: normal; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); font-size: 12px; margin-top: 3px; }
-
-/* Resource identity is separate from the read-only engine used to generate it. */
-[data-resource-type="api"] { --resource-accent: var(--resource-api-accent); }
-[data-resource-type="mcp"] { --resource-accent: var(--resource-mcp-accent); }
-[data-resource-type="rule"] { --resource-accent: var(--resource-rule-accent); }
-[data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
-[data-resource-type="file"] { --resource-accent: var(--resource-file-accent); }
 
 .input-section[data-mode="resource"] {
   --composer-accent: var(--resource-accent);

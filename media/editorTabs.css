@@ -4,30 +4,6 @@
   font-size: 14px;
   color: var(--vscode-foreground);
   background: var(--vscode-editor-background);
-  --resource-api-accent: #79b8ff;
-  --resource-mcp-accent: #c2a3ff;
-  --resource-rule-accent: #dfb45c;
-  --resource-skill-accent: #63c9b6;
-  --resource-syntax-keyword: #c586c0;
-  --resource-syntax-string: #ce9178;
-  --resource-syntax-number: #b5cea8;
-  --resource-syntax-function: #dcdcaa;
-  --resource-syntax-type: #4ec9b0;
-  --resource-syntax-parameter: #9cdcfe;
-  --resource-syntax-boolean: #569cd6;
-}
-body.vscode-light, body.vscode-high-contrast-light {
-  --resource-api-accent: #1769b5;
-  --resource-mcp-accent: #7546b6;
-  --resource-rule-accent: #886000;
-  --resource-skill-accent: #08796d;
-  --resource-syntax-keyword: #af00db;
-  --resource-syntax-string: #a31515;
-  --resource-syntax-number: #098658;
-  --resource-syntax-function: #795e26;
-  --resource-syntax-type: #267f99;
-  --resource-syntax-parameter: #001080;
-  --resource-syntax-boolean: #0000ff;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -81,10 +57,6 @@ p { overflow-wrap: anywhere; }
 .resource-scope-switch { display: inline-flex; gap: 2px; margin-left: auto; padding: 2px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; }
 .resource-scope-switch button { border: 0; padding: 3px 9px; background: transparent; }
 .resource-scope-switch button.is-active { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: var(--vscode-list-activeSelectionBackground); }
-[data-resource-type="api"] { --resource-accent: var(--resource-api-accent); }
-[data-resource-type="mcp"] { --resource-accent: var(--resource-mcp-accent); }
-[data-resource-type="rule"] { --resource-accent: var(--resource-rule-accent); }
-[data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
 .resource-group[data-resource-type] h2 { color: var(--resource-accent); }
 .resource-group[data-resource-type] h2::before { content: ""; width: 3px; height: 14px; border-radius: 4px; background: var(--resource-accent); }
 .resource-create { color: var(--resource-accent); border-color: var(--resource-accent); background: transparent; }

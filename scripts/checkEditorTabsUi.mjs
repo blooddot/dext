@@ -49,7 +49,7 @@ try {
   ]);
   const apiFlowScript = apiFlowBundle.outputFiles[0].text;
   const mermaidScript = mermaidBundle.outputFiles[0].text;
-  const css = await readFile('media/editorTabs.css', 'utf8');
+  const css = (await readFile('media/editorTabs.css', 'utf8')) + '\n' + (await readFile('media/appearance.css', 'utf8'));
   let pageHtml = '', themeCss = '', themeClass = '';
   server = createServer((request, response) => {
     const url = request.url ?? '';

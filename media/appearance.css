@@ -3,6 +3,50 @@
    variables; Paper and Dim replace the `--vscode-*` values the existing CSS
    already reads, so components do not need a second parallel token layer. */
 
+/* One resource palette for the sidebar, History and every resource editor tab:
+   these used to be copied into styles.css and editorTabs.css as well. */
+:root {
+  --resource-api-accent: #79b8ff;
+  --resource-mcp-accent: #c2a3ff;
+  --resource-rule-accent: #dfb45c;
+  --resource-skill-accent: #63c9b6;
+  --resource-button-foreground: #121212;
+  --resource-syntax-keyword: #c586c0;
+  --resource-syntax-string: #ce9178;
+  --resource-syntax-number: #b5cea8;
+  --resource-syntax-function: #dcdcaa;
+  --resource-syntax-type: #4ec9b0;
+  --resource-syntax-parameter: #9cdcfe;
+  --resource-syntax-boolean: #569cd6;
+}
+
+body.vscode-light,
+body.vscode-high-contrast-light {
+  --resource-api-accent: #1769b5;
+  --resource-mcp-accent: #7546b6;
+  --resource-rule-accent: #886000;
+  --resource-skill-accent: #08796d;
+  --resource-button-foreground: #ffffff;
+  --resource-syntax-keyword: #af00db;
+  --resource-syntax-string: #a31515;
+  --resource-syntax-number: #098658;
+  --resource-syntax-function: #795e26;
+  --resource-syntax-type: #267f99;
+  --resource-syntax-parameter: #001080;
+  --resource-syntax-boolean: #0000ff;
+}
+
+/* On the body, not `:root`: Paper/Dim override `--vscode-descriptionForeground`
+   on the body scope, and a `:root` var() would be resolved before that. */
+body { --resource-file-accent: var(--vscode-descriptionForeground, #a7b0bd); }
+
+/* Resource identity is separate from the read-only engine used to generate it. */
+[data-resource-type="api"] { --resource-accent: var(--resource-api-accent); }
+[data-resource-type="mcp"] { --resource-accent: var(--resource-mcp-accent); }
+[data-resource-type="rule"] { --resource-accent: var(--resource-rule-accent); }
+[data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
+[data-resource-type="file"] { --resource-accent: var(--resource-file-accent); }
+
 .app-shell > .dext-topbar {
   flex: 0 0 auto;
   display: flex;
