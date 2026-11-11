@@ -27,7 +27,16 @@ try {
   const send = (method, params = {}) => new Promise((resolve, reject) => { const id = ++nextId; pending.set(id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params })); });
   shutdown = () => send("Browser.close");
   const evaluate = async (expression) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
-  const key = async (key, code) => { await send("Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) }); await send("Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code }); };
+  const key = async (key, code, modifiers = 0) => { await send("Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, modifiers, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) }); await send("Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code, modifiers }); };
+  /** Replaces a field's answer through real keyboard input: the chip surface is a
+   * Monaco editor, so assigning `.value` no longer means anything. */
+  const fillField = async (target, text, lineBreak = false) => {
+    await evaluate(`${target}.focus()`);
+    await key("a", 65, 2); await key("Delete", 46);
+    if (text) await send("Input.insertText", { text });
+    if (lineBreak) await key("Enter", 13);
+    await evaluate("new Promise((done)=>requestAnimationFrame(()=>requestAnimationFrame(done)))");
+  };
   const bundle = await build({ stdin: { contents: 'export { AgentInputView } from "./src/features/conversations/browser/agentInputView.ts"; export { InteractionForm } from "./src/features/conversations/browser/interactionForm.ts"; export { InteractionDialog } from "./src/features/conversations/browser/interactionDialog.ts"; export { uiCallForm, parseUiForm } from "./src/shared/contracts/uiForm.ts";', resolveDir: process.cwd() }, bundle: true, write: false, format: "iife", globalName: "InteractionUI" });
   await evaluate(bundle.outputFiles[0].text);
   // Mermaid is a separate lazy bundle. This harness has no server, so evaluate it
@@ -35,10 +44,22 @@ try {
   // the CSP below then applies to the SVG that renderer produces.
   const mermaidBundle = await build({ entryPoints: ["src/webview/mermaid.ts"], bundle: true, write: false, platform: "browser", format: "iife", target: "es2022", minify: true, logLevel: "silent" });
   await evaluate(mermaidBundle.outputFiles[0].text);
+  // A form answer is the Composer's chip surface, so the check needs the real
+  // editor and the styles Monaco ships with it.
+  const referenceBundle = await build({ stdin: { contents: 'export { ReferenceField } from "./src/webview/referenceField.ts";', resolveDir: process.cwd() }, bundle: true, write: false, outdir: "dist/webview-check", platform: "browser", format: "iife", globalName: "ReferenceUI", target: "es2022", minify: true, logLevel: "silent", loader: { ".ttf": "file" }, assetNames: "assets/[name]-[hash]" });
+  const referenceScript = referenceBundle.outputFiles.find((file) => file.path.endsWith(".js"));
+  const referenceStyles = referenceBundle.outputFiles.find((file) => file.path.endsWith(".css"));
+  await evaluate(referenceScript.text);
   await evaluate(`document.body.innerHTML='<button id="previous">Previous focus</button><main id="turn"></main><details id="process"><summary>Process</summary></details>'; window.replies=[];window.saved={};
-    window.createView=()=>{const view=new InteractionUI.AgentInputView((id,answers)=>replies.push({id,answers}),(state,result)=>replies.push({id:state.requestId,result}),'test',{get:key=>saved[key],set:(key,draft)=>{saved[key]=draft}});document.getElementById('turn').append(view.element);view.setRunning(true);return view;};
+    // A chip that wraps at a line break is painted as two spans, only the first one
+    // naming its reference, so count references rather than spans.
+    window.chips=(root)=>new Set([...root.querySelectorAll('.dext-ref-chip')].map(chip=>(chip.className.match(/ref-open-([0-9]+)/)??[])[1]).filter((index)=>index!==undefined)).size;
+    window.waitChips=(root,expected)=>new Promise((done)=>{const deadline=Date.now()+5000;const check=()=>{const count=chips(root);if(count===expected||Date.now()>deadline)done(count);else setTimeout(check,25);};check();});
+    window.clipboardStub={read:async()=>undefined};
+    window.formFiles={resolve:async(paths)=>paths.map(path=>'@'+path.split('/').pop()),attach:async()=>'.dext-global/attachments/p.png',onError:(error)=>{throw error;},referenceField:(options)=>new ReferenceUI.ReferenceField(formFiles,clipboardStub,options)};
+    window.createView=()=>{const view=new InteractionUI.AgentInputView((id,answers)=>replies.push({id,answers}),(state,result)=>replies.push({id:state.requestId,result}),'test',{get:key=>saved[key],set:(key,draft)=>{saved[key]=draft}},formFiles);document.getElementById('turn').append(view.element);view.setRunning(true);return view;};
     window.view=createView();window.state=(id,form)=>({sessionId:'session',turnId:'turn',requestId:id,status:'waiting',form});`);
-  await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(await readFile('media/styles.css', 'utf8'))};document.head.append(style);const theme=document.createElement('style');theme.id='theme';document.head.append(theme);}`);
+  await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify((await readFile('media/styles.css', 'utf8')) + "\n" + (referenceStyles?.text ?? ""))};document.head.append(style);const theme=document.createElement('style');theme.id='theme';document.head.append(theme);}`);
   await send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: false });
   const theme = async (background, foreground, accent) => evaluate(`document.getElementById('theme').textContent=${JSON.stringify(`:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${background};--vscode-sideBar-background:${background};--vscode-foreground:${foreground};--vscode-input-background:${background};--vscode-input-foreground:${foreground};--vscode-descriptionForeground:${foreground};--vscode-widget-border:${foreground};--vscode-focusBorder:${accent};--vscode-button-background:${accent};--vscode-button-foreground:${background};--vscode-list-inactiveSelectionBackground:${background};--vscode-errorForeground:${foreground}} body{background:${background};color:${foreground};padding:8px} main{min-width:0}`)}`);
   await theme("#181818", "#dddddd", "#66aaff");
@@ -50,12 +71,12 @@ try {
   assert.equal(await evaluate(`document.querySelectorAll(':popover-open').length`), 0);
   await evaluate(`view.element.querySelector('input[type=radio]').focus()`); await key("ArrowRight", 39);
   await evaluate(`view.element.querySelector('input[type=checkbox]').focus()`); await key(" ", 32);
-  await evaluate(`{const input=view.element.querySelector('textarea');input.value='  notes\\n';input.dispatchEvent(new Event('input'));}`);
+  await fillField(`view.element.querySelector('.interaction-reference-field textarea')`, "  notes", true);
   assert.equal(await evaluate(`view.element.querySelector('button[type=submit]').disabled`), false);
   await evaluate(`view.element.querySelector('.interaction-select > button').click();view.suspend();`);
   assert.equal(await evaluate(`document.querySelectorAll(':popover-open').length`), 0);
   await evaluate(`view.element.remove();view=createView();view.updateUi(state('mixed',mixed));`);
-  assert.equal(await evaluate(`view.element.querySelector('textarea').value`), "  notes\n");
+  assert.equal(await evaluate(`saved['test:ui:mixed'].text.value`), "  notes\n");
   assert.equal(await evaluate(`view.element.querySelectorAll('input[type=checkbox]:checked').length`), 1);
   const artifacts = resolve(".tmp-tb/interaction-ui"); await mkdir(artifacts, { recursive: true });
   for (const [name, background, foreground, accent] of [["dark", "#181818", "#ddd", "#66aaff"], ["light", "#fff", "#222", "#005fcc"], ["contrast", "#000", "#fff", "#ff0"]]) {
@@ -84,11 +105,24 @@ try {
   assert.equal(await evaluate(`replies.at(-1).result.status`), "cancelled");
   assert.equal(await evaluate(`document.activeElement.id`), "previous");
   await evaluate(`window.inputState=state('input',InteractionUI.uiCallForm('input',{label:'Text',placeholder:'Type here',presentation:'inline'}));view.updateUi(inputState);`);
-  assert.equal(await evaluate(`view.element.querySelector('input[aria-label=Text]').placeholder`), "Type here");
+  await evaluate(`window.lineField=view.element.querySelector('.interaction-reference-field')`);
+  assert.equal(await evaluate(`lineField.querySelector('.editorPlaceholder').textContent`), "Type here");
   assert.equal(await evaluate(`view.focusRequest('ui','input')`), true);
-  assert.equal(await evaluate(`document.activeElement === view.element.querySelector('input[aria-label=Text]')`), true, "notification focuses the requested input");
-  await evaluate(`view.element.querySelector('input[aria-label=Text]').closest('form').requestSubmit();`);
-  assert.equal(await evaluate(`replies.at(-1).result.answers.answer.value`), "");
+  assert.equal(await evaluate(`document.activeElement === lineField.querySelector('textarea')`), true, "notification focuses the requested input");
+  await key("Tab", 9);
+  assert.equal(await evaluate(`lineField.contains(document.activeElement)`), false, "Tab leaves a single-line answer");
+  await evaluate(`lineField.querySelector('textarea').focus()`);
+  await evaluate(`{const data=new DataTransfer();data.setData('text/uri-list','file:///repo/a.ts');const target=lineField.querySelector('textarea');
+    target.dispatchEvent(new DragEvent('dragover',{dataTransfer:data,bubbles:true,cancelable:true}));
+    target.dispatchEvent(new DragEvent('drop',{dataTransfer:data,bubbles:true,cancelable:true}));}`);
+  assert.equal(await evaluate(`waitChips(lineField,1)`), 1, "a single-line answer renders the chip too");
+  assert.equal(await evaluate(`lineField.getBoundingClientRect().height <= 40`), true, "a single-line answer keeps the input height");
+  const lineScreenshot = await send("Page.captureScreenshot");
+  await writeFile(join(artifacts, "reference-line.png"), Buffer.from(lineScreenshot.data, "base64"));
+  await fillField(`lineField.querySelector('textarea')`, "two" + String.fromCharCode(10) + "lines");
+  assert.equal(await evaluate(`lineField.querySelectorAll('.view-line').length`), 1, "a multi-line paste keeps one line");
+  await key("Enter", 13);
+  assert.equal(await evaluate(`replies.at(-1).result.answers.answer.value`), "two lines", "Enter submits a single-line answer");
   assert.equal(await evaluate(`view.focusRequest('ui','input')`), false, "answered requests cannot be focused again");
   await evaluate(`view.updateUi({...inputState,status:'submitted',answers:replies.at(-1).result.answers});
     window.radioState=state('custom-radio',InteractionUI.uiCallForm('radio',{label:'Radio',options:['a','b'],allow_custom:true,presentation:'inline'}));view.updateUi(radioState);
@@ -102,15 +136,15 @@ try {
   for (const presentation of ["inline", "dialog"]) {
     const count = await evaluate(`replies.length`);
     await evaluate(`window.reviewState=state('review-${presentation}',InteractionUI.parseUiForm({title:'确认根因分析',presentation:'${presentation}',fields:[{id:'feedback',type:'input',label:'补充说明',required:false,multiline:true}],actions:[{id:'revise',label:'补充说明，重新分析',requires:['feedback']},{id:'approve',label:'确认，继续分析修复方案',primary:true}]}));view.updateUi(reviewState);`);
-    await evaluate(`window.reviewForm=[...document.querySelectorAll('form')].find(form=>form.querySelector('textarea[aria-label="补充说明"]'));window.revise=[...reviewForm.querySelectorAll('button')].find(button=>button.textContent==='补充说明，重新分析');window.approve=reviewForm.querySelector('button[type=submit]');`);
+    await evaluate(`window.reviewForm=[...document.querySelectorAll('form')].find(form=>form.querySelector('.interaction-reference-field'));window.revise=[...reviewForm.querySelectorAll('button')].find(button=>button.textContent==='补充说明，重新分析');window.approve=reviewForm.querySelector('button[type=submit]');`);
     assert.equal(await evaluate(`revise.disabled`), true, `${presentation}: empty feedback disables revise`);
     assert.equal(await evaluate(`approve.disabled`), false, `${presentation}: approval needs no feedback`);
     assert.equal(await evaluate(`reviewForm.querySelector('.interaction-error').textContent`), "");
     await evaluate(`revise.click()`);
     assert.equal(await evaluate(`replies.length`), count);
-    await evaluate(`{const input=reviewForm.querySelector('textarea');input.value=' \\n ';input.dispatchEvent(new Event('input'));}`);
+    await fillField(`reviewForm.querySelector('.interaction-reference-field textarea')`, " ", true);
     assert.equal(await evaluate(`revise.disabled`), true, `${presentation}: whitespace is not feedback`);
-    await evaluate(`{const input=reviewForm.querySelector('textarea');input.value='补充线索';input.dispatchEvent(new Event('input'));input.focus();}`);
+    await fillField(`reviewForm.querySelector('.interaction-reference-field textarea')`, "补充线索");
     assert.equal(await evaluate(`revise.disabled`), false);
     await key("Enter", 13);
     assert.equal(await evaluate(`replies.length`), count, "multiline Enter does not submit approval");
@@ -120,17 +154,19 @@ try {
     assert.equal(await evaluate(`view.element.textContent.includes('Submitted (补充说明，重新分析)')`), true);
     assert.equal(await evaluate(`replies.at(-1).result.answers.feedback.value.trim()`), "补充线索");
     await evaluate(`view.updateUi({...reviewState,status:'submitted',answers:replies.at(-1).result.answers});reviewState={...reviewState,requestId:'approve-${presentation}'};view.updateUi(reviewState);`);
-    await evaluate(`[...document.querySelectorAll('form')].find(form=>form.querySelector('textarea[aria-label="补充说明"]')).querySelector('button[type=submit]').click()`);
+    await evaluate(`[...document.querySelectorAll('form')].find(form=>form.querySelector('.interaction-reference-field')).querySelector('button[type=submit]').click()`);
     assert.deepEqual(await evaluate(`replies.at(-1).result`), { kind: "ui", type: "form", status: "submitted", action: "approve", answers: {} });
-    await evaluate(`view.updateUi({...reviewState,status:'submitted',answers:{}});reviewState={...reviewState,requestId:'primary-revise-${presentation}',form:InteractionUI.parseUiForm({...reviewState.form,actions:[{id:'revise',label:'Revise',requires:['feedback'],primary:true},{id:'approve',label:'Approve'}]})};view.updateUi(reviewState);window.reviewForm=[...document.querySelectorAll('form')].find(form=>form.querySelector('textarea[aria-label="补充说明"]'));reviewForm.requestSubmit();`);
+    await evaluate(`view.updateUi({...reviewState,status:'submitted',answers:{}});reviewState={...reviewState,requestId:'primary-revise-${presentation}',form:InteractionUI.parseUiForm({...reviewState.form,actions:[{id:'revise',label:'Revise',requires:['feedback'],primary:true},{id:'approve',label:'Approve'}]})};view.updateUi(reviewState);window.reviewForm=[...document.querySelectorAll('form')].find(form=>form.querySelector('.interaction-reference-field'));reviewForm.requestSubmit();`);
     assert.equal(await evaluate(`replies.length`), count + 2, "programmatic submission cannot bypass requires");
     assert.match(await evaluate(`reviewForm.querySelector('.interaction-error').textContent`), /enter a value/);
-    await evaluate(`{const input=reviewForm.querySelector('textarea');input.value='More context';input.dispatchEvent(new Event('input'));}`);
+    await fillField(`reviewForm.querySelector('.interaction-reference-field textarea')`, "More context");
     assert.equal(await evaluate(`reviewForm.querySelector('button[type=submit]').disabled`), false);
-    await evaluate(`{const input=reviewForm.querySelector('textarea');input.value='';input.dispatchEvent(new Event('input'));}`);
+    await fillField(`reviewForm.querySelector('.interaction-reference-field textarea')`, "");
     assert.equal(await evaluate(`reviewForm.querySelector('button[type=submit]').disabled`), true, "clearing feedback disables the action again");
     await evaluate(`view.updateUi({...reviewState,status:'cancelled'});`);
-    await evaluate(`{const input=reviewForm.querySelector('textarea');input.value='stale answer';input.dispatchEvent(new Event('input'));}reviewForm.requestSubmit();`);
+    // The closed form releases its editor, so there is no field left to type into.
+    assert.equal(await evaluate(`reviewForm.querySelectorAll('.interaction-reference-field textarea').length`), 0);
+    await evaluate(`reviewForm.requestSubmit();`);
     assert.equal(await evaluate(`replies.length`), count + 2, "closed controls cannot send a stale response");
     assert.equal(await evaluate(`reviewForm.querySelector('button[type=submit]').disabled`), true);
   }
@@ -268,7 +304,51 @@ try {
   assert.equal(await evaluate(`new Promise(resolve=>setTimeout(()=>resolve(noteField.value),50))`), "@a.ts @.dext/attachments/p.png ");
   assert.equal(await evaluate(`noteField.classList.contains('file-drop-active')`), false);
   await evaluate(`fileForm.element.remove()`);
-  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, dropped files and pasted images in a form field, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
+  // The same field with the chip surface: the answer keeps the full path, the
+  // reader sees the Composer's chip.
+  const attachment = ".dext-global/attachments/6ba0ee58244ae270b77dd205.png";
+  const codeReference = "src/review.ts#L3,1-L4,2";
+  const feedback = `除了要滚动到对应天赋树节点外，还要打开那个节点的气泡说明 @${attachment} ，代码见 @${codeReference}`;
+  await evaluate(`window.chipFiles={resolve:async(paths)=>paths.map(path=>'@'+path.split('/').pop()),attach:async()=>'.dext-global/attachments/p.png',onError:(error)=>{throw error;}};
+    window.chipForm=new InteractionUI.InteractionForm(InteractionUI.parseUiForm({title:'Review',presentation:'dialog',fields:[{id:'feedback',type:'input',label:'补充说明',required:false,multiline:true}],actions:[{id:'revise',label:'补充说明，重新制定方案',requires:['feedback'],primary:true}]}),(result)=>{window.chipReply=result;},{feedback:{type:'input',value:${JSON.stringify(feedback)}}},()=>{},{...chipFiles,referenceField:(options)=>new ReferenceUI.ReferenceField(chipFiles,clipboardStub,options)});
+    window.chipDialog=new InteractionUI.InteractionDialog(chipForm);document.body.append(chipDialog.element);chipDialog.open();window.chipEditor=chipForm.element.querySelector('.interaction-reference-field');`);
+  assert.equal(await evaluate(`waitChips(chipEditor,2)`), 2, "attachment and code references each render one chip");
+  assert.equal(await evaluate(`[...chipEditor.querySelectorAll('.dext-ref-chip')].some(chip=>chip.textContent.includes('review.ts 3-4'))`), true, "a code reference shows its compact label");
+  assert.equal(await evaluate(`chipEditor.querySelector('.dext-ref-chip').textContent.includes('…')`), true, "a narrow field elides the chip label");
+  const referenceScreenshot = await send("Page.captureScreenshot");
+  await writeFile(join(artifacts, "reference-field.png"), Buffer.from(referenceScreenshot.data, "base64"));
+  await evaluate(`{const data=new DataTransfer();data.items.add(new File(['x'],'p.png',{type:'image/png'}));
+    chipEditor.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
+  assert.equal(await evaluate(`waitChips(chipEditor,3)`), 3, "a pasted image becomes a chip");
+  await evaluate(`{const data=new DataTransfer();data.setData('text/uri-list','file:///repo/a.ts');const target=chipEditor.querySelector('textarea');
+    target.dispatchEvent(new DragEvent('dragover',{dataTransfer:data,bubbles:true,cancelable:true}));
+    target.dispatchEvent(new DragEvent('drop',{dataTransfer:data,bubbles:true,cancelable:true}));}`);
+  assert.equal(await evaluate(`waitChips(chipEditor,4)`), 4, "a dropped file becomes a chip");
+  const chipBox = JSON.parse(await evaluate(`{const chip=[...chipEditor.querySelectorAll('.dext-ref-chip')].find(chip=>chip.textContent.includes('p.png'));const range=document.createRange();const close=chip.textContent.lastIndexOf('×');range.setStart(chip.firstChild,close);range.setEnd(chip.firstChild,close+1);const box=range.getBoundingClientRect();JSON.stringify({x:box.left+box.width/2,y:box.top+box.height/2})}`));
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x: chipBox.x, y: chipBox.y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: chipBox.x, y: chipBox.y, button: "left", clickCount: 1 });
+  assert.equal(await evaluate(`waitChips(chipEditor,3)`), 3, "× removes just that reference");
+  // A copy from a VS Code editor arrives as its `@path`, not as the code itself.
+  const pastedCode = "export interface AgentProfile {\n  id: string;\n}";
+  await evaluate(`window.clipboardStub.read=async()=>({text:'@src/review.ts#L5,1-L6,2',contextAttached:false,codeReference:{expression:'@src/review.ts#L5,1-L6,2',payload:'src/review.ts#L5,1-L6,2'}});
+    {const data=new DataTransfer();data.setData('text/plain',${JSON.stringify(pastedCode)});
+    chipEditor.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
+  assert.equal(await evaluate(`waitChips(chipEditor,4)`), 4, "pasted editor code becomes a reference chip");
+  assert.equal(await evaluate(`chipEditor.querySelector('textarea').value.includes('AgentProfile')`), false, "the copied file content never lands in the answer");
+  await evaluate(`window.clipboardStub.read=async()=>undefined;
+    {const data=new DataTransfer();data.setData('text/plain',' notes');
+    chipEditor.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
+  assert.equal(await evaluate(`new Promise(done=>setTimeout(()=>done(chipEditor.querySelector('textarea').value.includes('notes')),50))`), true, "an ordinary paste keeps its text");
+  await evaluate(`chipForm.element.querySelector('button[type=submit]').click()`);
+  const chipAnswer = await evaluate(`chipReply.answers.feedback.value`);
+  assert.equal(chipAnswer.includes(attachment), true, "an untouched path stays whole in the answer");
+  assert.equal(chipAnswer.includes("attachments/p.png"), false, "the removed path is gone from the answer");
+  assert.equal(chipAnswer.includes("@a.ts"), true, "a dropped file reaches the answer as @path");
+  assert.equal(chipAnswer.includes(`@${codeReference}`), true, "a code reference keeps its range in the answer");
+  assert.equal(chipAnswer.includes("@src/review.ts#L5,1-L6,2"), true, "a pasted code reference reaches the answer");
+  assert.equal(chipAnswer.includes("AgentProfile"), false, "pasting code leaves no source text behind");
+  await evaluate(`chipDialog.element.remove()`);
+  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, dropped files and pasted images in a form field, reference chips in single- and multiline answers, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
 } finally {
   try { await shutdown?.(); } catch {}
   socket?.close(); browser.kill();

@@ -4,6 +4,8 @@ export interface FieldControl {
   element: HTMLElement;
   read(): UiFieldAnswer;
   clearSecret(): void;
+  /** Released when the form is terminal and its answers are already read. */
+  disable?(): void;
 }
 let groupId = 0;
 export function selectionGroupField(field: UiSelectionField, draft: UiFieldAnswer | undefined, change: () => void): FieldControl {

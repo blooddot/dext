@@ -10,6 +10,25 @@ export interface InteractionFileHost {
   resolve(paths: string[]): Promise<string[]>;
   attach(file: File): Promise<string>;
   onError(error: unknown): void;
+  /** Builds the Composer's chip surface for an answer. Without it the field
+   * stays a native input. */
+  referenceField?(options: InteractionReferenceFieldOptions): InteractionReferenceField;
+}
+
+export interface InteractionReferenceFieldOptions {
+  value: string;
+  placeholder?: string;
+  ariaLabel: string;
+  required: boolean;
+  multiline: boolean;
+  onChange(): void;
+}
+
+export interface InteractionReferenceField {
+  element: HTMLElement;
+  value(): string;
+  insertReferences(expressions: readonly string[]): void;
+  disable(): void;
 }
 
 export class InteractionForm {
@@ -58,14 +77,26 @@ export class InteractionForm {
       if (field.description) { const description = document.createElement("p"); description.textContent = field.description; fieldset.append(description); }
       let control: FieldControl;
       if (field.type === "input") {
-        const input = field.multiline && !field.secret ? document.createElement("textarea") : document.createElement("input");
-        if (input instanceof HTMLInputElement) input.type = field.secret ? "password" : "text";
-        input.autocomplete = "off"; input.maxLength = 20000;
-        input.setAttribute("aria-label", field.label); input.setAttribute("aria-required", String(field.required));
-        const answer = draft[field.id]; input.value = answer?.type === "input" ? answer.value : field.default ?? "";
-        input.placeholder = field.placeholder ?? ""; input.addEventListener("input", refresh);
-        if (!field.secret) this.bindFiles(input, refresh);
-        control = { element: input, read: () => ({ type: "input", value: input.value }), clearSecret: () => { if (field.secret) input.value = ""; } };
+        const answer = draft[field.id];
+        const initial = answer?.type === "input" ? answer.value : field.default ?? "";
+        // A secret never leaves the native control, so it cannot be projected.
+        const reference = field.secret ? undefined : this.files?.referenceField?.({
+          value: initial, ...(field.placeholder ? { placeholder: field.placeholder } : {}),
+          ariaLabel: field.label, required: field.required, multiline: Boolean(field.multiline), onChange: refresh
+        });
+        if (reference) {
+          control = { element: reference.element, read: () => ({ type: "input", value: reference.value() }), clearSecret: () => {},
+            disable: () => reference.disable() };
+        } else {
+          const input = field.multiline && !field.secret ? document.createElement("textarea") : document.createElement("input");
+          if (input instanceof HTMLInputElement) input.type = field.secret ? "password" : "text";
+          input.autocomplete = "off"; input.maxLength = 20000;
+          input.setAttribute("aria-label", field.label); input.setAttribute("aria-required", String(field.required));
+          input.value = initial;
+          input.placeholder = field.placeholder ?? ""; input.addEventListener("input", refresh);
+          if (!field.secret) this.bindFiles(input, refresh);
+          control = { element: input, read: () => ({ type: "input", value: input.value }), clearSecret: () => { if (field.secret) input.value = ""; } };
+        }
       } else control = field.type === "select" ? selectField(field, draft[field.id], refresh) : selectionGroupField(field, draft[field.id], refresh);
       this.controls.set(field.id, control); fieldset.append(control.element); this.element.append(fieldset);
     }
@@ -148,6 +179,7 @@ export class InteractionForm {
   }
   disable(): void {
     this.inactive = true;
+    for (const control of this.controls.values()) control.disable?.();
     for (const input of this.element.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>("input,button,textarea")) input.disabled = true;
     this.suspend();
   }

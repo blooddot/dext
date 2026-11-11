@@ -33,6 +33,7 @@ import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImag
 import { FileDropClient } from "./fileDropClient.js";
 import { ImageAttachments } from "./imageAttachments.js";
 import { McpAssistantView } from "./mcpAssistantView.js";
+import { ReferenceField } from "./referenceField.js";
 import { colorizeCodeBlocks, colorizeSource } from "./sourceHighlight.js";
 
 import type { HarnessPresetOption } from "../features/agents/contracts/agent.js";
@@ -47,6 +48,7 @@ import { observeComposerOverflow } from "../features/conversations/browser/compo
 import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
 import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
 import { renderConversationTabs } from "../features/conversations/browser/conversationTabs.js";
+import type { InteractionFileHost } from "../features/conversations/browser/interactionForm.js";
 import { OutputScrollController } from "../features/conversations/browser/outputScrollController.js";
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
 import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
@@ -335,6 +337,10 @@ async function attachFormImage(file: File): Promise<string> {
 }
 
 function createTurnQuestions(turnId: string, sessionId: string | undefined): AgentInputView {
+  const formFiles: InteractionFileHost = {
+    resolve: (paths) => fileDrop.resolve(paths), attach: attachFormImage, onError: renderError,
+    referenceField: (options) => new ReferenceField(formFiles, clipboard, options)
+  };
   return new AgentInputView((requestId, answers) => {
     if (sessionId) vscode.postMessage({ type: "agentInputResponse", sessionId, turnId, requestId, answers });
   }, (state, response) => vscode.postMessage({ type: "uiResponse", sessionId: state.sessionId, turnId: state.turnId, requestId: state.requestId, response }),
@@ -348,7 +354,7 @@ function createTurnQuestions(turnId: string, sessionId: string | undefined): Age
       while (JSON.stringify(entries).length > 200000) entries.shift();
       vscode.setState({ interactionDrafts: Object.fromEntries(entries) });
     }
-  }, { resolve: (paths) => fileDrop.resolve(paths), attach: attachFormImage, onError: renderError });
+  }, formFiles);
 }
 
 const transcript = new TranscriptView({

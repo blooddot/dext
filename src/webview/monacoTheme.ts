@@ -5,7 +5,12 @@ import { mixDefaultForeground, monacoColor, monacoThemeRules } from "./monacoThe
 /** The Monaco theme the composer and the conversation both paint code with. */
 export const DEXT_MONACO_THEME = "dext";
 
-export function applyMonacoTheme(theme?: EditorTokenTheme): void {
+/** The token rules of the last call: a surface that only wants the colors
+ * refreshed (a form field) must not drop them for every other surface. */
+let appliedTheme: EditorTokenTheme | undefined;
+
+export function applyMonacoTheme(theme: EditorTokenTheme | undefined = appliedTheme): void {
+  appliedTheme = theme;
   const css = getComputedStyle(document.body);
   const appearance = document.body.dataset.dextTheme;
   const contrast = document.body.className.includes("high-contrast");
