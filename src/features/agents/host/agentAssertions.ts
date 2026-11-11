@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { PatchChange, Range } from "../../../shared/contracts/types.js";
+import { contentHash } from "../../../platform/node/hash.js";
 import { isRecord } from "../../../shared/lib/record.js";
 
 /**
@@ -62,10 +62,6 @@ function rangeText(content: string, range: Range): string | undefined {
   const end = positionOffset(content, range.end.line, range.end.character);
   if (start === undefined || end === undefined || end < start) return undefined;
   return content.slice(start, end);
-}
-
-function contentHash(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 /** Number of lines between the common prefix and suffix of `before`/`after`.

@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 import { patchResultFrom } from "../../shared/protocol/patch.js";
+import { contentHash } from "../node/hash.js";
 import type { ApplyResult, CodeRef, PatchChange, Range } from "../../shared/contracts/types.js";
 import type { DeterministicHandler } from "../../features/workflow/contracts/runtime.js";
 
@@ -11,10 +11,6 @@ function vscodeRange(range: Range): vscode.Range {
     range.end.line,
     range.end.character
   );
-}
-
-function contentHash(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 function fullDocumentRange(document: vscode.TextDocument): vscode.Range {
