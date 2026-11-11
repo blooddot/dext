@@ -4,6 +4,10 @@ import type { DextFileReference } from "../contracts/fileReference.js";
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MIN_ATTACHMENT_BYTES = 64 * 1024;
 export const MAX_CONFIGURED_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+/** A pasted file has to cross the Webview bridge as base64, which costs about
+ * 2.3x its size in memory. A dropped file is copied by the host instead, so it
+ * carries no such ceiling. */
+export const MAX_PASTED_VIDEO_BYTES = 25 * 1024 * 1024;
 export const CLIPBOARD_TTL_MS = 60_000;
 
 export function attachmentByteLimit(value: unknown): number {

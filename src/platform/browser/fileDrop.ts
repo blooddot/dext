@@ -87,9 +87,19 @@ export function droppedFilePaths(data: DataTransfer | null): string[] {
 
 /** The first image in a paste or drop; everything else in it is text or files. */
 export function findImageItem(data: DataTransfer | null): DataTransferItem | undefined {
+  return firstFileItem(data, "image/");
+}
+
+/** The first video in a paste. It is stored like a pasted image; the only
+ * difference is that the chip cannot show a still of it. */
+export function findVideoItem(data: DataTransfer | null): DataTransferItem | undefined {
+  return firstFileItem(data, "video/");
+}
+
+function firstFileItem(data: DataTransfer | null, prefix: string): DataTransferItem | undefined {
   if (!data) return undefined;
   for (const item of data.items) {
-    if (item.kind === "file" && item.type.startsWith("image/")) return item;
+    if (item.kind === "file" && item.type.startsWith(prefix)) return item;
   }
   return undefined;
 }

@@ -6,6 +6,7 @@ import { createConversationServices, type ConversationServices } from "./convers
 import type { DextApplication } from "./application.js";
 import {
 AttachmentStore,
+MAX_PASTED_VIDEO_BYTES,
 writeExactClipboardText
 } from "../shared/lib/attachmentStore.js";
 import type { AgentSelection } from "../features/agents/contracts/agent.js";
@@ -46,12 +47,17 @@ function imageExtension(mimeType: string): string | undefined {
     "image/jpeg": ".jpg",
     "image/gif": ".gif",
     "image/webp": ".webp",
-    "image/bmp": ".bmp"
+    "image/bmp": ".bmp",
+    // Videos take the same path: an attachment file named by its MIME type.
+    "video/mp4": ".mp4",
+    "video/x-m4v": ".m4v",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm"
   })[normalized];
 }
 
 /** The reverse of `imageExtension`, for opening an attachment in the annotation tab. */
-import { IMAGE_MIME_TYPES } from "../features/conversations/host/attachmentImage.js";
+import { IMAGE_MIME_TYPES, isVideoAttachment } from "../features/conversations/host/attachmentImage.js";
 import { ImageAnnotatorPanel } from "../features/conversations/host/imageAnnotatorPanel.js";
 
 /** The Webview host. It owns the VS Code surface, the HTML shell, message
@@ -922,12 +928,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "resolveDroppedFiles": {
-          const references = await clipboardFileReferences(request.paths.join("\n"));
+          // A dropped video is copied into the attachments directory: the
+          // annotation tab and the agent both need a Dext-owned file, and a copy
+          // keeps a large video off the Webview's base64 bridge.
+          const copied = await this.copyDroppedVideos(request.paths);
+          const references = copied.remaining.length
+            ? await clipboardFileReferences(copied.remaining.join("\n"))
+            : [];
+          const expressions = [...(references?.map((reference) => reference.expression) ?? []), ...copied.expressions];
           await this.post({
             type: "resolveDroppedFilesResult",
             requestId: request.requestId,
-            expressions: references?.map((reference) => reference.expression) ?? [],
-            ...(!references?.length ? { error: "Could not reference the dropped files. Check that they still exist and are accessible." } : {})
+            expressions,
+            ...(!expressions.length ? { error: "Could not reference the dropped files. Check that they still exist and are accessible." } : {})
           });
           break;
         }
@@ -1047,7 +1060,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "pasteImage": {
-          const attachment = await this.storeImage(request.data, request.mimeType);
+          // A video crosses the bridge as base64, so it gets the bridge's ceiling
+          // rather than the storage one.
+          const limit = request.mimeType.toLowerCase().startsWith("video/") ? MAX_PASTED_VIDEO_BYTES : undefined;
+          const attachment = await this.storeImage(request.data, request.mimeType, limit);
           const view = this.view;
           if (!view) throw new Error("Dext input is not ready.");
           await this.post({
@@ -1269,14 +1285,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async storeImage(data: string, mimeType: string): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
+  /** `limit` is the base64 bridge's own ceiling for a pasted video; the
+   * configured attachment limit applies otherwise. */
+  private async storeImage(data: string, mimeType: string, limit = this.application.storage.attachmentByteLimit()): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
     const extension = imageExtension(mimeType);
-    if (!extension) throw new Error("Unsupported image format. Paste a PNG, JPEG, GIF, WebP, or BMP image.");
+    if (!extension) throw new Error("Unsupported attachment format. Paste a PNG, JPEG, GIF, WebP, BMP, MP4, M4V, MOV, or WebM file.");
     const name = `${randomBytes(12).toString("hex")}${extension}`;
     const buffer = Buffer.from(data, "base64");
-    const limit = this.application.storage.attachmentByteLimit();
     if (buffer.byteLength > limit) {
-      throw new Error(`Attachments must be ${limit} bytes or smaller.`);
+      throw new Error(`Attachments must be ${limit} bytes or smaller.${limit === MAX_PASTED_VIDEO_BYTES ? " Drop the file instead: a dropped file is copied, not encoded." : ""}`);
     }
     const directory = this.application.storage.directory("attachments");
     await vscode.workspace.fs.createDirectory(directory);
@@ -1297,6 +1314,49 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await vscode.workspace.fs.createDirectory(directory);
     const uri = vscode.Uri.joinPath(directory, name);
     await vscode.workspace.fs.writeFile(uri, buffer);
+    await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
+    return { relativePath: this.application.storage.reference("attachments", name), uri, name };
+  }
+
+  /** A dropped video is copied, not referenced: the annotation tab needs a file
+   * Dext can reach and the base64 bridge is only for the clipboard. */
+  private async copyDroppedVideos(paths: readonly string[]): Promise<{ expressions: string[]; remaining: string[] }> {
+    const expressions: string[] = [];
+    const remaining: string[] = [];
+    for (const path of paths) {
+      let uri: vscode.Uri | undefined;
+      try {
+        uri = vscode.Uri.parse(path, true);
+      } catch {
+        uri = undefined;
+      }
+      if (!uri?.scheme || !isVideoAttachment(uri.fsPath ?? "")) {
+        remaining.push(path);
+        continue;
+      }
+      const attachment = await this.copyAttachment(uri);
+      expressions.push(`@${attachment.relativePath}`);
+      const view = this.view;
+      if (view) {
+        this.postWhenReady({
+          type: "imageAttachment",
+          relativePath: attachment.relativePath,
+          webviewUri: view.webview.asWebviewUri(attachment.uri).toString(),
+          name: attachment.name
+        });
+      }
+    }
+    return { expressions, remaining };
+  }
+
+  /** The host-side twin of `storeImage`: the bytes never cross the Webview, so
+   * the file has no size ceiling beyond the workspace's own. */
+  private async copyAttachment(source: vscode.Uri): Promise<{ relativePath: string; uri: vscode.Uri; name: string }> {
+    const name = `${randomBytes(12).toString("hex")}${extname(source.fsPath).toLowerCase()}`;
+    const directory = this.application.storage.directory("attachments");
+    await vscode.workspace.fs.createDirectory(directory);
+    const uri = vscode.Uri.joinPath(directory, name);
+    await vscode.workspace.fs.copy(source, uri, { overwrite: true });
     await this.application.storage.pruneAttachments(this.application.storage.attachmentLimit(), uri);
     return { relativePath: this.application.storage.reference("attachments", name), uri, name };
   }
@@ -1326,7 +1386,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   private async deleteImage(relativePath: string): Promise<void> {
     const normalized = relativePath.replaceAll("\\", "/");
-    if (!/^(?:\.dext|\.dext-global)\/attachments\/[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp)$/.test(normalized)) return;
+    if (!/^(?:\.dext|\.dext-global)\/attachments\/[a-f0-9]{24}\.(?:png|jpg|gif|webp|bmp|mp4|m4v|mov|webm)$/.test(normalized)) return;
     const uri = this.application.storage.uriForReference("attachments", normalized);
     if (!uri) return;
     try {

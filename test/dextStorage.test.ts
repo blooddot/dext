@@ -21,4 +21,10 @@ describe("Dext storage attachments", () => {
   it("leaves a file name Dext never writes as ordinary text", () => {
     expect(storage.attachmentPrompt("@.dext-global/attachments/notes.md")).not.toContain("Dext attachment files");
   });
+
+  it("hands an agent the path of a pasted video attachment", () => {
+    const clip = `${"b".repeat(24)}.mp4`;
+    expect(storage.attachmentPrompt(`What goes wrong in @.dext-global/attachments/${clip}?`))
+      .toContain(`- /store/attachments/${clip}`);
+  });
 });

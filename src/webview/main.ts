@@ -24,11 +24,12 @@ import type {
 } from "../shared/contracts/types.js";
 import type { UiFormAnswers } from "../shared/contracts/uiForm.js";
 import { formatDuration } from "../shared/lib/duration.js";
+import { MAX_PASTED_VIDEO_BYTES } from "../shared/lib/attachmentStore.js";
 import { markdownCodeCopy } from "../shared/lib/markdownCopy.js";
 import { dextMarkdown } from "../shared/lib/markdown.js";
 import { ClipboardClient } from "./clipboardClient.js";
 import { DextCodeEditor } from "./codeEditor.js";
-import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImageItem, isFileDrag } from "../platform/browser/fileDrop.js";
+import { bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImageItem, findVideoItem, isFileDrag } from "../platform/browser/fileDrop.js";
 import { FileDropClient } from "./fileDropClient.js";
 import { ImageAttachments } from "./imageAttachments.js";
 import { McpAssistantView } from "./mcpAssistantView.js";
@@ -314,9 +315,9 @@ let nextFormImage = 0;
 function readImageData(file: File): Promise<{ data: string; mimeType: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Could not read the pasted image."));
+    reader.onerror = () => reject(new Error("Could not read the pasted file."));
     reader.onload = () => {
-      if (typeof reader.result !== "string") { reject(new Error("Could not read the pasted image.")); return; }
+      if (typeof reader.result !== "string") { reject(new Error("Could not read the pasted file.")); return; }
       const comma = reader.result.indexOf(",");
       resolve({ data: reader.result.slice(comma + 1), mimeType: reader.result.slice(5, reader.result.indexOf(";")) });
     };
@@ -2438,10 +2439,20 @@ document.addEventListener("keydown", (event) => {
   closeComposerMenus();
 });
 elements.inputShell.addEventListener("paste", (event) => {
-  const file = findImageItem(event.clipboardData)?.getAsFile();
-  if (!file) return;
+  const video = findVideoItem(event.clipboardData);
+  const file = video?.getAsFile() ?? findImageItem(event.clipboardData)?.getAsFile();
+  if (!video && !file) return;
   event.preventDefault();
   event.stopPropagation();
+  if (video && (!file || file.size > MAX_PASTED_VIDEO_BYTES)) {
+    // Dropping the file copies it in the host, so this is where a pasted video
+    // that is too big still has a way through.
+    renderError(new Error(file
+      ? `A pasted video must be ${MAX_PASTED_VIDEO_BYTES / (1024 * 1024)} MB or smaller. Drop the file instead: a dropped file is copied, not encoded.`
+      : "The pasted video could not be read from the clipboard. Drop the file instead."));
+    return;
+  }
+  if (!file) return;
   void readImageData(file)
     .then((image) => vscode.postMessage({ type: "pasteImage", ...image }))
     .catch(renderError);
