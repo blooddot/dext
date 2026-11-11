@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ResourceKind } from "../src/features/resources/contracts/resourceSession.js";
-import { GlobalResourcesEditorProvider } from "../src/features/resources/host/globalResourcesEditorProvider.js";
+import { ResourceBrowserProvider } from "../src/features/resources/host/resourceBrowserProvider.js";
 import { renderGlobalResources } from "../src/features/resources/presentation/globalResourcesPanel.js";
 import { EditorTabManager, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
 import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
@@ -45,7 +45,7 @@ describe("global resources panel", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
     const onCommand = vi.fn(async () => { if (confirmed) files = []; return confirmed; });
-    const provider = new GlobalResourcesEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "project", onCommand });
+    const provider = new ResourceBrowserProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "project", onCommand });
     await provider.showList();
     await provider.handleMessage(provider.listTabKey, { type: "resourceCommand", command: "dext.deleteResource", id: "skill:project:review/SKILL.md", viewState: { query: "review", collapsed: ["Rule"], scrollTop: 123 } });
     expect(onCommand).toHaveBeenCalledWith("dext.deleteResource", { scope: "project", id: "skill:project:review/SKILL.md" });
@@ -64,7 +64,7 @@ describe("global resources panel", () => {
     const list = vi.spyOn(dataSource, "list");
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    const provider = new GlobalResourcesEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "project", onCommand: async () => true });
+    const provider = new ResourceBrowserProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "project", onCommand: async () => true });
     await provider.showList();
     const before = host.created[0]!.panel.html;
     await provider.handleMessage(provider.listTabKey, { type: "resourceCommand", command: "dext.toggleSkillVisibility", id: "skill:project:review/SKILL.md" });
@@ -78,7 +78,7 @@ describe("global resources panel", () => {
     const dataSource = createFileResourceDataSource({ roots: () => ({ global: "C:/global" }), listFiles: async kind => kind === "skill" ? files : [], readFile: async () => "Skill source" });
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    const provider = new GlobalResourcesEditorProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "global", onCommand: async () => { files = []; throw new Error("Trash unavailable"); } });
+    const provider = new ResourceBrowserProvider({ manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "global", onCommand: async () => { files = []; throw new Error("Trash unavailable"); } });
     await provider.showList();
     await expect(provider.handleMessage(provider.listTabKey, { type: "resourceCommand", command: "dext.deleteResource", id: "skill:global:review/SKILL.md" })).rejects.toThrow("Trash unavailable");
     expect(host.created[0]!.panel.html).not.toContain('data-resource-open="skill:global:review/SKILL.md"');
@@ -94,9 +94,9 @@ describe("global resources panel", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
     const onCommand = vi.fn();
-    const provider = new GlobalResourcesEditorProvider({
+    const provider = new ResourceBrowserProvider({
       manager, restorer: new EditorTabRestorer(manager), dataSource, scope: "global", onCommand
-    }, ["api", "mcp", "rule", "skill"]);
+    });
     await provider.showList();
     expect(host.created[0]!.panel.html).not.toContain('data-resource-open="api:project:git/commit.ts"');
     await provider.handleMessage(provider.listTabKey, { type: "resourceScope", scope: "project" });
@@ -142,7 +142,7 @@ describe("global resources panel", () => {
     expect(document.groups.map((group) => group.label)).toEqual(["MCP", "Rule", "Skill"]);
   });
 
-  it("lists every configured kind and nothing from the API directory", async () => {
+  it("lists every resource kind, the API directory included", async () => {
     const requested: Array<readonly ResourceKind[]> = [];
     const dataSource: ResourceEditorDataSource = {
       list: (kinds) => {
@@ -153,18 +153,18 @@ describe("global resources panel", () => {
     };
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    const provider = new GlobalResourcesEditorProvider({
+    const provider = new ResourceBrowserProvider({
       manager,
       restorer: new EditorTabRestorer(manager),
       dataSource,
       scope: "global"
     });
     await provider.showList();
-    expect(requested).toEqual([["mcp", "rule", "skill"]]);
+    expect(requested).toEqual([["api", "mcp", "rule", "skill"]]);
     const html = host.created[0]!.panel.html;
+    expect(html).toContain('data-resource-group="API"');
     expect(html).toContain('data-resource-group="MCP"');
     expect(html).toContain('data-resource-group="Rule"');
-    expect(html).not.toContain('data-resource-group="API"');
     expect(html).toContain("dext.newResource");
   });
 

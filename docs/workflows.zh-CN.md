@@ -99,7 +99,7 @@ const answer = await ask({ input: "解释这段代码", cli: "claude", model: "s
 
 Node 内置模块和工作区依赖可以直接使用，因为代码运行在真正的 Node 进程中：`import fs from "node:fs/promises"`、`import path from "node:path"` 与在任何其他 Node 程序里完全一致。没有能力闸门，也没有 `node.*` 或 `js.*` 命名空间：内核中由模型编写的代码拥有用户的完整权限。`terminal` 和 `apply` 不再有确认弹窗；现有的工作区信任检查仍然存在，但已不再是安全边界。
 
-**Dext: View APIs** 在可调用 API 之外，还列出只读的 **node** 与 **js** 参考：每个 Node 内置模块一条（`node:fs/promises`、`node:path`、`node:url`…），Node 或 ECMAScript 提供的每个全局量一条（`process`、`Buffer`、`fetch`、`setTimeout`、`JSON`、`Array`、`Intl`…）。这份参考直接由声明文件生成——`@types/node` 与 TypeScript 自带的 `lib.es*.d.ts`——因此每个签名都是编辑器与内核真正解析到的那个签名，每段说明都是声明里原本的 JSDoc，没有任何说明是手写的。打开条目会列出它的全部成员及其签名、参数、返回值和文档，模块名一行的 **Copy** 按钮会复制精确的模块标识符。这些条目说明的是代码可以 `import` 或作为全局量读取的内容；它们不是 Dext API，因此没有 Insert reference 操作，也不能以 `node.*` 或 `js.*` 的形式调用。
+**Dext: View Resources** 打开资源页。**Project** 与 **Global** 两个页签列出该作用域里的文件 API、MCP 清单、规则和 Skill；**Dext** 页签列出 Dext 自带的可调用 API，以及旁边的只读 **node** 与 **js** 参考：每个 Node 内置模块一条（`node:fs/promises`、`node:path`、`node:url`…），Node 或 ECMAScript 提供的每个全局量一条（`process`、`Buffer`、`fetch`、`setTimeout`、`JSON`、`Array`、`Intl`…）。这份参考直接由声明文件生成——`@types/node` 与 TypeScript 自带的 `lib.es*.d.ts`——因此每个签名都是编辑器与内核真正解析到的那个签名，每段说明都是声明里原本的 JSDoc，没有任何说明是手写的。打开条目会列出它的全部成员及其签名、参数、返回值和文档，模块名一行的 **Copy** 按钮会复制精确的模块标识符。这些条目说明的是代码可以 `import` 或作为全局量读取的内容；它们不是 Dext API，因此没有 Insert reference 操作，也不能以 `node.*` 或 `js.*` 的形式调用。
 
 `print` 已移除。`console.log(...)`、`console.error(...)` 会被捕获为进程输出步骤并转发到真实输出流，但它们不是 Dext 结果：没有调用信息，也没有耗时。需要类型化结果时请返回值或调用 API。
 

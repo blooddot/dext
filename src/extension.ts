@@ -8,9 +8,8 @@ import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
 import { redactedMcpUrl } from "./features/mcp/host/mcpRegistry.js";
 import { recordWorkflow } from "./features/workflow/domain/workflowRecorder.js";
 import { skillEntryId, type ResourceEditorDataSource } from "./features/resources/contracts/resourceDocuments.js";
-import type { ResourceScope } from "./features/resources/contracts/resourceSession.js";
-import { ApiEditorProvider } from "./features/resources/host/apiEditorProvider.js";
-import { GlobalResourcesEditorProvider } from "./features/resources/host/globalResourcesEditorProvider.js";
+import type { ResourcePage, ResourceScope } from "./features/resources/contracts/resourceSession.js";
+import { ResourceBrowserProvider } from "./features/resources/host/resourceBrowserProvider.js";
 import { createApiDataSource, createFileResourceDataSource } from "./features/resources/host/resourceEditorProvider.js";
 import { managedResourcePath, removeManagedResource } from "./features/resources/host/resourceActions.js";
 import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
@@ -84,11 +83,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await preferences.pruneConversations(history.list(true).map((session) => session.id));
   const historyPanel = new DextHistoryPanel(context.extensionUri, history, preferences, application.storage, appearance);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences, appearance);
-  // Unified editor tabs: API, Global Resources, and History all go through one manager so
+  // Unified editor tabs: Resources and History all go through one manager so
   // a stable key can never open twice, whichever recovery path runs first.
   const editors: {
-    api?: ApiEditorProvider;
-    globalResources?: GlobalResourcesEditorProvider;
+    resources?: ResourceBrowserProvider;
   } = {};
   const renderEditorHtml = (panel: VscodeWebviewPanelLike, body: string): string => {
     const webview = (panel as vscode.WebviewPanel).webview;
@@ -122,7 +120,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       const kind = parseEditorTabKey(key)?.kind;
-      const provider = kind === "api" ? editors.api : kind === "globalResources" ? editors.globalResources : undefined;
+      const provider = kind === "globalResources" ? editors.resources : undefined;
       void reportCommandError(() => provider?.handleMessage(key, message) ?? Promise.resolve());
     }
   );
@@ -167,10 +165,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   });
   const apiDataSource = createApiDataSource({
-    methods: () => application.registry.list(), files: resourceDataSource, reference: apiReference
+    methods: () => application.registry.list(),
+    reference: apiReference
   });
   const resourceCommandFor = (scope: ResourceScope, dataSource: ResourceEditorDataSource) =>
-    async (command: string, payload: { id?: string; kind?: string; pack?: string; path?: string; scope?: ResourceScope }): Promise<void | boolean> => {
+    async (command: string, payload: { id?: string; kind?: string; pack?: string; path?: string; scope?: ResourcePage }): Promise<void | boolean> => {
       if (command.endsWith(".upgradeSkillPack")) {
         if (!payload.pack) throw new Error("Select a Skill pack to update.");
         const result = await vscode.window.withProgress({
@@ -208,7 +207,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       if (command.endsWith(".toggleSkillPackVisibility")) {
         if (!payload.pack) throw new Error("Select a Skill pack to toggle.");
-        await application.toggleSkillPackVisibility(payload.pack, payload.scope);
+        await application.toggleSkillPackVisibility(payload.pack, payload.scope === "project" ? "project" : "global");
         await sidebar.refresh();
         return true;
       }
@@ -296,35 +295,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       await vscode.commands.executeCommand(command);
     };
-  editors.api = new ApiEditorProvider({
-    manager: editorTabs,
-    restorer: editorTabRestorer,
-    dataSource: apiDataSource,
-    scope: "project",
-    onCommand: resourceCommandFor("project", apiDataSource),
-    copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
-  });
-  editors.globalResources = new GlobalResourcesEditorProvider({
+  editors.resources = new ResourceBrowserProvider({
     manager: editorTabs,
     restorer: editorTabRestorer,
     dataSource: resourceDataSource,
+    builtinDataSource: apiDataSource,
     scope: resourceRoots().project ? "project" : "global",
-    availableScopes: () => resourceRoots().project ? ["project", "global"] : ["global"],
+    availableScopes: () => resourceRoots().project ? ["project", "global", "builtin"] : ["global", "builtin"],
     onCommand: async (command, payload) => {
-      // Resources refreshes its file listing; reloading runtime callables is unnecessary.
-      if (command === "dext.reloadMethods") return;
-      return await resourceCommandFor(payload.scope === "project" ? "project" : "global", resourceDataSource)(command, payload);
+      const page = payload.scope ?? "global";
+      // Resources refreshes its file listing; only the Dext page reloads runtime callables.
+      if (page !== "builtin" && command === "dext.reloadMethods") return;
+      return await resourceCommandFor(page === "project" ? "project" : "global", page === "builtin" ? apiDataSource : resourceDataSource)(command, payload);
     },
     copyText: async (text) => { await vscode.env.clipboard.writeText(text); }
-  }, ["api", "mcp", "rule", "skill"]);
-  const resourceSerializer = (provider: () => ApiEditorProvider | GlobalResourcesEditorProvider | undefined) => ({
+  });
+  const resourceSerializer = {
     deserializeWebviewPanel: async (panel: vscode.WebviewPanel, state: unknown): Promise<void> => {
-      const active = provider();
+      const active = editors.resources;
       const restoredState = restoreEditorTabState(state).state;
-      const resourceId = restoredState?.resourceId ?? parseEditorTabKey(restoredState?.key ?? "")?.resourceId;
-      // Migrate old API detail tabs into the single API browser when restoring a window. The browser
-      // keeps one stable key, so a panel restored without usable state can still be adopted.
-      const key = active instanceof ApiEditorProvider ? active.listTabKey : restoredState?.key ?? "";
+      const resourceId = restoredState?.resourceId;
+      // The browser keeps one stable key, so a panel restored without usable state can still be adopted.
+      const key = active?.listTabKey ?? "";
       if (!active || !key) { panel.dispose(); return; }
       const adopted: EditorTabPanelHandle = wrapVscodeWebviewPanel(panel as unknown as VscodeWebviewPanelLike, {
         onDispose: () => { editorTabs.closeIfCurrent(key, adopted); },
@@ -341,13 +333,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         adopted.setHtml?.(renderResourceError(resourceId ?? key, error instanceof Error ? error.message : String(error)));
       }
     }
-  });
+  };
   context.subscriptions.push(
-    vscode.commands.registerCommand("dext.viewApis", () =>
-      reportCommandError(() => editors.api?.showList() ?? Promise.resolve(undefined))
-    ),
     vscode.commands.registerCommand("dext.viewResources", () =>
-      reportCommandError(() => editors.globalResources?.showList() ?? Promise.resolve(undefined))
+      reportCommandError(() => editors.resources?.showList() ?? Promise.resolve(undefined))
     ),
     vscode.commands.registerCommand("dext.openResourceSource", (path?: string) =>
       reportCommandError(() => resourceCommandFor("project", resourceDataSource)("dext.openResourceSource", typeof path === "string" ? { path } : {}))
@@ -361,8 +350,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         scope === "global" ? "global" : "project"
       ))
     ),
-    vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.api, resourceSerializer(() => editors.api)),
-    vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.globalResources, resourceSerializer(() => editors.globalResources))
+    vscode.window.registerWebviewPanelSerializer(EDITOR_TAB_VIEW_TYPES.globalResources, resourceSerializer)
   );
   if (folder?.uri.scheme === "file") {
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, ".dext/mcp/**/*.jsonc"));

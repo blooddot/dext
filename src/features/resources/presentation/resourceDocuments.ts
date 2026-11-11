@@ -1,7 +1,7 @@
 import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
 import { skillEntryId, type ResourceDefinitionDocument, type ResourceEntry, type ResourceListDocument, type ResourcePackRef, type ResourcePanelOptions, type ResourceTreeNode } from "../contracts/resourceDocuments.js";
-import { RESOURCE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
+import { RESOURCE_LABELS, RESOURCE_PAGE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourcePage } from "../contracts/resourceSession.js";
 import { renderApiFlow } from "./apiFlowDiagram.js";
 import { escapeHtml as escapeResourceHtml } from "../../../shared/lib/html.js";
 
@@ -74,7 +74,7 @@ export function filterResourceEntries(entries: readonly ResourceEntry[], query: 
 
 export function buildResourceList(input: {
   kind: ResourceKind;
-  scope: ResourceScope;
+  scope: ResourcePage;
   entries: readonly ResourceEntry[];
   query?: string;
   groupBy?: "directory" | "kind";
@@ -101,7 +101,7 @@ export function renderResourceNavigation(options: ResourcePanelOptions): string 
   const navigation = options.navigation;
   if (!navigation) return "";
   const scope = options.scope && options.availableScopes?.length
-    ? `<span class="resource-scope-switch" role="group" aria-label="Resource scope">${options.availableScopes.map((value) => `<button type="button" data-resource-scope="${value}" class="${value === options.scope ? "is-active" : ""}">${value === "global" ? "Global" : "Project"}</button>`).join("")}</span>` : "";
+    ? `<span class="resource-scope-switch" role="group" aria-label="Resource scope">${options.availableScopes.map((value) => `<button type="button" data-resource-scope="${value}" class="${value === options.scope ? "is-active" : ""}">${RESOURCE_PAGE_LABELS[value]}</button>`).join("")}</span>` : "";
   return `<nav class="resource-navigation" aria-label="Resource navigation" data-resource-scroll="${navigation.scrollTop}">`
     + `<button type="button" data-resource-navigate="back" aria-label="Back" title="Back"${navigation.canGoBack ? "" : " disabled"}>←</button>`
     + `<button type="button" data-resource-navigate="forward" aria-label="Forward" title="Forward"${navigation.canGoForward ? "" : " disabled"}>→</button>`
@@ -169,7 +169,7 @@ export function resourceRefreshButton(prefix: string): string {
 
 
 /** Opens the resource directory for the scope the page is currently showing. */
-export function resourceDirectoryButton(prefix: string, scope?: ResourceScope): string {
+export function resourceDirectoryButton(prefix: string, scope?: ResourcePage): string {
   const label = scope === "project" ? "Open project resources folder" : scope === "global" ? "Open global resources folder" : "Open resources folder";
   return `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.openResourceDirectory" title="${label}" aria-label="${label}">${resourceIcon("folder-opened")}</button>`;
 }

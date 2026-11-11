@@ -1,26 +1,23 @@
 /**
- * Editor-panel identity shared by API, Global Resources, and History.
+ * Editor-panel identity shared by Resources and History.
  *
  * A stable key is derived from the page kind plus an optional resource id, never from a document
  * title or an array index, so the same target resolves to the same tab across reloads.
  */
-export type EditorTabKind = "api" | "globalResources" | "history";
+export type EditorTabKind = "globalResources" | "history";
 
 export const EDITOR_TAB_VIEW_TYPES: Record<EditorTabKind, string> = {
-  api: "dext.api",
   globalResources: "dext.globalResources",
   history: "dext.history"
 };
 
 export const EDITOR_TAB_TITLES: Record<EditorTabKind, string> = {
-  api: "Dext APIs",
   globalResources: "Dext Resources",
   history: "Dext History"
 };
 
 /** Page choices exposed by each editor tab kind. */
 export const EDITOR_TAB_PAGES: Record<EditorTabKind, readonly string[]> = {
-  api: ["list", "detail"],
   globalResources: ["list", "detail"],
   history: ["list"]
 };

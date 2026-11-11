@@ -7,7 +7,7 @@ import { brotliCompressSync } from "node:zlib";
 import { createApiReferenceSource, parseApiReference, type ApiReferenceCatalog } from "../src/features/workflow/host/apiReference.js";
 import { createApiDataSource, createFileResourceDataSource, apiReferenceEntries } from "../src/features/resources/host/resourceEditorProvider.js";
 import { buildResourceList, renderResourceDefinition, renderResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
-import { ApiEditorProvider } from "../src/features/resources/host/apiEditorProvider.js";
+import { ResourceBrowserProvider } from "../src/features/resources/host/resourceBrowserProvider.js";
 import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
 import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
 import type { SidebarState } from "../src/platform/webviewProtocol.js";
@@ -198,24 +198,21 @@ describe("API reference catalog", () => {
     expect(await createApiReferenceSource(corrupt)()).toBeUndefined();
   });
 
-  it("adds the reference to the API list and returns its definition without a file read", async () => {
-    const definition = vi.fn(async () => undefined);
-    const files = { list: vi.fn(async () => []), definition };
-    const dataSource = createApiDataSource({ methods: () => state().methods, files, reference: async () => catalog() });
+  it("adds the reference to the Dext page and returns its definition without a file read", async () => {
+    const dataSource = createApiDataSource({ methods: () => state().methods, reference: async () => catalog() });
     const listed = await dataSource.list(["api"], "");
     expect(listed.map((entry) => entry.name)).toContain("node:path");
     expect(await dataSource.list(["api"], "json")).toHaveLength(1);
     const document = await dataSource.definition("api:global:node:path.json");
     expect(document?.entry.reference?.id).toBe("node:path");
     expect(document?.content).toBe("");
-    expect(definition).not.toHaveBeenCalled();
 
     // Without the catalog the page lists the callable APIs alone.
     const without = createApiDataSource({ methods: () => state().methods });
     expect((await without.list(["api"], "")).map((entry) => entry.name)).toEqual(["ask"]);
   });
 
-  it("keeps Resources file-only while APIs includes contracts, references and same-named file APIs", async () => {
+  it("keeps Resources file-only while the Dext page lists built-in contracts and references", async () => {
     const methods = vi.fn(() => [
       ...state().methods,
       { ...state().methods[0]!, id: "mcp.files.read", source: "project" as const }
@@ -230,7 +227,7 @@ describe("API reference catalog", () => {
       ] : [],
       readFile
     });
-    const apis = createApiDataSource({ methods, files, reference });
+    const apis = createApiDataSource({ methods, reference });
     expect((await files.list(["api"], "")).map(entry => entry.id)).toEqual([
       "api:global:ask.ts", "api:project:git/commit.ts"
     ]);
@@ -239,23 +236,18 @@ describe("API reference catalog", () => {
     expect(reference).not.toHaveBeenCalled();
     readFile.mockClear();
     const listed = await apis.list(["api"], "");
-    expect(listed.map(entry => entry.name)).toEqual(expect.arrayContaining(["ask", "git.commit", "mcp.files.read", "node:path"]));
-    expect(listed.filter(entry => entry.name === "ask")).toHaveLength(2);
+    // A builtin contract and the declarations beside it, never a file API or a project MCP tool.
+    expect(listed.map(entry => entry.name)).toEqual(["ask", "node:path", "js.JSON"]);
     expect((await apis.definition("api:global:ask.ts"))?.entry.source.path).toBeUndefined();
-    expect((await apis.definition("api:project:mcp/files/read.ts"))?.entry.source.path).toBeUndefined();
     expect(readFile).not.toHaveBeenCalled();
-    const file = await apis.definition("file:api:global:ask.ts");
-    expect(file?.entry.id).toBe("file:api:global:ask.ts");
-    expect(file?.entry.source.path).toBe("/global/api/ask.ts");
-    expect(file?.content).toContain("export function ask");
-    expect(await apis.definition("api:project:missing.ts")).toBeUndefined();
+    expect(await apis.definition("api:project:git/commit.ts")).toBeUndefined();
   });
 
   it("copies a specifier through the host rather than the Webview clipboard", async () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
     const copyText = vi.fn();
-    const provider = new ApiEditorProvider({
+    const provider = new ResourceBrowserProvider({
       manager,
       restorer: new EditorTabRestorer(manager),
       dataSource: createApiDataSource({ methods: () => state().methods, reference: async () => catalog() }),

@@ -86,21 +86,21 @@ describe("sidebar panel layout", () => {
     expect(css).toContain(".composer-model-group-heading {");
   });
 
-  it("moves API and Global Resources out of the sidebar into editor tabs", async () => {
+  it("moves the Resources pages out of the sidebar into one editor tab", async () => {
     const html = await source("src/app/sidebarProvider.ts");
     const manifest = await source("package.json");
     const extension = await source("src/extension.ts");
     expect(html).toContain('<section id="input-section" class="input-section">');
     expect(html).not.toContain('id="input-heading"');
     expect(html).not.toContain('id="view-methods"');
-    expect(manifest).toContain('"command": "dext.viewApis"');
+    expect(manifest).toContain('"command": "dext.viewResources"');
+    expect(manifest).not.toContain('"command": "dext.viewApis"');
     // The directory dialogs are gone; the commands open editor tabs instead.
     expect(html).not.toContain('<dialog id="methods-dialog"');
     expect(html).not.toContain('<dialog id="mcp-dialog"');
     expect(html).not.toMatch(/viewApis\(\): void \{\r?\n[ ]{4}this\.postWhenReady\(\{ type: "openMethods" \}\);/);
-    expect(extension).toContain('vscode.commands.registerCommand("dext.viewApis"');
-    expect(extension).toContain("editors.api?.showList()");
-    expect(extension).toContain("editors.globalResources?.showList()");
+    expect(extension).toContain('vscode.commands.registerCommand("dext.viewResources"');
+    expect(extension).toContain("editors.resources?.showList()");
     expect(html).not.toContain('id="methods-section"');
     expect(html.indexOf('id="result-section"')).toBeLessThan(html.indexOf('id="input-section"'));
     expect(html).toMatch(/id="input-body" class="input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
@@ -399,7 +399,7 @@ describe("sidebar panel layout", () => {
     // the conversation tabs and does not need a duplicate on editor pages.
     expect(manifest).toContain('"command": "dext.chooseAppearance"');
     expect(manifest).toContain('"icon": "$(color-mode)"');
-    expect(manifest).toMatch(/"view\/title": \[[\s\S]*?"command": "dext\.chooseAppearance",\s*"when": "view == dext\.sidebar",\s*"group": "navigation@5"/);
+    expect(manifest).toMatch(/"view\/title": \[[\s\S]*?"command": "dext\.chooseAppearance",\s*"when": "view == dext\.sidebar",\s*"group": "navigation@4"/);
     expect(extension).toContain('vscode.commands.registerCommand("dext.chooseAppearance"');
     expect(extension).toContain('title: "Dext Theme"');
     expect(extension).toContain('appearance: "paper"');

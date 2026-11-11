@@ -1,65 +1,33 @@
 import type { ApiReferenceCatalog, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
 import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "../../workflow/domain/methodSignature.js";
-import { describeEditorTab } from "../../../platform/editor-tabs/editorTabManager.js";
 import { editorTabKey } from "../../../platform/editor-tabs/editorTabTypes.js";
-import type { ApiCallable, ApiDataSourceOptions, FileResourceDataSourceOptions, ResourceEditorDataSource, ResourceEditorProviderOptions, ResourceEditorShowResult, ResourceEntry, ResourcePanelOptions } from "../contracts/resourceDocuments.js";
+import type { ApiCallable, ApiDataSourceOptions, FileResourceDataSourceOptions, ResourceEditorDataSource, ResourceEditorProviderOptions, ResourceEditorShowResult, ResourceEntry } from "../contracts/resourceDocuments.js";
 import { RESOURCE_DIRECTORIES, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
-import { buildResourceDefinition, buildResourceList, filterResourceEntries, renderResourceDefinition, renderResourceList, resourceEntryId } from "../presentation/resourceDocuments.js";
+import { filterResourceEntries, resourceEntryId } from "../presentation/resourceDocuments.js";
 
 
 /**
- * Editor-tab behavior shared by the API directory and Global Resources. Opening the same target
- * reuses its page, and search, grouping, source jumps and reference insertion are preserved.
+ * Editor-tab behavior shared by the Resources pages: the stable key and the message routing.
+ * A page decides what its list and its detail show.
  */
-export class ResourceEditorProvider {
+export abstract class ResourceEditorProvider {
   protected readonly listKey: string;
-  protected readonly tabKind: "api" | "globalResources";
 
-  constructor(protected readonly options: ResourceEditorProviderOptions, tabKind: "api" | "globalResources") {
-    this.tabKind = tabKind;
-    this.listKey = editorTabKey(tabKind, options.scopeKey ? { scope: options.scopeKey } : {});
-  }
-
-  detailKey(id: string): string {
-    return editorTabKey(this.tabKind, {
-      resourceId: id,
-      ...(this.options.scopeKey ? { scope: this.options.scopeKey } : {})
-    });
+  constructor(protected readonly options: ResourceEditorProviderOptions) {
+    this.listKey = editorTabKey("globalResources", options.scopeKey ? { scope: options.scopeKey } : {});
   }
 
   get listTabKey(): string {
     return this.listKey;
   }
 
-  async showList(query = ""): Promise<ResourceEditorShowResult> {
-    const kinds = this.listKinds();
-    const entries = await this.options.dataSource.list(kinds, query);
-    const document = buildResourceList({
-      kind: this.primaryKind(),
-      scope: this.options.scope,
-      entries,
-      query,
-      groupBy: this.groupBy()
-    });
-    const result = this.options.manager.open(describeEditorTab(this.tabKind, this.listKey, this.viewType()));
-    const render = this.options.renderList ?? renderResourceList;
-    result.panel.setHtml?.(render(document, this.panelOptions()));
-    return { key: this.listKey, created: result.created };
-  }
+  abstract showList(query?: string): Promise<ResourceEditorShowResult>;
 
-  async showDetail(id: string): Promise<ResourceEditorShowResult> {
-    const document = await this.options.dataSource.definition(id);
-    if (!document) throw new Error(`Resource '${id}' is no longer available.`);
-    const key = this.detailKey(id);
-    const result = this.options.manager.open(describeEditorTab(this.tabKind, key, this.viewType(), document.entry.name));
-    const render = this.options.renderDetail ?? renderResourceDefinition;
-    result.panel.setHtml?.(render(buildResourceDefinition(document.entry, document.content), this.panelOptions()));
-    return { key, created: result.created };
-  }
+  abstract showDetail(id: string): Promise<ResourceEditorShowResult>;
 
   /** Handles list search, open, refresh and toolbar commands routed by the shared manager. */
   async handleMessage(key: string, message: unknown): Promise<void> {
-    if (key !== this.listKey && this.options.manager.get(key)?.kind !== this.tabKind) return;
+    if (key !== this.listKey && this.options.manager.get(key)?.kind !== "globalResources") return;
     const payload = (message ?? {}) as { type?: unknown; id?: unknown; kind?: unknown; path?: unknown; query?: unknown; text?: unknown };
     if (payload.type === "resourceCopy" && typeof payload.text === "string") {
       await this.options.copyText?.(payload.text);
@@ -96,24 +64,9 @@ export class ResourceEditorProvider {
     return "api";
   }
 
-  /** Kinds shown by the list page. The Global Resources page reports its own categories instead. */
+  /** Kinds shown by the list page. A page that lists several categories overrides this. */
   protected listKinds(): readonly ResourceKind[] {
     return [this.primaryKind()];
-  }
-
-  protected groupBy(): "directory" | "kind" {
-    return "directory";
-  }
-
-  private panelOptions(): ResourcePanelOptions {
-    return {
-      ...(this.options.commandPrefix !== undefined ? { commandPrefix: this.options.commandPrefix } : {}),
-      ...(this.tabKind === "globalResources" ? { createKinds: this.listKinds() } : {})
-    };
-  }
-
-  protected viewType(): string {
-    return this.tabKind === "api" ? "dext.api" : "dext.globalResources";
   }
 }
 
@@ -244,28 +197,17 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
 }
 
 
-/** The APIs page adds callable contracts and language references to the file API directory. */
+/** The built-in callable APIs and language references Dext ships its own page from. */
 export function createApiDataSource(options: ApiDataSourceOptions): ResourceEditorDataSource {
   const catalog = async (): Promise<ResourceEntry[]> => [
-    ...options.methods().map(apiEntry),
+    ...options.methods().filter((method) => method.source === "builtin").map(apiEntry),
     ...apiReferenceEntries(await options.reference?.())
   ];
   return {
-    list: async (kinds, query) => {
-      if (!kinds.includes("api")) return [];
-      const [documented, files] = await Promise.all([catalog(), options.files?.list(["api"], query) ?? []]);
-      const ids = new Set(documented.map(entry => entry.id));
-      // Preserve the built-in reference when a user module is also named ask.ts, etc.
-      return filterResourceEntries([
-        ...documented,
-        ...files.map(entry => ids.has(entry.id) ? { ...entry, id: `file:${entry.id}` } : entry)
-      ], query);
-    },
+    list: async (kinds, query) => kinds.includes("api") ? filterResourceEntries(await catalog(), query) : [],
     definition: async (id) => {
       const entry = (await catalog()).find(candidate => candidate.id === id);
-      if (entry) return { entry, content: "" };
-      const file = await options.files?.definition(id.startsWith("file:") ? id.slice(5) : id);
-      return file ? { ...file, entry: { ...file.entry, id } } : undefined;
+      return entry ? { entry, content: "" } : undefined;
     }
   };
 }

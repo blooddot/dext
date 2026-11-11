@@ -29,7 +29,7 @@ describe("editor tab manager", () => {
     const renderHtml = (_panel: unknown, body: string) => renderEditorTabHtml(body, "https://webview.test/media/editorTabs.css", "https://webview.test");
     const callbacks = { onDispose: vi.fn(), onMessage: vi.fn() };
     const host = createVscodeEditorTabHost({ createWebviewPanel: () => created }, { renderHtml });
-    const current = host.createPanel(describeEditorTab("api", "dext.editor:api", EDITOR_TAB_VIEW_TYPES.api), callbacks);
+    const current = host.createPanel(describeEditorTab("globalResources", "dext.editor:globalResources", EDITOR_TAB_VIEW_TYPES.globalResources), callbacks);
     const adopted = wrapVscodeWebviewPanel(restored, callbacks, renderHtml);
     for (const handle of [current, adopted]) handle.setHtml?.('<div>API</div><script>acquireVsCodeApi()</script>');
     for (const panel of [created, restored]) {
@@ -83,22 +83,22 @@ describe("editor tab manager", () => {
   it("creates once per stable key and reveals the existing panel on reopen", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    const descriptor = describeEditorTab("api", "dext.editor:api", EDITOR_TAB_VIEW_TYPES.api);
+    const descriptor = describeEditorTab("globalResources", "dext.editor:globalResources", EDITOR_TAB_VIEW_TYPES.globalResources);
     const first = manager.open(descriptor);
     const second = manager.open(descriptor);
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(host.created).toHaveLength(1);
     expect((second.panel as FakePanel).revealed).toBe(1);
-    expect(manager.activeKeys).toEqual(["dext.editor:api"]);
+    expect(manager.activeKeys).toEqual(["dext.editor:globalResources"]);
   });
 
   it("releases the key on close and disposes the panel without deleting data", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    manager.open(describeEditorTab("api", "dext.editor:api#Task.Query", EDITOR_TAB_VIEW_TYPES.api));
-    expect(manager.close("dext.editor:api#Task.Query")).toBe(true);
-    expect(manager.has("dext.editor:api#Task.Query")).toBe(false);
+    manager.open(describeEditorTab("globalResources", "dext.editor:globalResources#Task.Query", EDITOR_TAB_VIEW_TYPES.globalResources));
+    expect(manager.close("dext.editor:globalResources#Task.Query")).toBe(true);
+    expect(manager.has("dext.editor:globalResources#Task.Query")).toBe(false);
     expect(host.created[0]!.panel.disposed).toBe(true);
   });
 
@@ -116,7 +116,7 @@ describe("editor tab manager", () => {
   it("keeps the live tab when a panel that adoption replaced reports its own dispose", () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
-    const descriptor = describeEditorTab("api", "dext.editor:api", EDITOR_TAB_VIEW_TYPES.api);
+    const descriptor = describeEditorTab("globalResources", "dext.editor:globalResources", EDITOR_TAB_VIEW_TYPES.globalResources);
     const live = manager.open(descriptor);
     // A restored panel for an already-open key is disposed by `adopt`, which must not close the
     // registered one through its own dispose callback.

@@ -651,14 +651,15 @@ async function eventually(check: () => Promise<boolean>, description: string): P
 }
 
 /**
- * Verifies the migrated editor tabs against a real VS Code window: each directory opens as its own
+ * Verifies the migrated editor tabs against a real VS Code window: the Resources directory opens as a
  * webview tab, reopening reuses the page, closing releases it, and retired Review UI is absent from the bundle.
  */
 async function verifyEditorTabs(): Promise<void> {
   const commands = await vscode.commands.getCommands(true);
-  for (const command of ["dext.viewApis", "dext.viewResources", "dext.editResource"]) {
+  for (const command of ["dext.viewResources", "dext.editResource"]) {
     assert.ok(commands.includes(command), `${command} is registered.`);
   }
+  assert.ok(!commands.includes("dext.viewApis"), "The merged Resources tab replaced dext.viewApis.");
   const group = vscode.window.tabGroups.activeTabGroup;
   const before = group.tabs.length;
   const openAndAwait = async (command: string, viewTypeSuffix: string): Promise<vscode.Tab> => {
@@ -671,29 +672,25 @@ async function verifyEditorTabs(): Promise<void> {
     }
     throw new Error(`${command} did not open a ${viewTypeSuffix} webview tab.`);
   };
-  const apis = await openAndAwait("dext.viewApis", "dext.api");
-  assert.equal(apis.label, "Dext APIs", "The API directory opens as its own tab.");
-  const apiCount = vscode.window.tabGroups.activeTabGroup.tabs.length;
+  const resources = await openAndAwait("dext.viewResources", "dext.globalResources");
+  assert.equal(resources.label, "Dext Resources", "The Resources directory opens as its own tab.");
+  const resourceCount = vscode.window.tabGroups.activeTabGroup.tabs.length;
   // Reopening the same target must reveal the existing page instead of creating a second one.
-  await vscode.commands.executeCommand("dext.viewApis");
+  await vscode.commands.executeCommand("dext.viewResources");
   await new Promise((resolve) => setTimeout(resolve, 400));
-  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, apiCount, "Reopening APIs reuses the open page.");
-  await openAndAwait("dext.viewResources", "dext.globalResources");
+  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, resourceCount, "Reopening Resources reuses the open page.");
   assert.equal(
     vscode.window.tabGroups.activeTabGroup.tabs.length,
-    before + 2,
-    "APIs and Global Resources each contribute exactly one tab."
+    before + 1,
+    "Resources contributes exactly one tab."
   );
-  for (let index = 0; index < 2; index++) {
-    await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
+  await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
   await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, before, "Closing the migrated tabs releases them.");
+  assert.equal(vscode.window.tabGroups.activeTabGroup.tabs.length, before, "Closing the migrated tab releases it.");
   // Retired Review UI must not remain in the packaged conversation bundle.
   const bundle = await readFile(join(vscode.extensions.getExtension("blooddot.dext")!.extensionPath, "dist", "webview", "main.js"), "utf8");
   for (const marker of ["data-turn-review", "data-plan-review", "data-adopt-suggestion", "adoptKnowledgeSuggestion"]) {
     assert.ok(!bundle.includes(marker), `The packaged conversation bundle excludes '${marker}'.`);
   }
-  console.log("Editor tabs: Project, APIs, and Global Resources open, reuse, and close in a live VS Code window.");
+  console.log("Editor tabs: the Resources page with its Project, Global and Dext scopes opens, reuses, and closes in a live VS Code window.");
 }

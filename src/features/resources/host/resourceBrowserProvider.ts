@@ -1,28 +1,31 @@
 import { describeEditorTab } from "../../../platform/editor-tabs/editorTabManager.js";
 import { createEditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
 import { type ResourceEditorProviderOptions, type ResourceEditorShowResult, type ResourcePanelOptions } from "../contracts/resourceDocuments.js";
-import type { ResourceScope } from "../contracts/resourceSession.js";
+import type { ResourceKind, ResourcePage } from "../contracts/resourceSession.js";
 import { renderApiDetail, renderApiList } from "../presentation/apiPanel.js";
+import { renderGlobalResources } from "../presentation/globalResourcesPanel.js";
 import { buildResourceDefinition, buildResourceList, renderResourceError } from "../presentation/resourceDocuments.js";
 import { ResourceEditorProvider } from "./resourceEditorProvider.js";
 
 /**
- * Browse the API directory and definitions in one tab, retaining each history entry's view state.
+ * Browse the file resources and the built-in Dext APIs in one tab, switching between
+ * Project, Global and Dext, and retaining each history entry's view state.
  */
 export class ResourceBrowserProvider extends ResourceEditorProvider {
   private history: ResourceLocation[];
   private position = 0;
   private revision = 0;
 
-  constructor(options: ResourceEditorProviderOptions, kind: "api" | "globalResources") {
-    super({ renderList: renderApiList, renderDetail: renderApiDetail, ...options }, kind);
+  constructor(options: ResourceEditorProviderOptions) {
+    super(options);
     this.history = [{ query: "", scrollTop: 0, scope: options.scope, collapsed: [] }];
   }
 
-  get currentScope(): ResourceScope { return this.history[this.position]!.scope; }
+  get currentScope(): ResourcePage { return this.history[this.position]!.scope; }
 
-  override detailKey(): string {
-    return this.listTabKey;
+  /** Every file resource kind this page lists; the Dext page reports its own catalogue. */
+  protected override listKinds(): readonly ResourceKind[] {
+    return ["api", "mcp", "rule", "skill"];
   }
 
   override showList(query = ""): Promise<ResourceEditorShowResult> {
@@ -42,9 +45,9 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
     if (typeof payload.viewState?.scrollTop === "number" && Number.isFinite(payload.viewState.scrollTop)) {
       current.scrollTop = Math.max(0, payload.viewState.scrollTop);
     }
-    if (payload.type === "resourceScope" && this.tabKind === "globalResources") {
+    if (payload.type === "resourceScope") {
       const scope = payload.scope;
-      if ((scope === "global" || scope === "project") && (this.options.availableScopes?.() ?? ["project", "global"]).includes(scope)) {
+      if ((scope === "global" || scope === "project" || scope === "builtin") && (this.options.availableScopes?.() ?? ["project", "global", "builtin"]).includes(scope)) {
         if (scope !== current.scope) await this.navigate({ scope, query: "", scrollTop: 0, collapsed: [] });
       }
       return;
@@ -99,27 +102,34 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
     await super.handleMessage(key, message);
   }
 
+  /** The built-in APIs have no file scope of their own, so they read their own data source. */
+  private dataSource(page: ResourcePage) {
+    return page === "builtin" ? this.options.builtinDataSource : this.options.dataSource;
+  }
+
   private async navigate(location: ResourceLocation, targetPosition?: number): Promise<ResourceEditorShowResult> {
     const revision = ++this.revision;
+    const builtin = location.scope === "builtin";
+    const dataSource = this.dataSource(location.scope);
     let render: (options: ResourcePanelOptions) => string;
     let label: string | undefined;
     if (location.id) {
-      const document = await this.options.dataSource.definition(location.id);
+      const document = await dataSource?.definition(location.id);
       if (!document) {
         if (targetPosition === undefined) throw new Error(`Resource '${location.id}' is no longer available.`);
         label = location.id;
         render = (options) => renderResourceError(location.id!, "This API is no longer available. Go back or refresh to try again.", options);
       } else {
-        if (this.tabKind === "globalResources") location.scope = document.entry.scope;
+        if (!builtin) location.scope = document.entry.scope;
         label = document.entry.name;
-        render = (options) => (this.options.renderDetail ?? renderApiDetail)(buildResourceDefinition(document.entry, document.content), options);
+        render = (options) => renderApiDetail(buildResourceDefinition(document.entry, document.content), options);
       }
     } else {
       // Keep all entries in the DOM so clearing a restored search reveals the full directory.
-      const all = await this.options.dataSource.list(this.listKinds(), "");
-      const entries = this.tabKind === "globalResources" ? all.filter((entry) => entry.scope === location.scope) : all;
-      const document = { ...buildResourceList({ kind: this.primaryKind(), scope: location.scope, entries, groupBy: this.groupBy() }), query: location.query };
-      render = (options) => (this.options.renderList ?? renderApiList)(document, options);
+      const all = await dataSource?.list(this.listKinds(), "") ?? [];
+      const entries = builtin ? all : all.filter((entry) => entry.scope === location.scope);
+      const document = { ...buildResourceList({ kind: this.primaryKind(), scope: location.scope, entries, groupBy: builtin ? "directory" : "kind" }), query: location.query };
+      render = builtin ? (options) => renderApiList(document, options) : (options) => renderGlobalResources(document, options);
     }
     if (revision !== this.revision) return { key: this.listTabKey, created: false };
     const current = this.history[this.position]!;
@@ -129,7 +139,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
       this.history = [...this.history.slice(0, this.position + 1), location];
       this.position = this.history.length - 1;
     }
-    const result = this.options.manager.open(describeEditorTab(this.tabKind, this.listTabKey, this.viewType()));
+    const result = this.options.manager.open(describeEditorTab("globalResources", this.listTabKey, "dext.globalResources"));
     // Persisting the target means a reload restores this page instead of an empty tab.
     const tabState = createEditorTabState(this.listTabKey, {
       page: location.id ? "detail" : "list",
@@ -137,7 +147,10 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
     });
     result.panel.setHtml?.(render({
       ...(this.options.commandPrefix ? { commandPrefix: this.options.commandPrefix } : {}),
-      ...(this.tabKind === "globalResources" ? { title: "Resources", createKinds: this.listKinds(), scope: location.scope, availableScopes: this.options.availableScopes?.() ?? ["project", "global"], openResourceDirectory: true } : {}),
+      // The built-in page is the API directory: it has no categories and no directory to open.
+      ...(builtin ? {} : { title: "Resources", createKinds: this.listKinds(), openResourceDirectory: true }),
+      scope: location.scope,
+      availableScopes: this.options.availableScopes?.() ?? ["project", "global", "builtin"],
       ...(tabState ? { tabState } : {}),
       collapsed: this.history[this.position]!.collapsed,
       navigation: {
@@ -155,6 +168,6 @@ interface ResourceLocation {
   id?: string;
   query: string;
   scrollTop: number;
-  scope: ResourceScope;
+  scope: ResourcePage;
   collapsed: string[];
 }

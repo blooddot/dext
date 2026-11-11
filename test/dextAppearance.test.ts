@@ -109,7 +109,7 @@ describe("Dext appearance", () => {
     };
     const manager = new EditorTabManager(host);
     manager.open({ key: "dext.editor:history", kind: "history", viewType: "dext.history", title: "History" });
-    manager.open({ key: "dext.editor:api", kind: "api", viewType: "dext.api", title: "API" });
+    manager.open({ key: "dext.editor:globalResources", kind: "globalResources", viewType: "dext.globalResources", title: "Resources" });
 
     manager.postAll({ type: "dextAppearance", theme: "paper" });
 

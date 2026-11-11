@@ -5,7 +5,7 @@ import { isSkillId } from "../../workflow/contracts/skill.js";
 import { type EditorTabManager } from "../../../platform/editor-tabs/editorTabManager.js";
 import type { EditorTabRestorer } from "../../../platform/editor-tabs/editorTabSerializer.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
-import { type ResourceKind, type ResourceScope } from "./resourceSession.js";
+import { type ResourceKind, type ResourcePage, type ResourceScope } from "./resourceSession.js";
 
 
 export interface ResourceSourceRef {
@@ -63,7 +63,7 @@ export function skillEntryId(entry: Pick<ResourceEntry, "kind" | "path">): strin
 
 export interface ResourceListDocument {
   kind: ResourceKind;
-  scope: ResourceScope;
+  scope: ResourcePage;
   entries: ResourceEntry[];
   groups: Array<{ label: string; entries: ResourceEntry[] }>;
   query: string;
@@ -84,8 +84,8 @@ export interface ResourcePanelOptions {
   createKinds?: readonly ResourceKind[];
   /** Offers a toolbar button that opens the current scope's resource directory. */
   openResourceDirectory?: boolean;
-  scope?: ResourceScope;
-  availableScopes?: readonly ResourceScope[];
+  scope?: ResourcePage;
+  availableScopes?: readonly ResourcePage[];
   collapsed?: readonly string[];
   /** The API directory nests its dotted namespaces under a synthetic Top level group. */
   apiTree?: boolean;
@@ -111,18 +111,17 @@ export interface ResourceEditorProviderOptions {
   manager: EditorTabManager;
   restorer: EditorTabRestorer;
   dataSource: ResourceEditorDataSource;
-  scope: ResourceScope;
+  /** The built-in Dext APIs its own page lists; every other page reads the file scopes. */
+  builtinDataSource?: ResourceEditorDataSource;
+  scope: ResourcePage;
   /** Main workspace root, used to keep tabs distinct across roots. */
   scopeKey?: string;
-  availableScopes?(): readonly ResourceScope[];
+  availableScopes?(): readonly ResourcePage[];
   commandPrefix?: string;
   /** Runs a toolbar command. Return true after removing a resource to refresh its list. */
-  onCommand?(command: string, payload: { id?: string; kind?: string; path?: string; pack?: string; query?: string; scope?: ResourceScope }): Promise<void | boolean> | void | boolean;
+  onCommand?(command: string, payload: { id?: string; kind?: string; path?: string; pack?: string; query?: string; scope?: ResourcePage }): Promise<void | boolean> | void | boolean;
   /** Copies text the page offers, such as a module specifier; the host owns the clipboard. */
   copyText?(text: string): Promise<void> | void;
-  /** Page renderers. The migrated API and Global Resources pages override these. */
-  renderList?: (document: ResourceListDocument, options: ResourcePanelOptions) => string;
-  renderDetail?: (document: ResourceDefinitionDocument, options: ResourcePanelOptions) => string;
 }
 
 
@@ -149,6 +148,5 @@ export type ApiCallable = Pick<RegisteredCallable, "id" | "title" | "description
 
 export interface ApiDataSourceOptions {
   methods(): readonly ApiCallable[];
-  files?: ResourceEditorDataSource;
   reference?(): Promise<ApiReferenceCatalog | undefined>;
 }

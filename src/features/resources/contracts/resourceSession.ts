@@ -1,5 +1,9 @@
 export type ResourceKind = "api" | "mcp" | "rule" | "skill" | "file";
 export type ResourceScope = "project" | "global";
+/** A Resources page: the two file scopes, plus the built-in APIs Dext ships itself. */
+export type ResourcePage = ResourceScope | "builtin";
+
+export const RESOURCE_PAGE_LABELS: Record<ResourcePage, string> = { project: "Project", global: "Global", builtin: "Dext" };
 
 export const RESOURCE_LABELS: Record<ResourceKind, string> = { api: "API", mcp: "MCP", rule: "Rule", skill: "Skill", file: "File" };
 export const RESOURCE_ICONS: Record<ResourceKind, string> = { api: "symbol-method", mcp: "plug", rule: "law", skill: "book", file: "file" };

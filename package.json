@@ -199,11 +199,6 @@
         "title": "Close"
       },
       {
-        "command": "dext.viewApis",
-        "title": "Dext: View APIs",
-        "icon": "$(symbol-method)"
-      },
-      {
         "command": "dext.viewResources",
         "title": "Dext: View Resources",
         "icon": "$(server)"
@@ -519,10 +514,6 @@
           "when": "false"
         },
         {
-          "command": "dext.viewApis",
-          "when": "false"
-        },
-        {
           "command": "dext.addMcp",
           "when": "false"
         },
@@ -653,19 +644,14 @@
           "group": "navigation@2"
         },
         {
-          "command": "dext.viewApis",
+          "command": "dext.viewResources",
           "when": "view == dext.sidebar",
           "group": "navigation@3"
         },
         {
-          "command": "dext.viewResources",
-          "when": "view == dext.sidebar",
-          "group": "navigation@4"
-        },
-        {
           "command": "dext.chooseAppearance",
           "when": "view == dext.sidebar",
-          "group": "navigation@5"
+          "group": "navigation@4"
         }
       ],
       "webview/context": [

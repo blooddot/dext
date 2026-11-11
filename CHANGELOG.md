@@ -37,6 +37,7 @@ All notable changes to Dext are documented in this file.
 - A Skill's eye button on the Resources page writes `dext.hiddenSkills`, which keeps the Skill installed but out of the Input skills menu.
 - MCP tools are filed under **MCP** on the Resources page with per-node counts, and `dext.viewMcp` is now `dext.viewResources`.
 - The API directory and Global Resources open as editor tabs like History, and each panel key restores its own page and target after a reload.
+- **Breaking:** `dext.viewApis` is gone. The **Dext** scope of **Dext: View Resources** lists the built-in APIs and the Node/JavaScript reference, and its **Project** and **Global** scopes list the file resources.
 - **Breaking:** `dext.apiDirs`, `dext.skillDirs` and `dext.plan.directory` become `dext.apiDirectories`, `dext.skillDirectories` and `dext.planDirectory`. Replace them in `settings.json`.
 - `dext.mcpDirectories` is new: it adds workspace-relative directories to search for MCP manifests beside `.dext/mcp`.
 - **Breaking:** source-file inline completion, its settings, evaluation commands and stored feedback are removed; remove the `dext.completion*` entries from `settings.json`.

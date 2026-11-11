@@ -60,7 +60,7 @@ describe("file API documentation", () => {
     expect(item?.api.returnType).toBe("unknown");
   });
 
-  it("uses the same live file metadata and highlighted markup in Resources and APIs", async () => {
+  it("uses the same live file metadata and highlighted markup on the Resources page", async () => {
     let content: string | undefined = commitSource;
     const readFile = vi.fn(async () => content);
     const files = createFileResourceDataSource({
@@ -68,19 +68,12 @@ describe("file API documentation", () => {
       listFiles: async kind => kind === "api" ? [{ name: "git.commit", path: "git/commit.ts", scope: "project" }] : [],
       readFile, describeApi: describeApiSource
     });
-    const apis = createApiDataSource({ methods: () => [], files });
     const fromResources = await files.list(["api"], "");
-    const fromApis = await apis.list(["api"], "");
-    expect(fromResources).toEqual(fromApis);
     const resourcesHtml = renderGlobalResources(buildResourceList({ kind: "api", scope: "project", entries: fromResources, groupBy: "kind" }), { createKinds: ["api"] });
-    const apisHtml = renderApiList(buildResourceList({ kind: "api", scope: "project", entries: fromApis }));
-    const signature = (html: string) => html.match(/<code class="resource-entry-signature">([\s\S]*?)<\/code>/)?.[1];
-    expect(signature(resourcesHtml)).toBe(signature(apisHtml));
-    expect(signature(resourcesHtml)).toContain('class="tok-propertyName">input');
-    expect(signature(resourcesHtml)).toContain('class="tok-typeName">AgentResult');
+    expect(resourcesHtml).toContain('class="tok-propertyName">input');
+    expect(resourcesHtml).toContain('class="tok-typeName">AgentResult');
     const id = fromResources[0]!.id;
     const file = (await files.definition(id))!;
-    expect(file).toEqual(await apis.definition(id));
     const detail = renderApiDetail(buildResourceDefinition(file.entry, file.content));
     expect(detail).toContain("<h3>Parameters</h3>");
     expect(detail).toContain("<h3>Returns</h3>");
@@ -99,18 +92,15 @@ describe("file API documentation", () => {
     expect(await files.definition(id)).toBeUndefined();
   });
 
-  it("keeps colliding built-in and file API identities through rendering and detail actions", async () => {
-    const files = createFileResourceDataSource({
-      roots: () => ({ global: "/global" }),
-      listFiles: async () => [{ name: "ask", path: "ask.ts", scope: "global" }],
-      readFile: async () => "export function ask(): void {}", describeApi: describeApiSource
-    });
-    const apis = createApiDataSource({ methods: () => [{ id: "ask", kind: "command", source: "builtin", title: "Ask", description: "Ask", input: [], output: { kind: "ask" } }], files });
+  it("leaves file APIs out of the built-in Dext page", async () => {
+    const apis = createApiDataSource({ methods: () => [
+      { id: "ask", kind: "command", source: "builtin", title: "Ask", description: "Ask", input: [], output: { kind: "ask" } },
+      { id: "git.commit", kind: "command", source: "project", title: "Commit", description: "Commit", input: [], output: { kind: "ask" } }
+    ] });
     const entries = await apis.list(["api"], "");
-    const html = renderApiList(buildResourceList({ kind: "api", scope: "global", entries }));
-    expect(html).toContain('data-resource-open="file:api:global:ask.ts"');
-    const file = (await apis.definition("file:api:global:ask.ts"))!;
-    expect(renderApiDetail(buildResourceDefinition(file.entry, file.content))).toContain('data-resource-id="file:api:global:ask.ts"');
+    expect(entries.map(entry => entry.name)).toEqual(["ask"]);
+    const html = renderApiList(buildResourceList({ kind: "api", scope: "builtin", entries }));
+    expect(html).toContain('data-resource-open="api:global:ask.ts"');
     const builtin = (await apis.definition("api:global:ask.ts"))!;
     expect(renderApiDetail(buildResourceDefinition(builtin.entry, builtin.content))).not.toContain('class="resource-source-heading"');
   });
