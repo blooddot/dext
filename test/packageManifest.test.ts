@@ -199,7 +199,7 @@ describe("Dext package manifest", () => {
     }
   });
 
-  it("toggles history ordering and the favorites filter from the panel title bar", async () => {
+  it("toggles the favorites filter from the panel title bar", async () => {
     const menu = (await manifest()).contributes?.menus?.["editor/title"] ?? [];
     const entry = (command: string): string | undefined => menu.find((item) => item.command === command)?.when;
     // Only one half of each pair is ever visible, so the button always offers
@@ -208,10 +208,6 @@ describe("Dext package manifest", () => {
       .toBe("activeWebviewPanelId == 'dext.history' && !dext.historyFavoritesOnly");
     expect(entry("dext.history.showAllConversations"))
       .toBe("activeWebviewPanelId == 'dext.history' && dext.historyFavoritesOnly");
-    expect(entry("dext.history.showOldestFirst"))
-      .toBe("activeWebviewPanelId == 'dext.history' && dext.historyNewestFirst");
-    expect(entry("dext.history.showNewestFirst"))
-      .toBe("activeWebviewPanelId == 'dext.history' && !dext.historyNewestFirst");
   });
 
   it("pins conversation tabs and favorites history entries from their context menus", async () => {

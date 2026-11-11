@@ -3,8 +3,7 @@ import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type {
   ConversationLayout,
   ConversationPreferences,
-  HistoryOrdering,
-  HistorySortOrder
+  HistoryOrdering
 } from "../contracts/preferences.js";
 import { normalizeConversationLayout } from "../domain/conversationOrder.js";
 import { normalizeAgentSelection } from "../domain/agentSelection.js";
@@ -14,7 +13,6 @@ const FAVORITES_KEY = "dext.favoriteConversations";
 const TITLES_KEY = "dext.conversationTitles";
 const LAYOUT_KEY = "dext.conversationLayout";
 const MAX_TITLE_LENGTH = 140;
-const SORT_ORDER_KEY = "dext.historySortOrder";
 const FAVORITES_ONLY_KEY = "dext.historyFavoritesOnly";
 const ARCHIVED_ONLY_KEY = "dext.historyArchivedOnly";
 const SELECTIONS_KEY = "dext.conversationSelections";
@@ -91,14 +89,6 @@ export class DextConversationPreferences implements ConversationPreferences {
     await this.state.update(SELECTIONS_KEY, selections);
   }
 
-  sortOrder(): HistorySortOrder {
-    return this.state.get<HistorySortOrder>(SORT_ORDER_KEY, "newest") === "oldest" ? "oldest" : "newest";
-  }
-
-  async setSortOrder(order: HistorySortOrder): Promise<void> {
-    await this.state.update(SORT_ORDER_KEY, order);
-  }
-
   favoritesOnly(): boolean {
     return this.state.get<boolean>(FAVORITES_ONLY_KEY, false);
   }
@@ -117,7 +107,6 @@ export class DextConversationPreferences implements ConversationPreferences {
 
   historyOrdering(): HistoryOrdering {
     return {
-      order: this.sortOrder(),
       favorites: this.favorites(),
       favoritesOnly: this.favoritesOnly(),
       archivedOnly: this.archivedOnly()

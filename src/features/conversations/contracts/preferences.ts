@@ -3,10 +3,7 @@ import type { AgentSelection } from "../../agents/contracts/agent.js";
 /** Conversation-scoped composer preferences. Stored per conversation id, never
  * in the shared sidebar state, so two tabs cannot overwrite each other. */
 
-export type HistorySortOrder = "newest" | "oldest";
-
 export interface HistoryOrdering {
-  order: HistorySortOrder;
   favorites: readonly string[];
   favoritesOnly: boolean;
   archivedOnly?: boolean;
@@ -35,8 +32,6 @@ export interface ConversationPreferences {
   conversationSelection(sessionId: string): AgentSelection | undefined;
   setConversationSelection(sessionId: string, selection: AgentSelection): Promise<void>;
   forgetConversationSelection(sessionId: string): Promise<void>;
-  sortOrder(): HistorySortOrder;
-  setSortOrder(order: HistorySortOrder): Promise<void>;
   favoritesOnly(): boolean;
   archivedOnly(): boolean;
   setArchivedOnly(archivedOnly: boolean): Promise<void>;

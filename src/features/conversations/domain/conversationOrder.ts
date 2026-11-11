@@ -24,10 +24,10 @@ export function orderHistorySessions<T extends OrderableSession>(
     const archived = Boolean((session as T & { archivedAt?: number }).archivedAt);
     return archived === Boolean(ordering.archivedOnly) && (!ordering.favoritesOnly || favorites.has(session.id));
   });
-  const direction = ordering.order === "newest" ? -1 : 1;
+  // Favorites lead; everything else is newest activity first.
   return visible.sort((left, right) => {
     const byFavorite = Number(favorites.has(right.id)) - Number(favorites.has(left.id));
-    return byFavorite || direction * (lastActivity(left) - lastActivity(right));
+    return byFavorite || lastActivity(right) - lastActivity(left);
   });
 }
 

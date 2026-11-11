@@ -84,7 +84,7 @@ mapping stays honest.
 | State | Owner | Storage / lifetime |
 | --- | --- | --- |
 | Stored turns, plan context, provider session ids | `features/conversations/host/historyStore.ts` + `historyFileState.ts` | `<storageUri>/conversation-history/`, one `<sha256>.json` per conversation plus `overflow/`; the old `dext.history*` Memento keys are imported once and then retired |
-| Pins, favorites, titles, layout, per-conversation selection, sort order | `features/conversations/host/conversationPreferences.ts` | `dext.pinnedConversations`, `dext.favoriteConversations`, `dext.conversationTitles`, `dext.conversationLayout`, `dext.conversationSelections`, `dext.historySortOrder` |
+| Pins, favorites, titles, layout, per-conversation selection | `features/conversations/host/conversationPreferences.ts` | `dext.pinnedConversations`, `dext.favoriteConversations`, `dext.conversationTitles`, `dext.conversationLayout`, `dext.conversationSelections` |
 | Session map, active tab, open tab ids, tab ordering | `features/conversations/host/conversationController.ts` | in memory; layout debounce 750 ms |
 | Layout write debounce timer | `features/conversations/host/conversationController.ts` | released with the controller |
 | Active executions, abort controllers, Code continuations | `features/conversations/host/turnExecutionCoordinator.ts` | in memory, one entry per conversation |

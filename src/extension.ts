@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import { DextApplication } from "./app/application.js";
-import type { HistorySortOrder } from "./features/conversations/contracts/preferences.js";
 import { DextConversationPreferences } from "./features/conversations/host/conversationPreferences.js";
 import { createApiReferenceSource } from "./features/workflow/host/apiReference.js";
 import { describeApiSource } from "./features/workflow/host/apiSource.js";
@@ -454,14 +453,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return context.sessionId;
   };
   const updateHistoryContext = (): void => {
-    void vscode.commands.executeCommand("setContext", "dext.historyNewestFirst", preferences.sortOrder() === "newest");
     void vscode.commands.executeCommand("setContext", "dext.historyFavoritesOnly", preferences.favoritesOnly());
     void vscode.commands.executeCommand("setContext", "dext.historyArchivedOnly", preferences.archivedOnly());
-  };
-  const setSortOrder = async (order: HistorySortOrder): Promise<void> => {
-    await preferences.setSortOrder(order);
-    updateHistoryContext();
-    historyPanel.refresh();
   };
   const setFavoritesOnly = async (favoritesOnly: boolean): Promise<void> => {
     await preferences.setFavoritesOnly(favoritesOnly);
@@ -722,8 +715,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.history.removeFavorite", (context?: ConversationContext) =>
       reportCommandError(() => setFavorite(context, false))
     ),
-    vscode.commands.registerCommand("dext.history.showNewestFirst", () => setSortOrder("newest")),
-    vscode.commands.registerCommand("dext.history.showOldestFirst", () => setSortOrder("oldest")),
     vscode.commands.registerCommand("dext.history.showFavoritesOnly", () => setFavoritesOnly(true)),
     vscode.commands.registerCommand("dext.history.showAllConversations", () => setFavoritesOnly(false)),
     vscode.commands.registerCommand("dext.history.showArchived", () => setArchivedOnly(true)),

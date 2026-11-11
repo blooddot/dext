@@ -20,36 +20,32 @@ function session(id: string, createdAt: number, updatedAt = createdAt): { id: st
 }
 
 describe("conversation preferences", () => {
-  it("shows the most recent conversation first without being asked", () => {
+  it("starts with no history filter applied", () => {
     const store = preferences();
 
-    expect(store.sortOrder()).toBe("newest");
     expect(store.favoritesOnly()).toBe(false);
   });
 
-  it("orders conversations by last activity in the requested direction", () => {
+  it("orders conversations by last activity, newest first", () => {
     const sessions = [session("a", 1), session("b", 3), session("c", 2)];
-    const ordering = { favorites: [], favoritesOnly: false };
 
-    expect(orderHistorySessions(sessions, { ...ordering, order: "newest" }).map((item) => item.id))
+    expect(orderHistorySessions(sessions, { favorites: [], favoritesOnly: false }).map((item) => item.id))
       .toEqual(["b", "c", "a"]);
-    expect(orderHistorySessions(sessions, { ...ordering, order: "oldest" }).map((item) => item.id))
-      .toEqual(["a", "c", "b"]);
   });
 
   it("ranks a conversation by its latest turn rather than when it started", () => {
     const sessions = [session("old-but-active", 1, 9), session("recent", 5)];
 
-    expect(orderHistorySessions(sessions, { order: "newest", favorites: [], favoritesOnly: false })
+    expect(orderHistorySessions(sessions, { favorites: [], favoritesOnly: false })
       .map((item) => item.id)).toEqual(["old-but-active", "recent"]);
   });
 
   it("floats favorites above everything else and can hide the rest", () => {
     const sessions = [session("a", 1), session("b", 3), session("c", 2)];
 
-    expect(orderHistorySessions(sessions, { order: "newest", favorites: ["a"], favoritesOnly: false })
+    expect(orderHistorySessions(sessions, { favorites: ["a"], favoritesOnly: false })
       .map((item) => item.id)).toEqual(["a", "b", "c"]);
-    expect(orderHistorySessions(sessions, { order: "newest", favorites: ["a", "c"], favoritesOnly: true })
+    expect(orderHistorySessions(sessions, { favorites: ["a", "c"], favoritesOnly: true })
       .map((item) => item.id)).toEqual(["c", "a"]);
   });
 

@@ -157,16 +157,6 @@
         "title": "Remove from Favorites"
       },
       {
-        "command": "dext.history.showNewestFirst",
-        "title": "Dext History: Show Newest First",
-        "icon": "$(sort-precedence)"
-      },
-      {
-        "command": "dext.history.showOldestFirst",
-        "title": "Dext History: Show Oldest First",
-        "icon": "$(sort-precedence)"
-      },
-      {
         "command": "dext.history.showFavoritesOnly",
         "title": "Dext History: Show Favorites Only",
         "icon": "$(star-empty)"
@@ -474,14 +464,6 @@
           "when": "false"
         },
         {
-          "command": "dext.history.showNewestFirst",
-          "when": "false"
-        },
-        {
-          "command": "dext.history.showOldestFirst",
-          "when": "false"
-        },
-        {
           "command": "dext.history.showFavoritesOnly",
           "when": "false"
         },
@@ -574,16 +556,6 @@
           "command": "dext.history.showAllConversations",
           "when": "activeWebviewPanelId == 'dext.history' && dext.historyFavoritesOnly",
           "group": "navigation@1"
-        },
-        {
-          "command": "dext.history.showOldestFirst",
-          "when": "activeWebviewPanelId == 'dext.history' && dext.historyNewestFirst",
-          "group": "navigation@2"
-        },
-        {
-          "command": "dext.history.showNewestFirst",
-          "when": "activeWebviewPanelId == 'dext.history' && !dext.historyNewestFirst",
-          "group": "navigation@2"
         }
       ],
       "editor/context": [

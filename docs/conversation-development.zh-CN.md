@@ -50,7 +50,7 @@ npx vitest run test/apiReference.test.ts test/apiSource.test.ts test/editorTabSt
 | 状态 | 所有者 | 存储 / 生命周期 |
 | --- | --- | --- |
 | 已保存回合、计划上下文、provider session | `features/conversations/host/historyStore.ts` + `historyFileState.ts` | `<storageUri>/conversation-history/`，每会话一个 `<sha256>.json` 加 `overflow/`；旧 `dext.history*` Memento 键一次性导入后删除 |
-| 置顶、收藏、标题、布局、每会话选择、排序 | `features/conversations/host/conversationPreferences.ts` | `dext.pinnedConversations` 等键，键名不变 |
+| 置顶、收藏、标题、布局、每会话选择 | `features/conversations/host/conversationPreferences.ts` | `dext.pinnedConversations` 等键，键名不变 |
 | 会话集合、当前标签、打开标签、标签顺序 | `features/conversations/host/conversationController.ts` | 内存；布局写入 750ms 防抖 |
 | 布局写入定时器 | 同上 | 随控制器释放 |
 | 活动执行、取消控制器、Code 续跑调用 | `features/conversations/host/turnExecutionCoordinator.ts` | 内存，每会话一条 |
