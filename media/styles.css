@@ -3260,9 +3260,13 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section[data-t
   font-size: 13px;
 }
 
-/* focus-visible, not focus-within: a clicked action must not pin the bar open
-   after the pointer has left the row. */
-.output-turn:hover .output-turn-actions,
+/* The Worked line is the one row that raises the bar; Output is read, not
+   acted on, so hovering prose must not cover it. A collapsed turn has no
+   Worked line, so its prompt row stands in. focus-visible, not focus-within:
+   a clicked action must not pin the bar open after the pointer has left. */
+.output-turn:not([open]) > summary:hover .output-turn-actions,
+.output-turn:has(> .output-turn-body > .turn-section[data-turn-section="process"] > summary:hover) .output-turn-actions,
+.output-turn-actions:hover,
 .output-turn:has(:focus-visible) .output-turn-actions {
   opacity: 1;
   pointer-events: auto;

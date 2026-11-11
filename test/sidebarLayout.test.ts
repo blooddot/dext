@@ -731,7 +731,9 @@ describe("sidebar panel layout", () => {
     expect(stored).toMatchObject({ id: turnId, mode: "plan", input: "retry me" });
     expect(active.turns.at(-1)?.id).toBe(turnId);
     h.dispose();
-    expect(css).toMatch(/\.output-turn:hover \.output-turn-actions,[\s\S]*?\.output-turn:has\(:focus-visible\) \.output-turn-actions \{[\s\S]*?opacity: 1;/);
+    // Hovering the Worked line raises the bar; hovering the Output must not.
+    expect(css).toMatch(/\.output-turn:has\(> \.output-turn-body > \.turn-section\[data-turn-section="process"\] > summary:hover\) \.output-turn-actions,[\s\S]*?opacity: 1;/);
+    expect(css).not.toMatch(/\.output-turn:hover \.output-turn-actions/);
     // A mouse click must not leave the bar pinned open via focus.
     expect(css).not.toContain(".output-turn:focus-within");
     expect(css).not.toContain(".history-record:focus-within");
