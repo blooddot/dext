@@ -909,9 +909,9 @@
         },
         "dext.history.maxTurns": {
           "type": "integer",
-          "default": 100,
-          "minimum": 1,
-          "description": "Turns kept across all conversations. The oldest turns are dropped first, which also removes them from the conversation tab strip."
+          "default": 0,
+          "minimum": 0,
+          "description": "Turns kept across all conversations. 0 keeps every turn; a positive limit drops the oldest turns first, which also removes them from the conversation tab strip."
         },
         "dext.history.maxOutputLength": {
           "type": "integer",
