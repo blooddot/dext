@@ -4,6 +4,7 @@ import { ReferenceProjection, referenceDecorations } from "./monacoReferences.js
 import { inputReferenceProjections, normalizeInputReferenceSource } from "../features/workspace/domain/fileReference.js";
 import { fileReferenceRemovalEdit } from "./fileReferenceDecorations.js";
 import { pasteEventText } from "./codeEditor.js";
+import { codeReferencePasteText } from "./codeReferencePaste.js";
 import {
   bindFileDropTarget, droppedFilePaths, fileSelectionDropEffect, findImageItem, isFileDrag, referenceInsertion
 } from "../platform/browser/fileDrop.js";
@@ -91,6 +92,10 @@ export class ReferenceField implements InteractionReferenceField {
     const listeners = new AbortController();
     this.element.addEventListener("mousedown", (event) => this.removeChip(event), { capture: true, signal: listeners.signal });
     this.element.addEventListener("paste", (event) => this.paste(event), { capture: true, signal: listeners.signal });
+    // The Composer's own shortcut: paste the clipboard's literal text instead of
+    // recovering a reference from the copy. Claiming the key here keeps the
+    // browser from also dispatching a paste that would insert the reference.
+    this.element.addEventListener("keydown", (event) => this.pasteRaw(event), { capture: true, signal: listeners.signal });
     this.disposables.push({ dispose: () => listeners.abort() });
     this.disposables.push({
       dispose: bindFileDropTarget(this.element, {
@@ -107,11 +112,9 @@ export class ReferenceField implements InteractionReferenceField {
    * inserts, which is all a form answer carries. */
   insertReferences(expressions: readonly string[]): void {
     if (!expressions.length || this.disposed) return;
-    const value = this.model.getValue(), selection = this.view.getSelection()!;
-    const from = this.projection.toSource(value, this.model.getOffsetAt(selection.getStartPosition()));
-    const to = this.projection.toSource(value, this.model.getOffsetAt(selection.getEndPosition()));
-    const insertion = referenceInsertion(this.value(), from, to, expressions);
-    this.replace(from, to, insertion.value.slice(from, insertion.caret));
+    const selection = this.sourceSelection();
+    const insertion = referenceInsertion(this.value(), selection.from, selection.to, expressions);
+    this.replace(selection.from, selection.to, insertion.value.slice(selection.from, insertion.caret));
   }
 
   /** The settled form cannot answer, and its editor must not keep a model alive. */
@@ -177,21 +180,40 @@ export class ReferenceField implements InteractionReferenceField {
     this.replace(edit.from, edit.to, edit.insert);
   }
 
-  private paste(event: ClipboardEvent): void {
+  private sourceSelection(): { from: number; to: number } {
+    const value = this.model.getValue(), selection = this.view.getSelection()!;
+    return {
+      from: this.projection.toSource(value, this.model.getOffsetAt(selection.getStartPosition())),
+      to: this.projection.toSource(value, this.model.getOffsetAt(selection.getEndPosition()))
+    };
+  }
+
+  private pasteRaw(event: KeyboardEvent): void {
+    if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.key.toLowerCase() !== "v") return;
+    if (this.disposed || this.view.inComposition) return;
+    event.preventDefault(); event.stopPropagation();
+    this.paste(undefined, true);
+  }
+
+  private paste(event: ClipboardEvent | undefined, raw = false): void {
     if (this.disposed) return;
-    const file = findImageItem(event.clipboardData)?.getAsFile();
-    if (file) {
+    const file = event ? findImageItem(event.clipboardData)?.getAsFile() : undefined;
+    if (event && file) {
       event.preventDefault(); event.stopPropagation();
       void this.files.attach(file).then((path) => this.insertReferences([`@${path}`])).catch((error) => this.files.onError(error));
       return;
     }
-    const pasted = pasteEventText(event) ?? "";
-    event.preventDefault(); event.stopPropagation();
-    void this.clipboard.read("code").then((result) => {
+    const pasted = event ? pasteEventText(event) ?? "" : "";
+    if (event) { event.preventDefault(); event.stopPropagation(); }
+    void this.clipboard.read(raw ? "text" : "code").then((result) => {
       if (this.disposed) return;
-      // A copied selection or Explorer file arrives as its `@path`, like the
-      // Input's paste; everything else stays the text that was copied.
-      if (result?.codeReference || result?.fileReferences?.length) { this.insertReferences([result.text]); return; }
+      if (!raw && result && (result.codeReference || result.fileReferences?.length)) {
+        // A copied selection or Explorer file arrives as its `@path`, exactly as
+        // the Input's paste resolves it; everything else stays the copied text.
+        const selection = this.sourceSelection();
+        this.insertPlain(codeReferencePasteText(this.value(), selection.from, selection.to, result));
+        return;
+      }
       const text = pasted || result?.text;
       if (text) this.insertPlain(text);
     }).catch((error) => { this.files.onError(error); if (pasted) this.insertPlain(pasted); });

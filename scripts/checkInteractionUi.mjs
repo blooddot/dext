@@ -335,6 +335,17 @@ try {
     chipEditor.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
   assert.equal(await evaluate(`waitChips(chipEditor,4)`), 4, "pasted editor code becomes a reference chip");
   assert.equal(await evaluate(`chipEditor.querySelector('textarea').value.includes('AgentProfile')`), false, "the copied file content never lands in the answer");
+  // Ctrl/Cmd+Shift+V keeps the copied text itself, exactly as the Composer's own
+  // shortcut does, so a form answer can still hold literal code.
+  await evaluate(`window.clipboardStub.read=async(purpose)=>purpose==='text'
+    ? {text:${JSON.stringify(pastedCode)},contextAttached:false}
+    : {text:'@src/review.ts#L7,1-L8,2',contextAttached:false,codeReference:{expression:'@src/review.ts#L7,1-L8,2',payload:'src/review.ts#L7,1-L8,2'}};
+    chipEditor.querySelector('textarea').focus();`);
+  await key("v", 86, 10);
+  assert.equal(await evaluate(`new Promise(done=>setTimeout(()=>done(chipEditor.querySelector('textarea').value.includes('AgentProfile')),50))`), true, "Ctrl+Shift+V pastes literal text");
+  // The pasted lines can push other chips out of Monaco's rendered lines, so the
+  // raw paste is judged by the answer the form submits.
+  assert.equal(await evaluate(`chipEditor.querySelector('textarea').value.includes('src/review.ts#L7')`), false, "the raw paste inserts no reference");
   await evaluate(`window.clipboardStub.read=async()=>undefined;
     {const data=new DataTransfer();data.setData('text/plain',' notes');
     chipEditor.querySelector('textarea').dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));}`);
