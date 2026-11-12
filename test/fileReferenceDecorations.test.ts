@@ -91,6 +91,15 @@ describe("@ file reference decorations", () => {
     ]);
   });
 
+  it("recognizes directories whose names use non-ASCII punctuation", () => {
+    const [directory] = atReferenceOccurrences("当前内容 @.dext/docs/虚天秘境（蛮荒妖域）/task/ 我");
+    expect(directory).toMatchObject({
+      kind: "dir",
+      expression: "@.dext/docs/虚天秘境（蛮荒妖域）/task/",
+      payload: ".dext/docs/虚天秘境（蛮荒妖域）/task"
+    });
+  });
+
   it("removes an initial chip and its separator without leaving a leading blank", () => {
     const token = "@.dext/attachments/0123456789abcdef01234567.png";
     const source = `ask(input="${token} 后续文字")`;

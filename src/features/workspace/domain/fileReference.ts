@@ -80,7 +80,9 @@ function validFileReferencePath(path: string, directory = false): boolean {
   if (/^file:\/\//i.test(path)) return true;
   if (path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:/.test(path)) return false;
   const segments = path.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === ".." || !/^[\p{L}\p{N}_.-]+$/u.test(segment))) return false;
+  // Non-ASCII characters are always path text; only ASCII punctuation is
+  // reserved for Dext syntax, so names like "虚天秘境（蛮荒妖域）" stay readable.
+  if (segments.some((segment) => !segment || segment === "." || segment === ".." || !/^(?:[^\p{ASCII}]|[\p{L}\p{N}_.-])+$/u.test(segment))) return false;
   const name = segments.at(-1)!;
   // A trailing slash already distinguishes a root directory from @mentions.
   // Files still require a root-level extension or a nested workspace path.
