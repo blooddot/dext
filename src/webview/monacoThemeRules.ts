@@ -144,7 +144,6 @@ export const MONACO_COLOR_IDS: readonly string[] = [
   "editorError.foreground", "editorWarning.foreground", "editorInfo.foreground"
 ];
 
-
 export function monacoThemeRules(theme: EditorTokenTheme | undefined): DextThemeRule[] {
   if (!theme) return [];
   return TOKENS.flatMap(([token, slot]) => {
