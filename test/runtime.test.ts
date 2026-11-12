@@ -1614,4 +1614,23 @@ describe("Dext result repair", () => {
       .rejects.toThrow(/No 'agent' JSON object could be extracted/);
     expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(false);
   });
+
+  it("wraps a write-enabled plain-text result when the call asked for no patch", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    const report = "3 commits created\n\n| hash | message |";
+    runtime.setAgentRunner({ run: async () => report });
+    const events: AgentStreamEvent[] = [];
+
+    const response = await runtime.execute(
+      invoke("agent", [arg("input", "work"), arg("apply", true), arg("patch", false)]),
+      [],
+      { onAgentEvent: (event) => events.push(event) }
+    );
+
+    expect(response.result).toEqual({ kind: "agent", text: report });
+    expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(true);
+  });
 });

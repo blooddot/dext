@@ -75,13 +75,22 @@ function normalizeAgentResult(kind: string, value: unknown): DextResult {
  * Markdown without the JSON envelope has still produced a valid Agent result.
  * This builds that envelope and is deliberately narrow: only the text-shaped
  * `agent` kind, only a non-empty raw string, and never a turn that wrote to the
- * workspace, whose result must stay an auditable structured patch. Every other
- * kind (`apply`, `codeRef`, ...) keeps failing exactly as before, and the
- * wrapped object still has to pass the same contract, so a text-only result
- * cannot satisfy a declaration that requires `patch` or `files`.
+ * workspace when it asked for a patch, whose result must stay an auditable
+ * structured patch. Every other kind (`apply`, `codeRef`, ...) keeps failing
+ * exactly as before, and the wrapped object still has to pass the same
+ * contract, so a text-only result cannot satisfy a declaration that requires
+ * `patch` or `files`.
+ *
+ * A write-enabled turn that asked for no patch (`patch: false`, as `git.commit`
+ * does) has no payload to protect: the report it wrote is the whole result.
  */
-function plainTextAgentResult(kind: string, raw: unknown, allowWorkspaceWrite: boolean): DextResult | undefined {
-  if (kind !== "agent" || allowWorkspaceWrite === true) return undefined;
+function plainTextAgentResult(
+  kind: string,
+  raw: unknown,
+  allowWorkspaceWrite: boolean,
+  includePatch: boolean
+): DextResult | undefined {
+  if (kind !== "agent" || (allowWorkspaceWrite === true && includePatch)) return undefined;
   if (typeof raw !== "string" || !raw) return undefined;
   return { kind: "agent", text: raw };
 }
@@ -811,7 +820,7 @@ export class DextRuntime implements WorkflowRuntime {
     let diagnostics: string;
     if (parsed === undefined) {
       diagnostics = `No '${context.kind}' JSON object could be extracted from the Agent output.`;
-      const wrapped = plainTextAgentResult(context.kind, context.raw, context.allowWorkspaceWrite);
+      const wrapped = plainTextAgentResult(context.kind, context.raw, context.allowWorkspaceWrite, context.includePatch);
       if (wrapped) {
         // A missing envelope is common enough to be worth counting, and this
         // status event is the visible diagnostic that reports it. The fallback
