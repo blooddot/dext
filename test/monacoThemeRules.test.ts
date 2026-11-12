@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mixDefaultForeground, monacoColor, monacoThemeRules } from "../src/webview/monacoThemeRules.js";
+import { mixDefaultForeground, monacoColor, monacoThemeRules, paletteTokenTheme } from "../src/webview/monacoThemeRules.js";
 
 /**
  * Monaco's TypeScript tokenizer emits `keyword`, `identifier`, `string`, `number`,
@@ -45,6 +45,25 @@ describe("the active theme as Monaco token rules", () => {
     expect(mixDefaultForeground("#ffffff", "#000000", 0.92)).toBe("ebebeb");
     expect(mixDefaultForeground("#abc", "#123456", 0.5)).toBe("5e7891");
     expect(mixDefaultForeground("var(--vscode-foreground)", "#000000", 0.92)).toBeUndefined();
+  });
+
+  it("takes Paper and Dim code colors from the palette, not the workbench theme", () => {
+    const palette: Record<string, string> = {
+      "--resource-syntax-keyword": "#9700bd",
+      "--vscode-editor-foreground": "#322d26"
+    };
+    const theme = paletteTokenTheme({ getPropertyValue: (name) => palette[name] ?? "" }, {
+      keyword: { foreground: "#c586c0", fontStyle: "bold" },
+      comment: { foreground: "#6a9955", fontStyle: "italic" }
+    });
+    // The workbench's pastel keyword color goes; its font style stays.
+    expect(theme.keyword).toEqual({ foreground: "#9700bd", fontStyle: "bold" });
+    expect(theme.identifier).toEqual({ foreground: "#322d26" });
+    // A palette variable the surface does not define leaves the slot to the base.
+    expect(theme.comment).toEqual({ fontStyle: "italic" });
+    const foreground = (token: string): string | undefined =>
+      monacoThemeRules(theme).find((rule) => rule.token === token)?.foreground;
+    expect(foreground("keyword")).toBe("9700bd");
   });
 
   it("accepts the shorthand hex a theme may write and ignores anything else", () => {

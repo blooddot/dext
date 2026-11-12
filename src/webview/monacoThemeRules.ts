@@ -64,6 +64,87 @@ export function monacoColor(value: string): string | undefined {
   return /^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex) ? hex : undefined;
 }
 
+/** Monaco token type → the palette variable that paints it in Paper and Dim. */
+const PALETTE: readonly (readonly [EditorTokenName, string])[] = [
+  ["keyword", "--resource-syntax-keyword"],
+  ["string", "--resource-syntax-string"],
+  ["regexp", "--resource-syntax-string"],
+  ["number", "--resource-syntax-number"],
+  ["boolean", "--resource-syntax-boolean"],
+  ["function", "--resource-syntax-function"],
+  ["type", "--resource-syntax-type"],
+  ["property", "--resource-syntax-parameter"],
+  ["comment", "--vscode-descriptionForeground"],
+  ["identifier", "--vscode-editor-foreground"],
+  ["variable", "--vscode-editor-foreground"],
+  ["operator", "--vscode-editor-foreground"],
+  ["punctuation", "--vscode-editor-foreground"],
+  ["delimiter", "--vscode-editor-foreground"]
+];
+
+/**
+ * Paper and Dim are self-contained palettes, so the workbench's own token colors are
+ * tuned for a background they are no longer painting: they read pastel on cream. These
+ * palettes already carry their own syntax colors for the resource pages, so code uses
+ * them too, and only the font styles (italic comments) come from the workbench theme.
+ */
+export function paletteTokenTheme(
+  css: { getPropertyValue(name: string): string },
+  host: EditorTokenTheme | undefined
+): EditorTokenTheme {
+  const theme: EditorTokenTheme = {};
+  for (const [name, variable] of PALETTE) {
+    const foreground = css.getPropertyValue(variable).trim();
+    const fontStyle = host?.[name]?.fontStyle;
+    theme[name] = {
+      ...(foreground ? { foreground } : {}),
+      ...(fontStyle ? { fontStyle } : {})
+    };
+  }
+  return theme;
+}
+
+/**
+ * Colors Monaco reads from the `--vscode-*` variables rather than from its own theme
+ * object: widget chrome, and the decorations its renderer paints itself (selection,
+ * symbol and search matches, bracket and snippet highlights). Both lists are the same
+ * palette, they just reach Monaco through its two color channels.
+ *
+ * Monaco re-declares every registered color as a `--vscode-*` variable on
+ * `.monaco-editor` and `.monaco-component` themselves, and a variable declared on an
+ * element wins over whatever the palette sets on the body. So an id Monaco reads but
+ * this list leaves out is painted with Monaco's own base `vs` colors — white text on
+ * the focused suggest row — no matter what Paper says.
+ *
+ * Only the ids a color cannot be derived from are listed. Monaco's registry derives
+ * most widget colors from a handful of roots (`editorWidget.background` paints the
+ * suggest and hover popups, `list.activeSelectionForeground` the focused row,
+ * `list.highlightForeground` the match highlight), so setting the root like VS Code's
+ * own themes do is enough; the rest — symbol icons, scrollbars — keep Monaco's
+ * defaults. `appearancePalette.test.ts` keeps the palette and this list in step.
+ */
+export const MONACO_COLOR_IDS: readonly string[] = [
+  "textLink.foreground", "textCodeBlock.background", "widget.border", "contrastBorder", "focusBorder",
+  "editor.background", "editor.foreground", "editorCursor.foreground", "editorGutter.background",
+  "editorLineNumber.foreground", "editorLineNumber.activeForeground",
+  "editor.selectionBackground", "editor.inactiveSelectionBackground", "editor.lineHighlightBackground",
+  "editor.selectionHighlightBackground", "editor.wordHighlightBackground", "editor.wordHighlightStrongBackground",
+  "editor.wordHighlightTextBackground", "editor.findMatchBackground", "editor.findMatchHighlightBackground",
+  "editor.findRangeHighlightBackground", "editor.hoverHighlightBackground",
+  "editorBracketMatch.background", "editorBracketMatch.border",
+  "editor.snippetTabstopHighlightBackground", "editor.snippetFinalTabstopHighlightBorder",
+  "editorWidget.background", "editorWidget.foreground", "editorWidget.border",
+  "list.activeSelectionBackground", "list.activeSelectionForeground", "list.highlightForeground",
+  "editorLightBulb.foreground", "editorLightBulbAi.foreground", "editorLightBulbAutoFix.foreground",
+  "toolbar.hoverBackground",
+  "foreground", "disabledForeground", "errorForeground", "textLink.activeForeground",
+  "symbolIcon.keywordForeground", "symbolIcon.stringForeground", "symbolIcon.numberForeground",
+  "symbolIcon.booleanForeground", "symbolIcon.propertyForeground", "symbolIcon.methodForeground",
+  "symbolIcon.functionForeground", "symbolIcon.classForeground", "symbolIcon.variableForeground",
+  "editorError.foreground", "editorWarning.foreground", "editorInfo.foreground"
+];
+
+
 export function monacoThemeRules(theme: EditorTokenTheme | undefined): DextThemeRule[] {
   if (!theme) return [];
   return TOKENS.flatMap(([token, slot]) => {

@@ -1,11 +1,11 @@
 import { monaco } from "./monacoEnvironment.js";
 import type { EditorTokenTheme } from "../shared/contracts/theme.js";
-import { mixDefaultForeground, monacoColor, monacoThemeRules } from "./monacoThemeRules.js";
+import { MONACO_COLOR_IDS, mixDefaultForeground, monacoColor, monacoThemeRules, paletteTokenTheme } from "./monacoThemeRules.js";
 
 /** The Monaco theme the composer and the conversation both paint code with. */
 export const DEXT_MONACO_THEME = "dext";
 
-/** The token rules of the last call: a surface that only wants the colors
+/** The Monaco token rules of the last call: a surface that only wants the colors
  * refreshed (a form field) must not drop them for every other surface. */
 let appliedTheme: EditorTokenTheme | undefined;
 
@@ -18,8 +18,10 @@ export function applyMonacoTheme(theme: EditorTokenTheme | undefined = appliedTh
   // Paper and Dim are self-contained palettes, so Monaco cannot infer its base
   // from the workbench classes alone. High contrast still wins over both.
   const light = appearance === "paper" ? true : appearance === "dim" ? false : workbenchLight;
+  // Paper and Dim paint their own syntax palette; Auto keeps the workbench theme.
+  const palette = appearance === "paper" || appearance === "dim";
   const colors: Record<string, string> = {};
-  for (const name of ["textLink.foreground", "textCodeBlock.background", "widget.border", "contrastBorder", "editorGutter.background", "editor.background", "editor.foreground", "editorCursor.foreground", "editorLineNumber.foreground", "editorLineNumber.activeForeground", "editor.selectionBackground", "editor.inactiveSelectionBackground", "editor.lineHighlightBackground", "editorWidget.background", "editorWidget.foreground", "editorWidget.border", "editorSuggestWidget.background", "editorSuggestWidget.foreground", "editorSuggestWidget.selectedBackground", "editorHoverWidget.background", "editorHoverWidget.foreground", "editorHoverWidget.border", "editorError.foreground", "editorWarning.foreground", "editorInfo.foreground", "focusBorder"]) {
+  for (const name of MONACO_COLOR_IDS) {
     const value = css.getPropertyValue(`--vscode-${name.replaceAll(".", "-")}`).trim();
     const color = monacoColor(value);
     if (color) colors[name] = `#${color}`;
@@ -31,7 +33,7 @@ export function applyMonacoTheme(theme: EditorTokenTheme | undefined = appliedTh
   monaco.editor.defineTheme(DEXT_MONACO_THEME, {
     base: contrast ? light ? "hc-light" : "hc-black" : light ? "vs" : "vs-dark",
     inherit: true,
-    rules: [...(defaultText ? [{ token: "", foreground: defaultText }] : []), ...monacoThemeRules(theme)],
+    rules: [...(defaultText ? [{ token: "", foreground: defaultText }] : []), ...monacoThemeRules(palette ? paletteTokenTheme(css, theme) : theme)],
     colors
   });
   monaco.editor.setTheme(DEXT_MONACO_THEME);

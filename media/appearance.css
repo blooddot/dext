@@ -109,12 +109,6 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --vscode-editorLineNumber-activeForeground: #5b5347;
   --vscode-editor-selectionBackground: #e3d3ba;
   --vscode-editor-lineHighlightBackground: #f0e8da;
-  --vscode-editorSuggestWidget-background: #fffaf1;
-  --vscode-editorSuggestWidget-foreground: #322d26;
-  --vscode-editorSuggestWidget-selectedBackground: #e8ddcc;
-  --vscode-editorHoverWidget-background: #fffaf1;
-  --vscode-editorHoverWidget-foreground: #322d26;
-  --vscode-editorHoverWidget-border: #b5a58e;
   --vscode-editorInfo-foreground: #1f5f9e;
   --vscode-panel-border: #ded3c2;
   --vscode-widget-border: #d8cbb8;
@@ -136,6 +130,8 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --vscode-list-hoverForeground: #322d26;
   --vscode-list-activeSelectionBackground: #e8ddcc;
   --vscode-list-activeSelectionForeground: #2b261f;
+  /* Monaco derives the suggest widget's match highlight from this one id. */
+  --vscode-list-highlightForeground: #1f5f9e;
   --vscode-list-inactiveSelectionBackground: #e3d9c8;
   --vscode-list-focusBackground: #e8ddcc;
   --vscode-input-background: #fffaf1;
@@ -181,6 +177,31 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --vscode-editorWidget-background: #fffaf1;
   --vscode-editorWidget-foreground: #322d26;
   --vscode-editorWidget-border: #d8cbb8;
+  /* The rest of Monaco's chrome. Its widgets read these from CSS variables, so an
+     id this palette leaves out is painted with the user's workbench theme. VS Code's
+     own themes build every wash here from one accent at fixed alphas (25% selection
+     and match, 15% symbol, 8% occurrence) over the editor ground, plus a neutral
+     grey for scrollbars; Paper does the same with its own accent instead of a
+     per-widget colour, so the whole editor stays one hue family. */
+  --vscode-editor-selectionHighlightBackground: #9b6b4f15;
+  --vscode-editor-wordHighlightBackground: #9b6b4f26;
+  --vscode-editor-wordHighlightStrongBackground: #9b6b4f26;
+  --vscode-editor-wordHighlightTextBackground: #9b6b4f26;
+  --vscode-editor-findMatchBackground: #9b6b4f40;
+  --vscode-editor-findMatchHighlightBackground: #9b6b4f1a;
+  --vscode-editor-findRangeHighlightBackground: #3c322415;
+  --vscode-editor-hoverHighlightBackground: #3c322415;
+  --vscode-editorBracketMatch-background: #9b6b4f40;
+  --vscode-editorBracketMatch-border: #ded3c2;
+  --vscode-editor-snippetTabstopHighlightBackground: #9b6b4f33;
+  --vscode-editor-snippetFinalTabstopHighlightBorder: #9b6b4f80;
+  --vscode-editorLightBulb-foreground: #806000;
+  --vscode-editorLightBulbAi-foreground: #806000;
+  --vscode-editorLightBulbAutoFix-foreground: #1f5f9e;
+  --vscode-list-focusForeground: #2b261f;
+  --vscode-list-inactiveSelectionForeground: #322d26;
+  --vscode-list-focusOutline: #9b6b4f;
+  --vscode-menu-selectionBorder: #9b6b4f;
   --vscode-progressBar-background: #8a4b2f;
   --vscode-charts-blue: #1769b5;
   --vscode-charts-green: #2f6b45;
@@ -217,6 +238,8 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --vscode-symbolIcon-functionForeground: #6a4b00;
   --vscode-symbolIcon-classForeground: #1f6b5e;
   --vscode-symbolIcon-variableForeground: #3b3228;
+  /* Only the kinds `styles.css` paints in non-Monaco code blocks; every other symbol
+     icon keeps Monaco's own default hue, the way a stock VS Code theme leaves them. */
   --dext-plan-fill: #c9ac35;
   --dext-plan-foreground: #231d12;
   --dext-plan-label: #6f5800;
@@ -263,12 +286,6 @@ body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast
   --vscode-editorLineNumber-activeForeground: #c9c0b2;
   --vscode-editor-selectionBackground: #4a3c2c;
   --vscode-editor-lineHighlightBackground: #26221d;
-  --vscode-editorSuggestWidget-background: #29251f;
-  --vscode-editorSuggestWidget-foreground: #e8e1d5;
-  --vscode-editorSuggestWidget-selectedBackground: #3d372e;
-  --vscode-editorHoverWidget-background: #29251f;
-  --vscode-editorHoverWidget-foreground: #e8e1d5;
-  --vscode-editorHoverWidget-border: #6b5f50;
   --vscode-editorInfo-foreground: #8fc7f0;
   --vscode-panel-border: #3d372e;
   --vscode-widget-border: #4a4237;
@@ -290,6 +307,8 @@ body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast
   --vscode-list-hoverForeground: #e8e1d5;
   --vscode-list-activeSelectionBackground: #332e27;
   --vscode-list-activeSelectionForeground: #f3ece0;
+  /* Mirrors the Paper block above. */
+  --vscode-list-highlightForeground: #8fc7f0;
   --vscode-list-inactiveSelectionBackground: #2a2621;
   --vscode-list-focusBackground: #332e27;
   --vscode-input-background: #191714;
@@ -334,6 +353,26 @@ body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast
   --vscode-editorWidget-background: #29251f;
   --vscode-editorWidget-foreground: #e8e1d5;
   --vscode-editorWidget-border: #4a4237;
+  /* Mirrors the Paper block above with Dim's accent and ground. */
+  --vscode-editor-selectionHighlightBackground: #c99b7860;
+  --vscode-editor-wordHighlightBackground: #c99b7850;
+  --vscode-editor-wordHighlightStrongBackground: #c99b7880;
+  --vscode-editor-wordHighlightTextBackground: #c99b7850;
+  --vscode-editor-findMatchBackground: #c99b7880;
+  --vscode-editor-findMatchHighlightBackground: #c99b7866;
+  --vscode-editor-findRangeHighlightBackground: #ffffff13;
+  --vscode-editor-hoverHighlightBackground: #ffffff13;
+  --vscode-editorBracketMatch-background: #c99b7855;
+  --vscode-editorBracketMatch-border: #3d372e;
+  --vscode-editor-snippetTabstopHighlightBackground: #c99b7833;
+  --vscode-editor-snippetFinalTabstopHighlightBorder: #c99b7880;
+  --vscode-editorLightBulb-foreground: #ffcc00;
+  --vscode-editorLightBulbAi-foreground: #ffcc00;
+  --vscode-editorLightBulbAutoFix-foreground: #75beff;
+  --vscode-list-focusForeground: #f3ece0;
+  --vscode-list-inactiveSelectionForeground: #e8e1d5;
+  --vscode-list-focusOutline: #c99b78;
+  --vscode-menu-selectionBorder: #c99b78;
   --vscode-progressBar-background: #d9a27f;
   --vscode-charts-blue: #79b8ff;
   --vscode-charts-green: #63c9b6;
