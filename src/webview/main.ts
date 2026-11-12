@@ -2004,7 +2004,9 @@ function renderAgentEvent(event: AgentStreamEvent): void {
     return;
   }
   trace.renderEvent(event);
-  transcript.active?.setProcessCopy?.(trace.copyText());
+  // A getter: replaying a long turn calls this once per event, and joining the
+  // whole timeline each time made hydration quadratic in its length.
+  transcript.active?.setProcessCopy?.(() => trace.copyText(), trace.hasCopyText());
 }
 
 function resetAgentTrace(): void {
@@ -2106,8 +2108,9 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, s
 
   agentRunStartedAt = Date.now();
   const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
-  for (const event of replay) renderAgentEvent(event);
-  turn.setProcessCopy?.(trace.copyText());
+  // Only the events whose cards sit outside Process (todos and agent questions)
+  // paint here; the timeline itself waits for its first expand.
+  for (const event of replay) if (event.phase === "todo" || event.phase === "input") renderAgentEvent(event);
   if (agentStream) finishAgentProgress();
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   if (turn.processMeta) turn.processMeta.textContent = presentTurn({
@@ -2123,14 +2126,29 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, s
   }
 }
 
+/** A stored turn's timeline is the expensive half (one row and one Markdown
+ * parse per event), so it is built the first time the reader opens Process. */
+function hydrateStoredProcess(record: DextHistoryRecord, turn: OutputTurnElements): void {
+  if (turn.processPainted) return;
+  turn.processPainted = true;
+  withIsolatedAgentTrace(turn, () => {
+    const replay = typeof prepareHistoryTrace === "undefined" ? record.process : prepareHistoryTrace(record.process);
+    for (const event of replay) if (event.phase !== "todo" && event.phase !== "input") renderAgentEvent(event);
+    const processCopy = trace.copyText();
+    turn.setProcessCopy?.(() => processCopy, processCopy.length > 0);
+  });
+}
+
 function hydrateOutputTurnOnOpen(event: Event): void {
   const target = event.target;
-  if (!(target instanceof HTMLDetailsElement) || !target.open || !target.classList.contains("output-turn")) return;
-  const turnId = target.dataset.turnId;
-  if (!turnId) return;
-  const turn = transcript.get(turnId);
-  if (!turn?.hydrate) return;
-  turn.hydrate();
+  if (!(target instanceof HTMLDetailsElement) || !target.open) return;
+  const row = target.closest<HTMLElement>("details.output-turn");
+  const turnId = row?.dataset.turnId;
+  const turn = turnId ? transcript.get(turnId) : undefined;
+  if (!turn) return;
+  if (target === row) turn.hydrate?.();
+  else if (target.dataset.turnSection === "process") turn.hydrateProcess?.();
+  else return;
   // A hydrated turn can be far taller than its collapsed row. Following the
   // output has to survive that growth; a reader who scrolled away is unaffected.
   pinResultToBottom();
@@ -2214,6 +2232,7 @@ function renderOutputSession(session: DextHistorySession): void {
     // Closed history rows need their final status before deferred hydration.
     if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome);
     turn.hydrate = () => hydrateStoredTurn(record, turn, session.id);
+    turn.hydrateProcess = () => hydrateStoredProcess(record, turn);
     if (latest) latestTurn = turn;
   }
   if (liveTurn && liveTurnId) {

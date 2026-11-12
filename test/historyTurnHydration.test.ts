@@ -21,8 +21,9 @@ const renderer = ts.transpileModule([
 
 class Disclosure {
   open = true;
-  dataset = { turnId: "history" };
-  classList = { contains: (name: string) => name === "output-turn" };
+  dataset: { turnId?: string; turnSection?: string } = { turnId: "history" };
+  classList: { contains: (name: string) => boolean } = { contains: (name) => name === "output-turn" };
+  closest = (selector: string) => (selector.includes("output-turn") ? this : null);
 }
 
 /** The trace contract the hydration path relies on: isolation swaps every
@@ -64,6 +65,8 @@ class TraceStub {
     this.queue = [];
     this.renders.push(...queued);
   });
+  copyText = vi.fn(() => "Historical trace");
+  hasCopyText = vi.fn(() => true);
   commandCount = () => 0;
   editedFileCount = () => 0;
 }
@@ -108,6 +111,7 @@ function harness() {
   };
   runInNewContext(`${renderer}
     turn.hydrate = () => hydrateStoredTurn(record, turn);
+    turn.hydrateProcess = () => hydrateStoredProcess(record, turn);
   `, context);
   return { context, state, turn, liveTurn, liveItem, trace, transcript, frames };
 }
@@ -146,18 +150,34 @@ describe("expanding history while a turn is streaming", () => {
     expect(turn.hydrated).toBe(true);
   });
 
-  it("hydrates Process and Output immediately and preserves all live state", () => {
+  it("hydrates Output immediately and leaves the Process rows to its first expand", () => {
     const { context, state, turn, liveTurn } = harness();
     context.renderAgentEvent.mockImplementation(() => { context.agentStream = { live: false }; });
     runInNewContext("hydrateOutputTurnOnOpen(event)", context);
     expect(turn.hydrated).toBe(true);
-    expect(context.renderAgentEvent).toHaveBeenCalledWith(context.record.process[0]);
+    // The timeline costs one Markdown parse per event, so opening a stored turn
+    // must not build it until the reader asks for it.
+    expect(context.renderAgentEvent).not.toHaveBeenCalled();
     expect(turn.output.append).toHaveBeenCalledWith("Historical answer");
     expect(turn.processDisclosure.open).toBe(false);
     for (const key of Object.keys(state) as Array<keyof typeof state>) expect(context[key], key).toBe(state[key]);
     expect(context.clearInterval).not.toHaveBeenCalled();
     expect(context.transcript.active).toBe(liveTurn);
     expect(state.agentStream).toBeDefined();
+    runInNewContext("hydrateOutputTurnOnOpen(event)", context);
+    expect(turn.hydrated).toBe(true);
+    expect(context.renderAgentEvent).not.toHaveBeenCalled();
+  });
+
+  it("builds the Process rows once, when the reader expands them", () => {
+    const { context, turn } = harness();
+    const section = new Disclosure();
+    section.dataset = { turnSection: "process" };
+    section.classList = { contains: () => false };
+    section.closest = () => turn.disclosure;
+    context.event.target = section;
+    runInNewContext("hydrateOutputTurnOnOpen(event)", context);
+    expect(context.renderAgentEvent).toHaveBeenCalledWith(context.record.process[0]);
     runInNewContext("hydrateOutputTurnOnOpen(event)", context);
     expect(context.renderAgentEvent).toHaveBeenCalledOnce();
   });
@@ -203,6 +223,5 @@ it("hydrates unknown historical results as read-only output without dispatching 
   const renderResult = vi.fn(); Object.assign(context, { renderResult });
   runInNewContext("hydrateOutputTurnOnOpen(event)", context);
   expect(renderResult).toHaveBeenCalledWith(response);
-  expect(context.renderAgentEvent).toHaveBeenCalledTimes(1);
   expect(context.transcript.active).toBe(liveTurn);
 });

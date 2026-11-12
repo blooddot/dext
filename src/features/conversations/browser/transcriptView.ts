@@ -46,10 +46,14 @@ export interface OutputTurnElements {
   diffAction: HTMLButtonElement;
   /** The whole-section copy controls live in the title bar. Their payloads are
    * filled in as the turn streams or when a stored turn is hydrated. */
-  setProcessCopy?: (text: string) => void;
+  /** Read at click time: a long timeline must not be joined per event. */
+  setProcessCopy?: (read: () => string, hasText: boolean) => void;
   setOutputCopy?: (text: string) => void;
   hydrated?: boolean;
   hydrate?: () => void;
+  /** Built on request: stored Process rows cost one Markdown parse per event. */
+  processPainted?: boolean;
+  hydrateProcess?: () => void;
 }
 
 export interface TranscriptTurnOptions {
@@ -266,8 +270,8 @@ export class TranscriptView {
       planExecutionStatus, time);
     // Process and Output fill in as events stream, so their copy payloads are
     // read when clicked instead of being fixed at row creation.
-    const processCopyText = { value: "" };
-    const processCopy = this.host.copyLive(() => processCopyText.value);
+    let readProcessCopy = (): string => "";
+    const processCopy = this.host.copyLive(() => readProcessCopy());
     processCopy.hidden = true;
     const outputCopyText = { value: "" };
     const outputCopy = this.host.copyLive(() => outputCopyText.value);
@@ -302,9 +306,9 @@ export class TranscriptView {
       output: output.body,
       changes,
       diffAction,
-      setProcessCopy: (text: string) => {
-        processCopyText.value = text;
-        processCopy.hidden = text.length === 0;
+      setProcessCopy: (read: () => string, hasText: boolean) => {
+        readProcessCopy = read;
+        processCopy.hidden = !hasText;
       },
       setOutputCopy: (text: string) => {
         outputCopyText.value = text;

@@ -81,9 +81,15 @@ export class AgentTraceView {
     return this.editedUris.size;
   }
 
-  /** The whole Process timeline as plain text, in the order it was rendered. */
+  /** The whole Process timeline as plain text, in the order it was rendered.
+   * Joining it is O(timeline), so callers ask once, when the reader clicks. */
   copyText(): string {
     return [...this.copyTexts.values()].filter(Boolean).join("\n\n");
+  }
+
+  /** Whether there is anything to copy, without joining the timeline. */
+  hasCopyText(): boolean {
+    return this.copyTexts.size > 0;
   }
 
   /** Detaches queued message renders so they cannot paint into a cached page. */
