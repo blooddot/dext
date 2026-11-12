@@ -60,6 +60,10 @@ try {
     window.createView=()=>{const view=new InteractionUI.AgentInputView((id,answers)=>replies.push({id,answers}),(state,result)=>replies.push({id:state.requestId,result}),'test',{get:key=>saved[key],set:(key,draft)=>{saved[key]=draft}},formFiles);document.getElementById('turn').append(view.element);view.setRunning(true);return view;};
     window.view=createView();window.state=(id,form)=>({sessionId:'session',turnId:'turn',requestId:id,status:'waiting',form});`);
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify((await readFile('media/styles.css', 'utf8')) + "\n" + (referenceStyles?.text ?? ""))};document.head.append(style);const theme=document.createElement('style');theme.id='theme';document.head.append(theme);}`);
+  // The sidebar links the codicon stylesheet, so the window buttons must show real
+  // glyphs; inline the ttf it points at because this harness has no server.
+  const codiconFont = (await readFile("node_modules/@vscode/codicons/dist/codicon.ttf")).toString("base64");
+  await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify((await readFile("node_modules/@vscode/codicons/dist/codicon.css", "utf8")).replace(/url\("[^"]+"\)/, `url("data:font/ttf;base64,${codiconFont}")`))};document.head.append(style);}`);
   await send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: false });
   const theme = async (background, foreground, accent) => evaluate(`document.getElementById('theme').textContent=${JSON.stringify(`:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${background};--vscode-sideBar-background:${background};--vscode-foreground:${foreground};--vscode-input-background:${background};--vscode-input-foreground:${foreground};--vscode-descriptionForeground:${foreground};--vscode-widget-border:${foreground};--vscode-focusBorder:${accent};--vscode-button-background:${accent};--vscode-button-foreground:${background};--vscode-list-inactiveSelectionBackground:${background};--vscode-errorForeground:${foreground}} body{background:${background};color:${foreground};padding:8px} main{min-width:0}`)}`);
   await theme("#181818", "#dddddd", "#66aaff");
@@ -250,6 +254,47 @@ try {
   }
   await evaluate(`window.optionalRadio=state('optional-radio',InteractionUI.parseUiForm({title:'Optional choice',fields:[{id:'pick',type:'radio',label:'Optional',required:false,options:['a','b']}]}));view.updateUi(optionalRadio);view.element.querySelector('input[type=radio]').click();view.element.querySelector('button[aria-label="Clear Optional"]').click();view.element.querySelector('form').requestSubmit();`);
   assert.deepEqual(await evaluate(`replies.at(-1).result.answers`), {}, "optional radio can return to unanswered");
+  // Both surfaces carry the same whole-view toggle: its icon and label name the
+  // size it switches to, and Escape restores that size before it would cancel.
+  for (const presentation of ["inline", "dialog"]) {
+    const count = await evaluate(`replies.length`);
+    const surface = presentation === "dialog" ? "document.querySelector('dialog[open]')" : "[...view.element.querySelectorAll('.agent-input-card')].at(-1)";
+    await evaluate(`window.sizeState=state('size-${presentation}',InteractionUI.parseUiForm({title:'Sizing',presentation:'${presentation}',description:'Long request text. '.repeat(200),fields:[{id:'note',type:'input',label:'Note',required:false}]}));view.updateUi(sizeState);`);
+    await evaluate(`new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)))`);
+    await evaluate(`window.sizeSurface=${surface};window.sizeToggle=sizeSurface.querySelector('.interaction-fullscreen-toggle');sizeToggle.focus();`);
+    const box = async () => JSON.parse(await evaluate(`{const r=sizeSurface.getBoundingClientRect();JSON.stringify({width:Math.round(r.width),height:Math.round(r.height),left:Math.round(r.left),top:Math.round(r.top)})}`));
+    assert.equal(await evaluate(`sizeToggle.classList.contains('codicon-chrome-maximize')`), true, `${presentation}: starts maximizable`);
+    assert.equal(await evaluate(`getComputedStyle(sizeToggle,'::before').content`), '"\ueab9"', `${presentation}: maximize glyph comes from the linked codicon stylesheet`);
+    assert.equal(await evaluate(`sizeToggle.getAttribute('aria-label')`), "Fullscreen interaction");
+    const small = await box(); assert.ok(small.width < 320 && small.height < 640, `${presentation}: starts at its own size`);
+    await evaluate(`sizeToggle.click()`);
+    assert.deepEqual(await box(), { width: 288, height: 640, left: 16, top: 0 }, `${presentation}: fullscreen spans the height inside a 16px side gutter`);
+    // A wide panel keeps the app shell's 1200px reading column instead of stretching the form edge to edge.
+    await send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 640, deviceScaleFactor: 1, mobile: false });
+    await evaluate(`new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)))`);
+    assert.deepEqual(await box(), { width: 1200, height: 640, left: 100, top: 0 }, `${presentation}: fullscreen centers on the 1200px column`);
+    await send("Emulation.setDeviceMetricsOverride", { width: 320, height: 640, deviceScaleFactor: 1, mobile: false });
+    await evaluate(`new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)))`);
+    assert.equal(await evaluate(`sizeSurface.classList.contains('interaction-fullscreen')`), true);
+    assert.equal(await evaluate(`sizeToggle.classList.contains('codicon-chrome-restore')`), true);
+    assert.equal(await evaluate(`getComputedStyle(sizeToggle,'::before').content`), '"\ueabb"', `${presentation}: the restore glyph replaces the maximize glyph`);
+    assert.equal(await evaluate(`sizeToggle.getAttribute('aria-label')`), "Restore interaction size");
+    assert.equal(await evaluate(`{const close=sizeSurface.querySelector('.interaction-close:not(.interaction-fullscreen-toggle)').getBoundingClientRect();const toggle=sizeToggle.getBoundingClientRect();close.left>=toggle.right && close.right<=innerWidth}`), true, `${presentation}: close stays beside the toggle`);
+    // The answers sit on the bottom edge and the request's text scrolls in the height
+    // above them, so the buttons never fall below the fold whatever the text length.
+    const geometry = JSON.parse(await evaluate(`{const rect=(selector)=>sizeSurface.querySelector(selector).getBoundingClientRect();const description=sizeSurface.querySelector('.interaction-description');const actions=rect('.interaction-actions');JSON.stringify({actionsTop:Math.round(actions.top),actionsBottom:Math.round(actions.bottom),fieldBottom:Math.round(rect('.interaction-field').bottom),formBottom:Math.round(rect('.interaction-form').bottom),textHeight:Math.round(description.getBoundingClientRect().height),textScrolls:description.scrollHeight>description.clientHeight})}`));
+    assert.ok(geometry.actionsBottom >= 640 - 40 && geometry.formBottom <= 640, `${presentation}: the answers end on the bottom edge`);
+    assert.ok(geometry.fieldBottom <= geometry.actionsTop, `${presentation}: the fields stay above the actions`);
+    assert.ok(geometry.textHeight >= 320 && geometry.textScrolls, `${presentation}: the request's text takes the height above the answers`);
+    const filled = await send("Page.captureScreenshot"); await writeFile(join(artifacts, `fullscreen-${presentation}.png`), Buffer.from(filled.data, "base64"));
+    await key("Escape", 27);
+    assert.equal(await evaluate(`sizeSurface.classList.contains('interaction-fullscreen')`), false, `${presentation}: Escape restores the size`);
+    assert.equal(await evaluate(`replies.length`), count, `${presentation}: Escape in fullscreen does not cancel`);
+    await evaluate(`sizeToggle.click();sizeToggle.click()`);
+    assert.equal(await evaluate(`sizeSurface.classList.contains('interaction-fullscreen')`), false, `${presentation}: the second press restores`);
+    assert.equal(await evaluate(`sizeToggle.classList.contains('codicon-chrome-maximize')`), true);
+    await evaluate(`view.updateUi({...sizeState,status:'cancelled'});`);
+  }
   await evaluate(`window.notice=state('notice',InteractionUI.uiCallForm('alert',{message:'Read this'}));view.updateUi(notice);`);
   assert.equal(await evaluate(`document.querySelectorAll('dialog[open] .interaction-actions button').length`), 1);
   await send("Input.dispatchMouseEvent", { type: "mousePressed", x: 1, y: 1, button: "left", clickCount: 1 });
@@ -357,9 +402,9 @@ try {
   assert.equal(chipAnswer.includes("@a.ts"), true, "a dropped file reaches the answer as @path");
   assert.equal(chipAnswer.includes(`@${codeReference}`), true, "a code reference keeps its range in the answer");
   assert.equal(chipAnswer.includes("@src/review.ts#L5,1-L6,2"), true, "a pasted code reference reaches the answer");
-  assert.equal(chipAnswer.includes("AgentProfile"), false, "pasting code leaves no source text behind");
+  assert.equal(chipAnswer.includes("AgentProfile"), true, "Ctrl+Shift+V keeps the copied text instead of turning it into a reference");
   await evaluate(`chipDialog.element.remove()`);
-  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, dropped files and pasted images in a form field, reference chips in single- and multiline answers, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
+  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, fullscreen/restore toggle in inline/dialog forms, dropped files and pasted images in a form field, reference chips and Ctrl+Shift+V literal paste in single- and multiline answers, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
 } finally {
   try { await shutdown?.(); } catch {}
   socket?.close(); browser.kill();

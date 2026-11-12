@@ -4476,7 +4476,7 @@ details[open] > summary > .disclosure-chevron {
 .interaction-form > p, .interaction-head > h3, .interaction-field p { margin: 0; overflow-wrap: anywhere; }
 .interaction-head { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .interaction-head > h3 { font-size: 14px; font-weight: 600; }
-.interaction-dialog .interaction-head > h3 { padding-right: 26px; }
+.interaction-dialog .interaction-head > h3 { padding-right: 56px; }
 /* Descriptions carry whole agent reports, so they wrap and scroll instead of stretching the dialog. */
 .interaction-description.markdown-body { max-height: 50vh; overflow: auto; margin: 0; color: var(--vscode-foreground); font-size: 12px; line-height: 1.6; white-space: normal; }
 .interaction-description img { display: block; margin: 8px 0; border-radius: 4px; }
@@ -4532,6 +4532,22 @@ details[open] > summary > .disclosure-chevron {
 .interaction-dialog::backdrop { background: rgb(0 0 0 / 45%); }
 .interaction-close { position: absolute; top: 10px; right: 10px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--vscode-descriptionForeground); font-size: 16px; line-height: 1; }
 .interaction-close:hover { background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)); color: var(--vscode-foreground); }
+/* Fullscreen spans the full height so the composer below and the bar above stay
+   covered, keeps the 16px gutter the dialog already leaves at its own size on the
+   sides, and centers it on the same 1200px column the app shell uses, so a
+   maximized form reads as a dialog instead of a stretched panel. The form scrolls
+   inside it so the corner buttons stay put. A dialog fills to its border, a card to
+   its padding. */
+.interaction-fullscreen { position: fixed; inset: 0 16px; z-index: 20; box-sizing: border-box; width: auto; height: auto; max-width: 1200px; max-height: none; margin: 0 auto; box-shadow: 0 16px 40px rgb(0 0 0 / 36%); overflow: hidden; }
+/* Fullscreen keeps the answers and their buttons on the bottom edge, the way the
+   Input does, so the request's text gets every pixel above them. The form fills the
+   surface's inner edge, which is its border for a dialog and its padding for a card. */
+.interaction-fullscreen .interaction-form { height: 100%; max-height: none; }
+.interaction-fullscreen .interaction-head { flex: 1 1 auto; min-height: 25vh; overflow: auto; }
+.interaction-fullscreen .interaction-description.markdown-body { max-height: none; }
+.interaction-fullscreen .interaction-field,
+.interaction-fullscreen .interaction-actions { flex: 0 0 auto; }
+.interaction-close.interaction-fullscreen-toggle { right: 40px; }
 .interaction-select { display: flex; gap: 6px; }
 .interaction-select > button:first-child { min-width: 0; flex: 1; text-align: left; }
 .interaction-select-popup { box-sizing: border-box; position: fixed; margin: 0; padding: 4px; overflow-y: auto; border: 1px solid var(--vscode-widget-border); border-radius: 4px; background: var(--vscode-editor-background); color: var(--vscode-foreground); }

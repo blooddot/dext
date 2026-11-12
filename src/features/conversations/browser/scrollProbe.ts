@@ -126,7 +126,7 @@ function visibleBottom(port: HTMLElement): number {
  * clip is deliberately excluded: content below the fold is still content the
  * range has to cover. A box inside a nested scroller is reachable through that
  * scroller, so the clip stops at the scroller's own edge. */
-function paintState(element: Element, port: HTMLElement): { painted: boolean; clippedBottom: number } {
+function paintState(element: Element, port: HTMLElement): { painted: boolean; clippedBottom: number; outOfFlow: boolean } {
   const rect = element.getBoundingClientRect();
   let clipTop = -Infinity;
   let clipBottom = Infinity;
@@ -136,10 +136,13 @@ function paintState(element: Element, port: HTMLElement): { painted: boolean; cl
   let current: Element | null = element;
   while (current && current !== port) {
     const style = getComputedStyle(current);
-    if (style.display === "none") return { painted: false, clippedBottom: clipBottom };
-    if (style.visibility !== "visible") return { painted: false, clippedBottom: clipBottom };
-    if (Number(style.opacity) === 0) return { painted: false, clippedBottom: clipBottom };
-    if (style.contentVisibility === "hidden") return { painted: false, clippedBottom: clipBottom };
+    // A box pinned to the viewport is not in the scroll flow: it paints wherever
+    // the reader is, so it can neither lengthen the range nor be unreachable.
+    if (style.position === "fixed") return { painted: true, clippedBottom: Infinity, outOfFlow: true };
+    if (style.display === "none") return { painted: false, clippedBottom: clipBottom, outOfFlow: false };
+    if (style.visibility !== "visible") return { painted: false, clippedBottom: clipBottom, outOfFlow: false };
+    if (Number(style.opacity) === 0) return { painted: false, clippedBottom: clipBottom, outOfFlow: false };
+    if (style.contentVisibility === "hidden") return { painted: false, clippedBottom: clipBottom, outOfFlow: false };
     if (current !== element && style.overflowY !== "visible") {
       const box = current.getBoundingClientRect();
       clipTop = Math.max(clipTop, box.top);
@@ -151,7 +154,7 @@ function paintState(element: Element, port: HTMLElement): { painted: boolean; cl
     current = current.parentElement;
   }
   const visible = rect.bottom > clipTop && rect.top < clipBottom && rect.right > clipLeft && rect.left < clipRight;
-  return { painted: visible, clippedBottom: clipped ? clipBottom : Infinity };
+  return { painted: visible, clippedBottom: clipped ? clipBottom : Infinity, outOfFlow: false };
 }
 
 interface MeasuredBox extends ScrollBox {
@@ -184,6 +187,9 @@ export function measureResultScroll(targets: ScrollProbeTargets): ScrollProbeRep
     if (!rect.height && !rect.width) continue;
     const style = getComputedStyle(element);
     const state = paintState(element, body);
+    // Out-of-flow content (a fullscreen interaction card, say) is never part of
+    // what the port scrolls through, so it explains none of the range.
+    if (state.outOfFlow) continue;
     const rawBottom = toScroll(rect.bottom);
     boxes.push({
       label: label(element),

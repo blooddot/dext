@@ -2,7 +2,7 @@ import type { AgentInputAnswers, AgentInputState } from "../../../shared/contrac
 import type { UiField, UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../shared/contracts/uiForm.js";
 import { agentInputForm, agentFormAnswers, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerChoice } from "../presentation/uiInteractionPresentation.js";
 import { InteractionForm, type InteractionFileHost } from "./interactionForm.js";
-import { InteractionDialog } from "./interactionDialog.js";
+import { InteractionDialog, interactionFullscreen } from "./interactionDialog.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
 
 export interface InteractionDraftStore {
@@ -100,8 +100,15 @@ export class AgentInputView {
       } else {
         const close = document.createElement("button"); close.type = "button"; close.textContent = "×";
         close.className = "interaction-close"; close.setAttribute("aria-label", "Close interaction"); close.addEventListener("click", () => form.cancel());
-        card.element.append(close, form.element);
-        card.element.onkeydown = (event) => { if (event.key === "Escape") { event.preventDefault(); form.cancel(); } };
+        const fullscreen = interactionFullscreen(card.element);
+        card.element.append(fullscreen, close, form.element);
+        card.element.onkeydown = (event) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          // Escape leaves fullscreen first so a maximized form is not cancelled by habit.
+          if (card.element.classList.contains("interaction-fullscreen")) { fullscreen.click(); return; }
+          form.cancel();
+        };
       }
       return;
     }

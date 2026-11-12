@@ -296,6 +296,27 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
   await settle();
   console.log('PASS a collapsed Process owns no scroll range');
 
+  // A viewport-pinned overlay - the fullscreen interaction card - is not part of
+  // the scroll flow. It paints over the port instead of being laid out after the
+  // newest reply, so the diagnostic must not call it content the reader can
+  // never scroll to.
+  const beforeOverlay = await evaluate('dextScrollReport().content.paintedBottom');
+  await evaluate(`{const overlay=document.createElement('section');overlay.id='probe-overlay';
+    overlay.style.cssText='position:fixed;inset:0;background:#111';overlay.textContent='overlay';
+    document.getElementById('result').append(overlay);}`);
+  await settle();
+  const overlayReport = await evaluate('dextScrollReport()');
+  assert.equal(overlayReport.content.paintedBottom, beforeOverlay,
+    `a fixed overlay adds no painted range, got ${JSON.stringify(overlayReport.content)}`);
+  assert.equal(overlayReport.content.unreachable, 0,
+    `a fixed overlay is never unreachable, got ${JSON.stringify(overlayReport.content)}`);
+  assert.equal([...overlayReport.culprits, ...overlayReport.blankOwners, ...overlayReport.unpainted]
+    .some((box) => box.position === 'fixed'), false,
+    `no report section names the overlay, got ${JSON.stringify(overlayReport)}`);
+  await evaluate(`document.getElementById('probe-overlay').remove()`);
+  await settle();
+  console.log('PASS a viewport-pinned overlay stays out of the scroll range');
+
   // The turn row is the only place its prompt is shown: one clipped line while
   // closed, the whole submission once opened. No separate Input section repeats it.
   await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'code-turn',mode:'code',
