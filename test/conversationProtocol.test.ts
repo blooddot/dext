@@ -21,6 +21,7 @@ describe("conversation protocol", () => {
     };
     const accepted = [
       { type: "executeInput", mode: "agent", source: "hello" },
+      { type: "executeInput", mode: "agent", source: "queued", sessionId: "session" },
       { type: "stopExecution", turnId: "turn" },
       { type: "buildPlan", planPath: ".dext/plans/a.plan.md" },
       { type: "correctPlan", planPath: ".dext/plans/a.plan.md" },

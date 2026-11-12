@@ -107,6 +107,17 @@ describe("sidebar panel layout", () => {
     expect(html.match(/class="icon-button panel-fullscreen"/g)).toBeNull();
   });
 
+  it("places the queued message row and its queue button next to the composer", async () => {
+    const html = await source("src/app/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    expect(html).toMatch(/id="input-shell"[\s\S]*id="queued-turn"[\s\S]*id="attachment-bar"/);
+    expect(html).toMatch(/id="queued-turn-label"[\s\S]*id="queued-turn-edit"[\s\S]*id="queued-turn-withdraw"/);
+    expect(html).toMatch(/class="action-actions"[\s\S]*id="queue-turn"[\s\S]*id="run"/);
+    // Enter queues while a turn runs; only the Stop button still stops it.
+    expect(main).toContain("elements.run.addEventListener(\"click\", () => (executing ? stopExecution() : run()));");
+    expect(main).toMatch(/function run\(\): void \{\s*if \(executing\) \{\s*queueTurn\(\);/);
+  });
+
   it("creates resources from the Resources panel with composer resource controls", async () => {
     const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
@@ -771,7 +782,7 @@ describe("sidebar panel layout", () => {
     const main = await source("src/webview/main.ts");
     const attachments = await source("src/webview/imageAttachments.ts");
     const sidebar = await source("src/app/sidebarProvider.ts");
-    expect(main).toMatch(/vscode\.postMessage\(\{ type: "executeInput", mode: inputMode, source \}\);[\s\S]*?clearSubmittedInput\(\);/);
+    expect(main).toMatch(/vscode\.postMessage\(\{ type: "executeInput", \.\.\.nextTurn\(source\) \}\);[\s\S]*?clearSubmittedInput\(\);/);
     const clear = main.slice(
       main.indexOf("function clearSubmittedInput"),
       main.indexOf("elements.run.addEventListener")

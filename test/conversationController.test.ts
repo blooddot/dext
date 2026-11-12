@@ -76,6 +76,23 @@ describe("ConversationController", () => {
     expect(h.controller.active().id).toBe("a");
   });
 
+  it("republishes the tab strip when an already open tab is activated", async () => {
+    const h = createConversationHarness();
+    await h.seed([conversation("a"), conversation("b")]);
+    h.controller.activate(h.controller.session("a")!);
+    h.controller.activate(h.controller.session("b")!);
+    await vi.waitFor(() => expect(h.messages.filter((message) => message.type === "conversations")).toHaveLength(2));
+    h.messages.length = 0;
+    // A turn that ended while another tab was shown leaves the composer's copy
+    // of every running flag stale; activating the tab has to refresh it, or a
+    // message queued in that tab never gets sent.
+    h.controller.activate(h.controller.session("a")!);
+    await vi.waitFor(() => expect(h.messages.filter((message) => message.type === "conversations")).toHaveLength(1));
+    const conversations = h.messages.find((message) => message.type === "conversations");
+    expect(conversations).toMatchObject({ activeId: "a" });
+    expect(conversations?.type === "conversations" && conversations.sessions.find((summary) => summary.id === "a")?.running).toBe(false);
+  });
+
   it("moves a tab inside its pin group only and persists the new order", async () => {
     const h = createConversationHarness({ pinned: ["a"] });
     await h.seed([conversation("a"), conversation("b"), conversation("c")]);

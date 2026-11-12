@@ -345,7 +345,11 @@ export class ConversationController {
       await sendActiveConversation();
       await sendOutputSession();
       await this.options.execution.postActiveExecution(session.id, switchId, hostInitiated);
-      if (!wasOpen) await this.postConversationState(switchId, hostInitiated);
+      // Always republish, not only for a tab that was closed: the running flags
+      // in this payload are what the composer sends a queued message from, and a
+      // turn that finished while another tab was shown would otherwise keep
+      // saying "running" on an already open tab.
+      await this.postConversationState(switchId, hostInitiated);
     };
     // The webview paints the selected tab from its local state. Do not make
     // the click handler wait for VS Code's postMessage delivery.

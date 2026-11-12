@@ -718,11 +718,14 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           this.logComposer(`applied by the input: ${request.builtins} built-in name(s), ${request.modules} API module(s)`);
           break;
         }
-        case "executeInput":
-          await (request.resourceSource
-            ? this.run(request.mode, request.source, request.planPath, false, undefined, request.resourceSource)
-            : this.run(request.mode, request.source, request.planPath));
+        case "executeInput": {
+          // A queued message can arrive while another tab is on screen, so it
+          // names the conversation it was typed in.
+          const target = request.sessionId ? this.sessionInMap(request.sessionId) : this.activeSession;
+          if (!target) throw new Error("This conversation is no longer open.");
+          await this.run(request.mode, request.source, request.planPath, false, undefined, request.resourceSource, target);
           break;
+        }
         case "resourceOptions":
           await this.resourceAction(request.sessionId, async (session, resource) => {
             const requestedScope = request.resourceType === "file" ? "project" : request.scope;
@@ -1188,9 +1191,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[], resourceSource?: "describe" | "import"): Promise<void> {
+  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[], resourceSource?: "describe" | "import", session = this.activeSession): Promise<void> {
     await this.conversation.controller.hydrate();
-    await this.conversation.coordinator.execute(this.activeSession, mode, normalizeInputReferenceSource(source), {
+    await this.conversation.coordinator.execute(session, mode, normalizeInputReferenceSource(source), {
       ...(planPath !== undefined ? { planPath } : {}),
       executePlan,
       ...(codeContinuation ? { codeContinuation } : {}),
@@ -1502,6 +1505,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           <button id="resource-source-import" type="button" role="tab" data-resource-source="import" aria-selected="false">Import</button>
         </div>
         <section id="input-shell" class="input-panel unified-input">
+          <div id="queued-turn" class="queued-turn" role="status" aria-live="polite" hidden>
+            <span id="queued-turn-label" class="queued-turn-label"></span>
+            <button id="queued-turn-edit" class="icon-button" type="button" title="Edit queued message (sends with the current Agent and model)" aria-label="Edit queued message"><i class="codicon codicon-edit" aria-hidden="true"></i></button>
+            <button id="queued-turn-withdraw" class="icon-button" type="button" title="Withdraw queued message" aria-label="Withdraw queued message"><i class="codicon codicon-close" aria-hidden="true"></i></button>
+          </div>
           <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
           <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
           <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files, or hold Shift and drag files into the input" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
@@ -1541,6 +1549,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           </div>
           <div class="action-actions">
             <button id="problems" class="problems-status" type="button" disabled>No problems</button>
+            <button id="queue-turn" class="icon-button" type="button" title="Queue message" aria-label="Queue message" hidden><i class="codicon codicon-debug-continue" aria-hidden="true"></i></button>
             <button id="run" class="primary circular-action" type="button" title="Send" aria-label="Send"><i class="codicon codicon-arrow-up" aria-hidden="true"></i><span id="run-label" hidden>Send</span></button>
           </div>
         </div>

@@ -129,6 +129,34 @@ describe("shared History and Conversation actions", () => {
     await backgroundTurn;
   });
 
+  it("runs a queued message in the conversation it names, not the one on screen", async () => {
+    const history = new DextHistoryStore(new MemoryHistoryBackend());
+    await history.addSuccess("prompt", [], { kind: "workflow", executions: [] }, "active", "agent", "turn-1");
+    await history.addSuccess("other", [], { kind: "workflow", executions: [] }, "background", "agent", "turn-2");
+    const preferences = new DextConversationPreferences(new MemoryState() as never);
+    await preferences.setConversationLayout({ openConversationIds: ["active", "background"], activeConversationId: "active" });
+    const executeConversation = vi.fn(async () => ({ kind: "workflow" as const, executions: [] }));
+    const { sidebar, messages, internals } = sidebarFixture({ history, preferences, application: { executeConversation } });
+    const controller = (sidebar as unknown as {
+      conversation: { controller: { hydrate(): Promise<void>; session(id: string): DextHistorySession | undefined; activate(session: DextHistorySession): void; active(): DextHistorySession } };
+    }).conversation.controller;
+    await controller.hydrate();
+    controller.activate(controller.session("active")!);
+
+    await internals.receive({ type: "executeInput", mode: "agent", source: "queued", sessionId: "background" });
+
+    expect(executeConversation).toHaveBeenCalledOnce();
+    expect(controller.active().id).toBe("active");
+    expect(controller.session("background")?.turns.map((turn) => turn.input)).toEqual(["other", "queued"]);
+    expect(controller.session("active")?.turns.map((turn) => turn.input)).toEqual(["prompt"]);
+
+    // A message for a conversation that is no longer open is refused rather
+    // than silently running in the one on screen.
+    await internals.receive({ type: "executeInput", mode: "agent", source: "stale", sessionId: "closed" });
+    expect(messages.some((message) => message.type === "error" && message.message === "This conversation is no longer open.")).toBe(true);
+    expect(controller.session("active")?.turns.map((turn) => turn.input)).toEqual(["prompt"]);
+  });
+
   it("edits the addressed input, including an unpersisted running turn, without changing saved records", async () => {
     const history = new DextHistoryStore(new MemoryHistoryBackend());
     await history.addSuccess("saved prompt", [], { kind: "workflow", executions: [] }, "source", "ask", "saved");

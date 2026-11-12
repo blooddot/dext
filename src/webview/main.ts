@@ -52,6 +52,7 @@ import { renderConversationTabs } from "../features/conversations/browser/conver
 import type { InteractionFileHost } from "../features/conversations/browser/interactionForm.js";
 import { OutputScrollController } from "../features/conversations/browser/outputScrollController.js";
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
+import { QueuedTurns, type QueuedTurn } from "../features/conversations/browser/queuedTurn.js";
 import { installResultScrollProbe } from "../features/conversations/browser/scrollProbe.js";
 import {
   groupSkills, packCheckState, selectionLabel, togglePack, toggleSkill
@@ -60,14 +61,22 @@ import { planExecutionLabel } from "../features/conversations/presentation/agent
 import { terminalSegments } from "../features/conversations/presentation/terminalText.js";
 import { looksLikeGithubUrl } from "../features/resources/domain/skillSource.js";
 import { outputExternalLink, outputLinkReference } from "../features/workspace/browser/outputLink.js";
-import type { ContextReferenceOccurrence } from "../features/workspace/domain/fileReference.js";
+import {
+  contextReferenceLabel, inputReferenceDisplayParts, type ContextReferenceOccurrence, type InputReferenceDisplayPart
+} from "../features/workspace/domain/fileReference.js";
+import { createFileReferenceChip, fileReferenceChipDescriptor } from "../platform/browser/fileReferenceChip.js";
 import { renderMarkdownDiagrams, rerenderMarkdownDiagrams } from "../platform/browser/markdownDiagrams.js";
 import { registerSlashCommandProvider } from "./monacoSlashCommands.js";
 
+interface WebviewState {
+  interactionDrafts?: Record<string, UiFormAnswers>;
+  queuedTurns?: Record<string, QueuedTurn>;
+}
+
 interface VsCodeApi {
   postMessage(message: WebviewRequest): void;
-  getState(): { interactionDrafts?: Record<string, UiFormAnswers> } | undefined;
-  setState(state: { interactionDrafts: Record<string, UiFormAnswers> }): void;
+  getState(): WebviewState | undefined;
+  setState(state: WebviewState): void;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;
@@ -143,6 +152,11 @@ const elements = {
   modelSubmenu: element<HTMLElement>("model-submenu"),
   composerMore: element<HTMLButtonElement>("composer-more"),
   run: element<HTMLButtonElement>("run"),
+  queueTurn: element<HTMLButtonElement>("queue-turn"),
+  queuedTurn: element<HTMLElement>("queued-turn"),
+  queuedTurnLabel: element<HTMLElement>("queued-turn-label"),
+  queuedTurnEdit: element<HTMLButtonElement>("queued-turn-edit"),
+  queuedTurnWithdraw: element<HTMLButtonElement>("queued-turn-withdraw"),
   runLabel: element<HTMLElement>("run-label"),
   problems: element<HTMLButtonElement>("problems"),
   resultSection: element<HTMLElement>("result-section"),
@@ -159,6 +173,7 @@ const elements = {
 
 const browser = new ConversationBrowser();
 const drafts = new ComposerDraftStore();
+const queuedTurns = new QueuedTurns();
 /** The turn the turn-stepping controls treat as current. It follows explicit
  * navigation or an expansion the reader performs, and falls back to the active
  * turn after a conversation is rebuilt. */
@@ -353,7 +368,7 @@ function createTurnQuestions(turnId: string, sessionId: string | undefined): Age
       if (Object.keys(draft).length) interactionDrafts[key] = draft;
       const entries = Object.entries(interactionDrafts).slice(-32);
       while (JSON.stringify(entries).length > 200000) entries.shift();
-      vscode.setState({ interactionDrafts: Object.fromEntries(entries) });
+      vscode.setState({ ...vscode.getState(), interactionDrafts: Object.fromEntries(entries) });
     }
   }, formFiles);
 }
@@ -588,6 +603,7 @@ function updateRunState(): void {
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : codeMode ? "play" : "arrow-up"}`;
   elements.run.classList.toggle("stopping", stopping);
   elements.run.classList.toggle("executing", executing);
+  elements.queueTurn.hidden = !executing || !editor.source.trim();
   for (const [turnId, turn] of transcript.entries()) {
     const running = executing && turnId === activeTurnId && activeExecutionSessionId === browser.activeId;
     // The spinner replaces the chevron in the leading slot while it runs, so the
@@ -605,6 +621,7 @@ function updateRunState(): void {
   elements.inputShell.classList.toggle("conversation-mode", !codeMode);
   renderPlanToolbar();
   renderResourceToolbar();
+  renderQueuedTurn();
   editor.setPlaceholder(composerPlaceholder(resource));
   syncTurnActions();
 }
@@ -613,7 +630,7 @@ function updateRunState(): void {
 function composerPlaceholder(resource: ResourceSession | undefined): string {
   // The run button is Stop while a turn runs, so the composer has to say the
   // next message waits rather than looking ready to send.
-  if (executing) return stopping ? "Stopping…" : "Working… press Stop to cancel, then send again";
+  if (executing) return stopping ? "Stopping…" : "Working… Enter or Queue sends next, Stop cancels";
   if (resource) {
     return pristineNewSkill(resource) && resourceSource === "import"
       ? "Paste a GitHub URL"
@@ -652,26 +669,91 @@ function renderPlanToolbar(): void {
   });
 }
 
+function stopExecution(): void {
+  if (!activeTurnId || stopping) return;
+  stopping = true;
+  vscode.postMessage({ type: "stopExecution", turnId: activeTurnId });
+  updateRunState();
+}
+
+/** The message waiting for the running turn, if any ([queuedTurns] alone does not
+ * redraw the row). */
+function renderQueuedTurn(): void {
+  const turn = browser.activeId ? queuedTurns.peek(browser.activeId) : undefined;
+  elements.queuedTurn.hidden = !turn;
+  const text = (turn?.source ?? "").replace(/\s+/g, " ").trim();
+  elements.queuedTurnLabel.replaceChildren(...inputReferenceDisplayParts(text).map(queuedTurnPreview));
+  elements.queuedTurnLabel.title = text;
+}
+
+/** The queued preview names a reference the way the turn's own prompt chip does,
+ * not as the @path it is stored as. */
+function queuedTurnPreview(part: InputReferenceDisplayPart): Node {
+  if (part.kind === "text") return document.createTextNode(part.value);
+  const { reference } = part;
+  return createFileReferenceChip({
+    document,
+    ...fileReferenceChipDescriptor(contextReferenceLabel(reference), reference.payload),
+    icon: reference.kind === "dir" ? "folder" : reference.kind === "symbol" ? "symbol-method" : "file",
+    ...(reference.kind === "file" ? { onOpen: () => openInputReference(reference) } : {})
+  });
+}
+
+function persistQueuedTurns(): void {
+  vscode.setState({ ...vscode.getState(), queuedTurns: queuedTurns.toRecord() });
+}
+
+/** One payload builder for Send and Queue, so a queued message carries the same
+ * mode, plan target and import intent it would have sent. */
+function nextTurn(source: string): QueuedTurn {
+  if (pristineNewSkill(activeResource()) && resourceSource === "import") {
+    return { mode: "ask", source, resourceSource: "import" };
+  }
+  if (inputMode === "plan" && activePlanPath) return { mode: inputMode, source, planPath: activePlanPath };
+  return { mode: inputMode, source };
+}
+
+function queuedTurnBlocked(): boolean {
+  return pristineNewSkill(activeResource()) && resourceSource === "import" && !looksLikeGithubUrl(editor.source.trim());
+}
+
+function queueTurn(): void {
+  const sessionId = browser.activeId;
+  if (!sessionId || !editor.source.trim() || queuedTurnBlocked()) return;
+  if (queuedTurns.peek(sessionId)) {
+    renderInputError("A message is already queued. Withdraw or edit it first.");
+    return;
+  }
+  clearInputError();
+  queuedTurns.queue(sessionId, nextTurn(editor.source.trim()));
+  clearSubmittedInput();
+  persistQueuedTurns();
+  renderQueuedTurn();
+}
+
+/** Sends the queued message once its conversation is idle. The message names
+ * that conversation, so a background tab sends without being on screen. */
+function flushQueuedTurn(): void {
+  for (const [sessionId, turn] of queuedTurns.entries()) {
+    const canSend = !runningConversationIds.has(sessionId)
+      && !(executing && activeExecutionSessionId === sessionId);
+    if (!queuedTurns.take(sessionId, canSend)) continue;
+    persistQueuedTurns();
+    renderQueuedTurn();
+    vscode.postMessage({ type: "executeInput", sessionId, ...turn });
+  }
+}
+
 function run(): void {
   if (executing) {
-    if (!activeTurnId || stopping) return;
-    stopping = true;
-    vscode.postMessage({ type: "stopExecution", turnId: activeTurnId });
-    updateRunState();
+    queueTurn();
     return;
   }
   const source = editor.source.trim();
   if (!source || elements.run.disabled) return;
+  if (queuedTurnBlocked()) return;
   clearInputError();
-  const importing = pristineNewSkill(activeResource()) && resourceSource === "import";
-  if (importing) {
-    if (!looksLikeGithubUrl(source)) return;
-    vscode.postMessage({ type: "executeInput", mode: "ask", source, resourceSource: "import" });
-  } else if (inputMode === "plan" && activePlanPath) {
-    vscode.postMessage({ type: "executeInput", mode: inputMode, source, planPath: activePlanPath });
-  } else {
-    vscode.postMessage({ type: "executeInput", mode: inputMode, source });
-  }
+  vscode.postMessage({ type: "executeInput", ...nextTurn(source) });
   clearSubmittedInput();
 }
 
@@ -1477,6 +1559,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
   for (const conversation of sessions) {
     if (conversation.running) runningConversationIds.add(conversation.id);
   }
+  queuedTurns.retain(sessions.map((conversation) => conversation.id));
   // The next scoped `executing` message installs the selected conversation's
   // turn id. Clear the previous one even when both tabs happen to be running,
   // otherwise Stop can briefly target the conversation we just left.
@@ -1496,6 +1579,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
   if (!conversationTabDrag.tracking()) activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
   conversationTabDrag.refresh();
   if (!conversationTabDrag.tracking()) activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  flushQueuedTurn();
 }
 
 const composerMenus = [
@@ -2231,7 +2315,26 @@ function clearSubmittedInput(): void {
   persistComposerDraft();
 }
 
-elements.run.addEventListener("click", run);
+elements.run.addEventListener("click", () => (executing ? stopExecution() : run()));
+elements.queueTurn.addEventListener("click", queueTurn);
+elements.queuedTurnEdit.addEventListener("click", () => {
+  const sessionId = browser.activeId;
+  const turn = sessionId ? queuedTurns.peek(sessionId) : undefined;
+  if (!sessionId || !turn) return;
+  queuedTurns.delete(sessionId);
+  persistQueuedTurns();
+  editor.setValue(turn.source);
+  editor.focus();
+  renderQueuedTurn();
+  updateRunState();
+});
+elements.queuedTurnWithdraw.addEventListener("click", () => {
+  if (!browser.activeId) return;
+  queuedTurns.delete(browser.activeId);
+  persistQueuedTurns();
+  renderQueuedTurn();
+  updateRunState();
+});
 elements.dismissInputError.addEventListener("click", () => {
   clearInputError();
   editor.focus();
@@ -2709,6 +2812,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       syncJumpToLatest();
     }
     updateRunState();
+    if (!executing) flushQueuedTurn();
   }
   if (message.type === "error") {
     // A refused request will never send the state message its control was
@@ -2745,5 +2849,6 @@ window.addEventListener("unload", () => {
   editor.destroy();
 });
 
+queuedTurns.replace(vscode.getState()?.queuedTurns ?? {});
 updateRunState();
 vscode.postMessage({ type: "ready" });
