@@ -556,9 +556,9 @@ describe("resource documents", () => {
     expect(resource.origin).toBe("import");
     expect(result.draft).toEqual(imported.draft);
     const text = result.response.executions[0]!.result.kind === "ask" ? result.response.executions[0]!.result.text : "";
-    expect(text.indexOf("Discovery: deterministic")).toBeLessThan(text.indexOf("Draft: skills/ponytail/SKILL.md"));
-    expect(text).toContain("Draft: skills/ponytail-audit/SKILL.md");
-    expect(text).toContain("Draft: skill-packs/ponytail/pack.json");
+    expect(text.indexOf("Discovery: deterministic")).toBeLessThan(text.indexOf("- skills/ponytail/SKILL.md"));
+    expect(text).toContain("- skills/ponytail-audit/SKILL.md");
+    expect(text).toContain("- skill-packs/ponytail/pack.json");
 
     // Retrying an import turn replaces its own unsaved draft.
     resource.draft = result.draft;
@@ -762,16 +762,15 @@ describe("resource documents", () => {
     await expect(application.saveResource({ type: "rule", scope: "global", draft: { name: "large", content: "x".repeat(200_001) } })).rejects.toThrow("too large");
   });
 
-  it("limits only the skill preview and saves every complete companion", async () => {
+  it("lists every draft file without its contents and saves every complete companion", async () => {
     const files = Array.from({ length: 6 }, (_, index) => ({ path: `skills/review/data/${index}.txt`, content: `START-${index}\n${"x".repeat(20_000)}\nEND-${index}` }));
     const draft = { name: "review", content: "# Review", files };
     Object.assign(application, { runtime: { executeConversation: vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify(draft) } })) } });
     const result = await application.draftResource({ type: "skill", scope: "global" }, "Generate");
     const response = result.response.executions[0]!.result;
     const text = response.kind === "ask" ? response.text : "";
-    expect(text.length).toBeLessThan(70_000);
-    expect(text).toContain("Preview truncated; the complete file will be saved.");
-    expect(text).toContain("Draft: skills/review/data/5.txt");
+    expect(text.length).toBeLessThan(1_000);
+    expect(text).toContain("- skills/review/data/5.txt");
     expect(text).not.toContain("END-0");
     expect(result.draft.files).toEqual(files);
     await application.saveResource({ type: "skill", scope: "global", draft: result.draft });
@@ -849,16 +848,16 @@ describe("resource documents", () => {
     expect((await application.saveResource(resource)).files).toEqual(resource.target.files);
   });
 
-  it("renders every draft file and preserves companions when the next model response omits them", async () => {
+  it("lists every draft file and preserves companions when the next model response omits them", async () => {
     const resource = bundle();
     const execute = vi.fn(async () => ({ result: { kind: "ask", text: JSON.stringify(resource.draft) } }));
     Object.assign(application, { runtime: { executeConversation: execute } });
     const result = await application.draftResource({ type: "api", scope: "global" }, "Create review API");
     expect(result.draft.files).toEqual(resource.draft!.files);
     const text = result.response.kind === "workflow" ? (result.response.executions[0]!.result as { text: string }).text : "";
-    expect(text).toContain("Draft: rules/review.md");
-    expect(text).toContain("Review with evidence.");
-    expect(text).toContain("```typescript");
+    expect(text).toContain("- api/docs/review.ts");
+    expect(text).toContain("- rules/review.md");
+    expect(text).not.toContain("Review with evidence.");
     expect(await readdir(root)).toEqual([]);
     execute.mockImplementation(async () => ({ result: { kind: "ask", text: JSON.stringify({ name: "docs.review", content: "export function review() {}" }) } }));
     const revised = await application.draftResource({ ...resource, draft: result.draft }, "Revise API");

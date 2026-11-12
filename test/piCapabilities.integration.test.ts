@@ -43,7 +43,7 @@ describe("Pi with the actual Dext host modules", { timeout: 30000 }, () => {
       agents: { currentSelection: () => ({ profileId: "pi" }), list: () => [{ id: "pi", provider: "pi" }] } });
     const result = await application.draftResource({ type: "rule", scope: "global" }, "PI_RESOURCE_SMOKE", { agent: "pi" });
     expect(result.draft).toEqual({ name: "review", content: "# Review\nUse evidence." });
-    expect(result.response.executions[0]?.result).toMatchObject({ kind: "ask", text: expect.stringContaining("Use evidence.") });
+    expect(result.response.executions[0]?.result).toMatchObject({ kind: "ask", text: expect.stringContaining("- rules/review.md") });
     const analyze = (application as unknown as { skillImportAnalyzer(metadata: ExecutionMetadata): (request: unknown) => Promise<unknown> }).skillImportAnalyzer({ agent: "pi" });
     expect(await analyze({ repository: "https://github.com/acme/PI_IMPORT_SMOKE", sourceUrl: "https://github.com/acme/PI_IMPORT_SMOKE", candidates: [{ directory: "skills/review", id: "review", fileCount: 1, shallow: "ok" }] })).toMatchObject({ packName: "review-pack", skillDirectories: ["skills/review"] });
     const startup = (await h.log()).filter((record) => record.startup);

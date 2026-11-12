@@ -46,7 +46,7 @@ import { McpAccessTokenStore } from "../features/mcp/host/mcpSecrets.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "../features/conversations/domain/planFile.js";
 import { splitPlanResponse } from "../features/conversations/domain/planResponse.js";
 import { DextStorage } from "../platform/vscode/dextStorage.js";
-import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFilePathSegments, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileLabels, resourceFileName, resourceFilePathSegments, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
 import { skillEntryId, type ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
 import { isSkillPackId, normalizeSkillPackManifest, skillPackId, SKILL_PACK_MANIFEST_FILE, SKILL_PACK_SOURCE_FILE, SKILL_PACKS_DIRECTORY, SKILLS_DIRECTORY, type SkillPackManifest } from "../features/resources/domain/skillPack.js";
@@ -1445,22 +1445,11 @@ export class DextApplication {
       : {};
   }
 
-  /** Renders a reviewed draft as the chat-visible document list. */
-  private renderDraftText(resource: ResourceSession, draft: ResourceDocument, files: readonly { path: string; content: string }[], flowIssues: readonly ApiFlowIssue[] = []): string {
-    const documents = [{ path: resource.target?.path ?? resourceFileName(resource.type, draft.name), content: draft.content }, ...files];
-    // Bound the chat preview while retaining every complete file in the draft.
-    let remaining = resource.type === "skill" ? 64_000 : Infinity;
-    return documents.map((file, index) => {
-      const preview = file.content.slice(0, Math.min(remaining, resource.type === "skill" ? 16_000 : Infinity));
-      remaining -= preview.length;
-      const fence = "`".repeat(Math.max(3, ...Array.from(preview.matchAll(/`+/g), (match) => match[0].length + 1)));
-      const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
-      const path = index === 0 ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
-      const label = resource.scope === "project" ? `.dext/${path}` : path;
-      return `Draft: ${label}\n\n${fence}${language}\n${preview}\n${fence}`
-        + (preview.length < file.content.length ? "\n\nPreview truncated; the complete file will be saved." : "");
-    }).join("\n\n") + (flowIssues.length ? `\n\n${this.apiFlowIssueText(flowIssues)}` : "")
-      + "\n\nReview all draft files, then save or describe further changes.";
+  /** The draft's files are reviewed in the Preview tab, so the transcript only lists them. */
+  private renderDraftText(resource: ResourceSession, draft: ResourceDocument, flowIssues: readonly ApiFlowIssue[] = []): string {
+    return [`Draft files:\n${resourceFileLabels(resource, draft).map((label) => `- ${label}`).join("\n")}`,
+      ...(flowIssues.length ? [this.apiFlowIssueText(flowIssues)] : []),
+      "Use Preview to review the draft, then save or describe further changes."].join("\n\n");
   }
 
   /** A path lookup relative to the `.dext/` (or global) root. */
@@ -1575,7 +1564,7 @@ export class DextApplication {
       const report = warnings.length
         ? `${imported.report}\n\n## Warnings\n${warnings.map((warning) => `- ${warning}`).join("\n")}`
         : imported.report;
-      const text = `${report}\n\n${this.renderDraftText(resource, imported.draft, imported.draft.files ?? [])}`;
+      const text = `${report}\n\n${this.renderDraftText(resource, imported.draft)}`;
       const execution = {
         invocation: {
           kind: "invocation" as const,
@@ -1604,8 +1593,8 @@ export class DextApplication {
     if (!resource.target) resourceFileName(resource.type, draft.name);
     this.validateResource(resource.type, draft);
     const flowIssues = resource.type === "api" ? await this.apiFlowIssues(draft.content) : [];
-    // Keep generated JSON out of the final conversation response; show the actual document.
-    response.result.text = this.renderDraftText(resource, draft, files, flowIssues);
+    // Keep generated JSON out of the final conversation response; list the files instead.
+    response.result.text = this.renderDraftText(resource, draft, flowIssues);
     return { draft, response: { kind: "workflow", executions: [response] } };
   }
 

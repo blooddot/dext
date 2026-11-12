@@ -236,12 +236,12 @@ try {
   assert.equal(await evaluate(`document.getElementById('resource-source-describe').getAttribute('aria-selected')`), "true");
 
   // The imported report is rendered before the Draft blocks.
-  const report = "# ponytail skill pack\n\nDiscovery: AI-assisted selection\n\nDraft: skills/ponytail/SKILL.md\n\n```text\n# Ponytail\n```";
+  const report = "# ponytail skill pack\n\nDiscovery: AI-assisted selection\n\nDraft files:\n- skills/ponytail/SKILL.md";
   await evaluate(`host({type:'executing',sessionId:'resource',value:true,turnId:'import-ai',source:'https://github.com/acme/ponytail',startedAt:Date.now(),mode:'ask'})`);
   await evaluate(`host({type:'execution',sessionId:'resource',turnId:'import-ai',response:{kind:'workflow',executions:[{invocation:{kind:'invocation',method:'ask',arguments:[],source:'chat'},method:{id:'ask',title:'Ask',kind:'command',source:'builtin'},durationMs:1,result:{kind:'ask',text:${JSON.stringify(report)}}}]}})`);
   await new Promise(done => setTimeout(done, 120));
   assert.equal(await evaluate(`document.getElementById('result').textContent.includes('Discovery: AI-assisted selection')`), true);
-  assert.equal(await evaluate(`document.getElementById('result').textContent.includes('Draft: skills/ponytail/SKILL.md')`), true);
+  assert.equal(await evaluate(`document.getElementById('result').textContent.includes('Draft files:')`), true);
   await evaluate(`host({type:'executing',sessionId:'resource',value:false,turnId:'import-ai'})`);
 
   // Untrusted workspaces disable Skills with a reason; Code and Resource hide them.
