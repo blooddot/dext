@@ -46,7 +46,7 @@ import { McpAccessTokenStore } from "../features/mcp/host/mcpSecrets.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "../features/conversations/domain/planFile.js";
 import { splitPlanResponse } from "../features/conversations/domain/planResponse.js";
 import { DextStorage } from "../platform/vscode/dextStorage.js";
-import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileName, resourceFilePathSegments, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
 import { skillEntryId, type ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
 import { isSkillPackId, normalizeSkillPackManifest, skillPackId, SKILL_PACK_MANIFEST_FILE, SKILL_PACK_SOURCE_FILE, SKILL_PACKS_DIRECTORY, SKILLS_DIRECTORY, type SkillPackManifest } from "../features/resources/domain/skillPack.js";
@@ -1086,13 +1086,6 @@ export class DextApplication {
   }
 
   resourceRoot(type: ResourceKind, scope: ResourceScope): vscode.Uri {
-    if (type === "file") {
-      const folder = vscode.workspace.workspaceFolders?.[0];
-      if (scope !== "project" || !folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) {
-        throw new Error("File resources require a trusted local workspace and Project scope.");
-      }
-      return folder.uri;
-    }
     if (scope === "global") return vscode.Uri.joinPath(this.storage.globalStorageUri, RESOURCE_DIRECTORIES[type]);
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder || folder.uri.scheme !== "file" || !this.workspaceTrusted) throw new Error("Project resources require a trusted local workspace.");
@@ -1113,11 +1106,11 @@ export class DextApplication {
         catch (error) { if (error instanceof vscode.FileSystemError && error.code === "FileNotFound") return; throw error; }
         for (const [name, kind] of entries) {
           const path = `${prefix}${name}`;
-          if (kind === vscode.FileType.Directory && type !== "file") await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
+          if (kind === vscode.FileType.Directory) await visit(vscode.Uri.joinPath(directory, name), `${path}/`, depth + 1);
           if (kind !== vscode.FileType.File) continue;
           if (type === "api" && path.endsWith(".d.ts")) continue;
           try { resourcePathSegments(type, path); } catch { continue; }
-          const label = type === "file" ? path : type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
+          const label = type === "api" ? path.slice(0, -3).replaceAll("/", ".") : type === "skill" ? path.split("/").at(-2)! : name.replace(/\.(?:md|jsonc?)$/, "");
           const pack = owned?.get(path);
           const skillId = skillEntryId({ kind: type, path });
           const hidden = Boolean(skillId && hiddenSkills?.has(skillId));
@@ -1302,7 +1295,7 @@ export class DextApplication {
     for (const skill of manifest.skills) {
       if (!skill.file) continue;
       let parts: string[];
-      try { parts = resourcePathSegments("file", skill.file); } catch { return undefined; }
+      try { parts = resourceFilePathSegments(skill.file); } catch { return undefined; }
       const directory = parts.slice(0, -1);
       if (!directory.length) return undefined;
       if (directory[0] === SKILL_PACKS_DIRECTORY) {
@@ -1457,8 +1450,8 @@ export class DextApplication {
       remaining -= preview.length;
       const fence = "`".repeat(Math.max(3, ...Array.from(preview.matchAll(/`+/g), (match) => match[0].length + 1)));
       const language = file.path.endsWith(".ts") ? "typescript" : /\.jsonc?$/.test(file.path) ? "jsonc" : "text";
-      const path = index === 0 && resource.type !== "file" ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
-      const label = resource.scope === "project" && !(index === 0 && resource.type === "file") ? `.dext/${path}` : path;
+      const path = index === 0 ? `${RESOURCE_DIRECTORIES[resource.type]}/${file.path}` : file.path;
+      const label = resource.scope === "project" ? `.dext/${path}` : path;
       return `Draft: ${label}\n\n${fence}${language}\n${preview}\n${fence}`
         + (preview.length < file.content.length ? "\n\nPreview truncated; the complete file will be saved." : "");
     }).join("\n\n") + (flowIssues.length ? `\n\n${this.apiFlowIssueText(flowIssues)}` : "")

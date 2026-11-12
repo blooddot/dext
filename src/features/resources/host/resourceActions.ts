@@ -21,7 +21,7 @@ function samePath(left: string, right: string): boolean {
 
 /** Resolve from trusted root + resource id; never trust a Webview's path. */
 export function managedResourcePath(entry: ResourceEntry, root: string): string {
-  if (entry.reference || entry.source.kind !== entry.scope || !entry.source.path || entry.kind === "file") {
+  if (entry.reference || entry.source.kind !== entry.scope || !entry.source.path) {
     throw new Error("This is a read-only resource, not a managed source file.");
   }
   resourcePathSegments(entry.kind, entry.path);

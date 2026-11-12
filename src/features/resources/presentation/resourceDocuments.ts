@@ -255,7 +255,7 @@ export function resourceSearchText(entry: ResourceEntry): string {
 /** Only a managed file on disk can be revised in Dext; built-in and read-only
  * reference entries have nothing to rewrite. */
 export function editableResource(entry: ResourceEntry): boolean {
-  return !entry.reference && entry.kind !== "file" && Boolean(entry.source.path) && entry.source.kind === entry.scope;
+  return !entry.reference && Boolean(entry.source.path) && entry.source.kind === entry.scope;
 }
 
 export function renderResourceActions(entry: ResourceEntry, prefix: string): string {

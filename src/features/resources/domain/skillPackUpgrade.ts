@@ -1,4 +1,4 @@
-import { resourcePathSegments, type ResourceDocument } from "../contracts/resourceSession.js";
+import { resourceFilePathSegments, type ResourceDocument } from "../contracts/resourceSession.js";
 import { isSkillId } from "../../workflow/contracts/skill.js";
 import {
   SKILL_PACK_MANIFEST_FILE,
@@ -58,7 +58,7 @@ export async function buildSkillPackUpgradePlan(input: {
   const sourceFiles = [...(draft.files ?? []), { path: primaryPath, content: draft.content }];
   const files = new Map<string, { path: string; content: string }>();
   for (const file of sourceFiles) {
-    const parts = resourcePathSegments("file", file.path);
+    const parts = resourceFilePathSegments(file.path);
     if (!parts.length || (parts[0] !== "skills" && !(parts[0] === "skill-packs" && parts[1] === packId))) {
       throw new Error(`The updated pack would write outside its own directories: ${file.path}`);
     }

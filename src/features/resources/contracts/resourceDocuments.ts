@@ -134,7 +134,7 @@ export interface ResourceEditorShowResult {
 export interface FileResourceDataSourceOptions {
   roots(): Partial<Record<ResourceScope, string>>;
   /** Enumerates files without importing or executing TypeScript API modules. */
-  listFiles(kind: Exclude<ResourceKind, "file">): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef; hidden?: boolean }>>;
+  listFiles(kind: ResourceKind): Promise<Array<{ name: string; path: string; scope: ResourceScope; pack?: ResourcePackRef; hidden?: boolean }>>;
   readFile(entry: ResourceEntry): Promise<string | undefined>;
   describeApi?(content: string): Promise<ApiSourceFunction[]>;
   /** Builds the flow for a detail page; lists deliberately skip it. The second

@@ -1,13 +1,13 @@
-export type ResourceKind = "api" | "mcp" | "rule" | "skill" | "file";
+export type ResourceKind = "api" | "mcp" | "rule" | "skill";
 export type ResourceScope = "project" | "global";
 /** A Resources page: the two file scopes, plus the built-in APIs Dext ships itself. */
 export type ResourcePage = ResourceScope | "builtin";
 
 export const RESOURCE_PAGE_LABELS: Record<ResourcePage, string> = { project: "Project", global: "Global", builtin: "Dext" };
 
-export const RESOURCE_LABELS: Record<ResourceKind, string> = { api: "API", mcp: "MCP", rule: "Rule", skill: "Skill", file: "File" };
-export const RESOURCE_ICONS: Record<ResourceKind, string> = { api: "symbol-method", mcp: "plug", rule: "law", skill: "book", file: "file" };
-export const RESOURCE_DIRECTORIES: Record<ResourceKind, string> = { api: "api", mcp: "mcp", rule: "rules", skill: "skills", file: "" };
+export const RESOURCE_LABELS: Record<ResourceKind, string> = { api: "API", mcp: "MCP", rule: "Rule", skill: "Skill" };
+export const RESOURCE_ICONS: Record<ResourceKind, string> = { api: "symbol-method", mcp: "plug", rule: "law", skill: "book" };
+export const RESOURCE_DIRECTORIES: Record<ResourceKind, string> = { api: "api", mcp: "mcp", rule: "rules", skill: "skills" };
 
 export interface ResourceDocument {
   name: string;
@@ -42,19 +42,25 @@ export function resourceFileName(type: ResourceKind, name: string): string {
     if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$/.test(name)) throw new Error("Invalid API name.");
     return `${name.replaceAll(".", "/")}.ts`;
   }
-  if (type === "file") {
-    const normalized = name.trim().replaceAll("\\", "/");
-    resourcePathSegments(type, normalized);
-    return normalized;
-  }
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(name)) throw new Error("Invalid resource name.");
   return type === "skill" ? `${name}/SKILL.md` : type === "mcp" ? `${name}.jsonc` : name.endsWith(".md") ? name : `${name}.md`;
 }
 
-export function resourcePathSegments(type: ResourceKind, path: string): string[] {
+/** A path below a resource root, rejected before it can reach the filesystem. */
+function pathSegments(path: string): string[] {
   const parts = path.split("/");
   if (parts.some((part) => !part || part === "." || part === ".." || /[\\:]/.test(part) || Array.from(part).some((character) => character.charCodeAt(0) < 32))) throw new Error("Invalid resource path.");
-  const valid = type === "file" ? true : type === "api" ? path.endsWith(".ts") : type === "mcp" ? /\.jsonc?$/.test(path)
+  return parts;
+}
+
+/** A supporting file path: relative to `.dext/` or the global root, any extension. */
+export function resourceFilePathSegments(path: string): string[] {
+  return pathSegments(path);
+}
+
+export function resourcePathSegments(type: ResourceKind, path: string): string[] {
+  const parts = pathSegments(path);
+  const valid = type === "api" ? path.endsWith(".ts") : type === "mcp" ? /\.jsonc?$/.test(path)
     : type === "skill" ? parts.length >= 2 && parts.at(-1) === "SKILL.md" : path.endsWith(".md");
   if (!valid) throw new Error("The selected file does not match the resource type.");
   return parts;
@@ -78,8 +84,7 @@ export function resourcePrompt(resource: ResourceSession, input: string): string
     resource.scope === "project"
       ? 'Reference template files by workspace-relative source paths, e.g. source: ".dext/templates/example.md".'
       : 'Rules, skills and templates can be resolved from global resources: a global API keeps its template in the global templates/ directory and names it with the same source path, e.g. source: ".dext/templates/example.md". The workspace file wins when both exist.',
-    resource.type === "file" ? "name is a safe workspace-relative file path. content is the complete file content, preserving the file's format and extension."
-      : resource.type === "api" ? [
+    resource.type === "api" ? [
         "name is a dotted API id. content is a TypeScript module exporting one function named after the id's last segment (for api/dev/fix.ts: export async function fix). Result types such as AskResult are exported by the dext module rather than declared globally, so import the ones the signature uses as types.",
         "Give every function exactly one responsibility. A function that calls ask, agent, plan, skill, template, or terminal must be a named wrapper containing only that one top-level API call: no second top-level API and no local helper call.",
         "Keep each wrapper to its one call: take an already-built input, return the result. Build that input in the entry function or in an ordinary helper the entry calls, since a wrapper cannot call a local helper.",
@@ -120,7 +125,7 @@ export function resourceFiles(value: unknown, limits: ResourceFileLimits = {}): 
   return value.map((file: unknown) => {
     if (!file || typeof file !== "object" || !("path" in file) || typeof file.path !== "string"
       || !("content" in file) || typeof file.content !== "string") throw new Error("Supporting files need a path and content.");
-    const parts = resourcePathSegments("file", file.path);
+    const parts = resourceFilePathSegments(file.path);
     if (parts.length < 2 || !allowed.has(parts[0]!)
       || (parts[0] === "rules" && !file.path.endsWith(".md"))
       || parts.some((part) => /[<>"|?*]|[. ]$/.test(part) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {

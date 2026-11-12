@@ -60,7 +60,7 @@ try {
   assert.equal(await evaluate(`document.getElementById('permission-control-value').textContent`), "Project");
   assert.equal(await evaluate(`document.getElementById('resource-save').disabled`), true);
   await evaluate(`document.getElementById('mode-control').click()`);
-  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill", "File"]);
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('#mode-menu button span')).map(x=>x.textContent)`), ["API", "MCP", "Rule", "Skill"]);
   await key("Escape", 27);
   await evaluate(`resource={type:'api',scope:'project'};host({type:'resourceContext',sessionId:'resource',resource});`);
   await evaluate(`document.getElementById('permission-control').click()`);
@@ -105,7 +105,7 @@ try {
   const artifacts = resolve(".tmp-tb/resource-ui"); await mkdir(artifacts, { recursive: true });
   await evaluate(`document.querySelector('#code-editor textarea').focus()`);
   await send("Input.insertText", { text: "Refine this resource" });
-  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"], ["file", "file"]];
+  const appearances = [["api", "symbol-method"], ["mcp", "plug"], ["rule", "law"], ["skill", "book"]];
   for (const [name, themeClass, background, foreground, accent] of [
     ["dark", "vscode-dark", "#181818", "#ddd", "#66aaff"],
     ["light", "vscode-light", "#fff", "#222", "#005fcc"],

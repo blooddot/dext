@@ -40,7 +40,6 @@ describe("managed resource actions", () => {
     expect(() => managedResourcePath({ ...source, source: { ...source.source, path: join(workspace, "outside.md") } }, root)).toThrow("outside");
     expect(() => managedResourcePath({ ...source, path: "../outside.md" }, root)).toThrow("Invalid resource path");
     expect(() => managedResourcePath({ ...source, source: { kind: "directory" } }, root)).toThrow("read-only");
-    expect(() => managedResourcePath(entry("file", "README.md", scope), root)).toThrow("read-only");
   });
 
   it.each(["api", "mcp", "rule"] as const)("deletes only the selected %s file", async (kind) => {
