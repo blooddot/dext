@@ -910,9 +910,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("dext.copyFilePathWithLine", () =>
       reportCommandError(() => sidebar.copyFilePathWithLine())
     ),
-    vscode.commands.registerCommand("dext.addFileToChat", (resource?: vscode.Uri) =>
+    vscode.commands.registerCommand("dext.addFileToChat", (resource?: vscode.Uri, selection?: vscode.Uri[]) =>
       reportCommandError(async () => {
-        await sidebar.addFileToChat(resource);
+        // A multi-select in Explorer arrives as the focused resource plus the whole selection.
+        await sidebar.addFileToChat(selection?.length ? selection : resource ? [resource] : undefined);
         await focusSidebar();
         sidebar.showChat();
       })

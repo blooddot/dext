@@ -656,10 +656,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }, this.application.storage.attachmentByteLimit());
   }
 
-  async addFileToChat(resource?: vscode.Uri): Promise<void> {
-    const uri = resource ?? vscode.window.activeTextEditor?.document.uri;
-    if (!uri) throw new Error("Choose a workspace file or directory before adding it to Dext input.");
-    await this.addFileUris([uri]);
+  async addFileToChat(resources?: readonly vscode.Uri[]): Promise<void> {
+    const active = vscode.window.activeTextEditor?.document.uri;
+    const uris = resources?.length ? resources : active ? [active] : [];
+    if (!uris.length) throw new Error("Choose a workspace file or directory before adding it to Dext input.");
+    await this.addFileUris(uris);
   }
 
   dispose(): void {
