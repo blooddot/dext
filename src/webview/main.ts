@@ -2096,8 +2096,8 @@ function hydrateStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, 
 
 function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, sessionId: string | undefined): void {
   const response = storedResponse(record);
-  // The reasons come from the same stored text, so they arrive with the row.
-  if (turn.changes) transcript.setChanges(turn, sessionId, record.id, turnChanges(record));
+  // The links come from the same stored text, so they arrive with the answer.
+  if (record.changedFiles !== undefined) transcript.setChanges(turn, sessionId, record.id, turnChanges(record));
 
   // Plan turns use a more useful title once their response has been parsed.
   // Keep that JSON parse off the tab-switch path and update the lightweight

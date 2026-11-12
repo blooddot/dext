@@ -90,28 +90,34 @@ function historyTurnActions(sessionId: string, turnId: string, spill: boolean, f
   ].join("")}</span>`;
 }
 
-/** One row per changed file, with the turn's own reason; the same class names
- * style the live Conversation table. */
-function changedFileRows(changes: readonly TurnChange[], sessionId: string, turnId: string): string {
-  return changes.map((change) => `<tr class="output-turn-change" tabindex="0" title="${escapeHtml(`${change.path} — ${change.reason}`)}" data-history-command="dext.history.openTurnDiff" data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(turnId)}" data-turn-path="${escapeHtml(change.path)}"><td class="output-turn-change-path"><i class="codicon codicon-diff"></i>${escapeHtml(change.path)}</td><td class="output-turn-change-reason">${escapeHtml(change.reason)}</td></tr>`).join("");
+function diffTarget(sessionId: string, turnId: string, path: string): string {
+  return `data-history-command="dext.history.openTurnDiff" data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(turnId)}" data-turn-path="${escapeHtml(path)}"`;
 }
 
+/** One row per changed file, with the turn's own reason. Rendered from the record
+ * rather than the answer, so every turn that changed files gets one.
+ * The live Conversation builds the same table from the same class names. */
 function changedFiles(changes: readonly TurnChange[], sessionId: string | undefined, turnId: string): string {
   if (!sessionId || !changes.length) return "";
-  return `<table class="output-turn-changes"><thead><tr><th>File</th><th>Change</th></tr></thead><tbody>${changedFileRows(changes, sessionId, turnId)}</tbody></table>`;
+  const rows = changes.map((change) => `<tr class="output-turn-change" tabindex="0" title="${escapeHtml(`${change.path} — ${change.reason}`)}" ${diffTarget(sessionId, turnId, change.path)}><td class="output-turn-change-path"><i class="codicon codicon-diff"></i><code>${escapeHtml(change.path)}</code></td><td class="output-turn-change-reason">${escapeHtml(change.reason)}</td></tr>`).join("");
+  // Wrapped in .markdown-body so the box, borders and type come from the same
+  // table style the answer's own tables use.
+  return `<div class="markdown-body"><table class="output-turn-changes"><thead><tr><th>File</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 /** Only a changed file has a diff, so the answer's own inline `code` mentions of
- * one become the same link the rows are, instead of a dead path.
+ * one become the link that opens it, with the turn's reason on hover. A path
+ * named by its tail (`presentation/x.ts`) counts too, because that is how
+ * answers abbreviate it.
  * shortcut: answers stored without a response render as plain text and get no links; upgrade if those need them. */
 function linkChangedPaths(html: string, changes: readonly TurnChange[], sessionId: string | undefined, turnId: string): string {
   if (!sessionId || !changes.length) return html;
-  return changes.reduce((result, change) => {
-    const code = `<code>${escapeHtml(change.path)}</code>`;
-    if (!result.includes(code)) return result;
-    const target = `data-history-command="dext.history.openTurnDiff" data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(turnId)}" data-turn-path="${escapeHtml(change.path)}"`;
-    return result.split(code).join(`<a class="output-turn-change-link" href="#" ${target}>${code}</a>`);
-  }, html);
+  return html.replace(/<code>([^<]*)<\/code>/g, (span, text: string) => {
+    const hits = changes.filter((change) => change.path === text || change.path.endsWith(`/${text}`));
+    if (hits.length !== 1) return span;
+    const [{ path, reason }] = hits as [TurnChange];
+    return `<a class="output-turn-change-link" href="#" ${diffTarget(sessionId, turnId, path)} title="${escapeHtml(`${path} — ${reason}`)}">${span}</a>`;
+  });
 }
 
 function historySessionActions(session: { id: string; archivedAt?: number }, favorite: boolean): string {  const favoriteCommand = favorite ? "dext.history.removeFavorite" : "dext.history.addFavorite";
@@ -369,8 +375,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const outputSection = renderTurnOutput(turnHtmlAdapter, [{ html: outputHtml }],
     outputCopy ? { html: copyButton(outputCopy) } : undefined).section.html;
   const changes = sessionId ? turnChanges(record) : [];
-  const changesHtml = changedFiles(changes, sessionId, record.id);
-  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="${titleClass}"><span class="output-turn-title-name"${nameHidden ? " hidden" : ""}>${escapeHtml(historyTurnTitle(record))}</span>${promptHtml}</span>${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath), record.changedFiles !== undefined) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${linkChangedPaths(outputSection, changes, sessionId, record.id)}${changesHtml}</div></details>`;
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="${titleClass}"><span class="output-turn-title-name"${nameHidden ? " hidden" : ""}>${escapeHtml(historyTurnTitle(record))}</span>${promptHtml}</span>${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath), record.changedFiles !== undefined) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${linkChangedPaths(outputSection, changes, sessionId, record.id)}${changedFiles(changes, sessionId, record.id)}</div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line

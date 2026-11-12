@@ -39,7 +39,7 @@ export interface OutputTurnElements {
   todos: AgentTodoView;
   questions: AgentInputView;
   output: HTMLElement;
-  /** The changed-file rows this turn explains; filled once its response parses. */
+  /** The changed-file table; filled when the turn's changed files are known. */
   changes: HTMLElement;
   /** Shown once the turn is known to have changed files, which a live turn
    * only learns when it ends. */
@@ -278,9 +278,9 @@ export class TranscriptView {
     const todos = this.host.createTodos();
     const questions = this.host.createQuestions(turnId, this.host.activeSessionId());
     const output = renderTurnOutput(turnDomAdapter(document), [], outputCopy);
-    // The changed-file rows come last: they close the turn with what it did, and
-    // a live turn keeps them empty until it ends.
-    const changes = this.changesList();
+    const changes = this.changesTable();
+    // The changed-file table closes the turn with what it did; a live turn keeps
+    // it hidden until it ends and the record says which files it touched.
     body.append(todos.element, questions.element, process.disclosure, output.section, changes);
     disclosure.append(summary, body);
     // An open turn keeps its actions over the short Worked line instead of
@@ -340,12 +340,14 @@ export class TranscriptView {
     });
   }
 
-  /** Filled by stored-turn hydration, which is where a turn's own words are
-   * parsed; empty until then so the row order never shifts. */
-  private changesList(): HTMLElement {
+  /** Hidden until [setChanges] fills it, so the row order never shifts.
+   * The .markdown-body wrapper gives it the answer's own table style. */
+  private changesTable(): HTMLElement {
+    const wrapper = this.host.document.createElement("div");
+    wrapper.className = "markdown-body";
+    wrapper.hidden = true;
     const table = this.host.document.createElement("table");
     table.className = "output-turn-changes";
-    table.hidden = true;
     const head = this.host.document.createElement("thead");
     const row = this.host.document.createElement("tr");
     for (const label of ["File", "Change"]) {
@@ -355,57 +357,62 @@ export class TranscriptView {
     }
     head.append(row);
     table.append(head, this.host.document.createElement("tbody"));
-    return table;
+    wrapper.append(table);
+    return wrapper;
   }
 
-  /** One clickable row per changed file; each file opens its own diff in the
-   * turn's diff tab. */
+  /** One clickable row per changed file, plus the answer's own inline mentions of
+   * those files opening the same diff. */
   setChanges(turn: OutputTurnElements, sessionId: string | undefined, turnId: string, files: readonly TurnChange[]): void {
-    const list = turn.changes;
-    list.hidden = files.length === 0;
+    turn.changes.hidden = files.length === 0;
     if (files.length) turn.diffAction.hidden = false;
+    const document = this.host.document;
+    const open = (path: string) => {
+      if (sessionId) this.host.openTurnDiff(sessionId, turnId, path);
+    };
     const rows = files.map((file) => {
-      const item = this.host.document.createElement("tr");
+      const item = document.createElement("tr");
       item.className = "output-turn-change";
       item.tabIndex = 0;
       item.title = `${file.path} — ${file.reason}`;
-      const open = () => {
-        if (sessionId) this.host.openTurnDiff(sessionId, turnId, file.path);
-      };
       item.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        open();
+        open(file.path);
       });
       item.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
-        open();
+        open(file.path);
       });
-      const path = this.host.document.createElement("td");
+      const path = document.createElement("td");
       path.className = "output-turn-change-path";
-      const glyph = this.host.document.createElement("i");
+      const glyph = document.createElement("i");
       glyph.className = "codicon codicon-diff";
-      path.append(glyph, file.path);
-      const text = this.host.document.createElement("td");
+      const name = document.createElement("code");
+      name.textContent = file.path;
+      path.append(glyph, name);
+      const text = document.createElement("td");
       text.className = "output-turn-change-reason";
       text.textContent = file.reason;
       item.append(path, text);
       return item;
     });
-    list.querySelector("tbody")?.replaceChildren(...rows);
-    // The answer's own inline mentions of these files open the same diff.
-    const changed = new Set(files.map((file) => file.path));
+    turn.changes.querySelector("tbody")?.replaceChildren(...rows);
     for (const code of turn.output.querySelectorAll("code")) {
       const path = code.textContent ?? "";
-      if (!changed.has(path)) continue;
-      const link = this.host.document.createElement("a");
+      // A path named by its tail counts too: that is how answers abbreviate it.
+      const hits = files.filter((file) => file.path === path || file.path.endsWith(`/${path}`));
+      if (hits.length !== 1) continue;
+      const [file] = hits as [TurnChange];
+      const link = document.createElement("a");
       link.href = "#";
       link.className = "output-turn-change-link";
+      link.title = `${file.path} — ${file.reason}`;
       link.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (sessionId) this.host.openTurnDiff(sessionId, turnId, path);
+        if (sessionId) this.host.openTurnDiff(sessionId, turnId, file.path);
       });
       code.replaceWith(link);
       link.append(code);

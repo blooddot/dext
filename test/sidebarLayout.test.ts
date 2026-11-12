@@ -726,12 +726,13 @@ describe("sidebar panel layout", () => {
     expect(main).toContain("...(record.changedFiles !== undefined ? { diff: true } : {})");
     expect(main).toMatch(/openTurnDiff: \(sessionId, turnId, path\) =>[\s\S]*?type: "openTurnDiff", sessionId, turnId/);
     expect(sidebar).toMatch(/case "openTurnDiff":[\s\S]*?dext\.history\.openTurnDiff[\s\S]*?sessionId: request\.sessionId, turnId: request\.turnId, \.\.\.\(request\.path/);
-    // The reasons close the turn body too: one flat row per file, clickable.
-    expect(transcript).toMatch(/setChanges\(turn: OutputTurnElements[\s\S]*?openTurnDiff\(sessionId, turnId, file\.path\)/);
+    // The reasons close the turn body too: one row per file, clickable, path as a link.
+    expect(transcript).toMatch(/setChanges\(turn: OutputTurnElements[\s\S]*?openTurnDiff\(sessionId, turnId, path\)[\s\S]*?open\(file\.path\)/);
     expect(transcript).toMatch(/body\.append\(todos\.element, questions\.element, process\.disclosure, output\.section, changes\)/);
-    // The same files, named inline in the answer, open the same diff.
-    expect(transcript).toMatch(/changed\.has\(path\)[\s\S]*?openTurnDiff\(sessionId, turnId, path\)/);
-    expect(main).toMatch(/if \(turn\.changes\) transcript\.setChanges\(turn, sessionId, record\.id, turnChanges\(record\)\)/);
+    // The answer's own inline path opens the same diff, reason on hover.
+    expect(transcript).toMatch(/link\.title = `\$\{file\.path\} — \$\{file\.reason\}`/);
+    expect(transcript).toMatch(/openTurnDiff\(sessionId, turnId, file\.path\)[\s\S]*?code\.replaceWith\(link\)/);
+    expect(main).toContain("if (record.changedFiles !== undefined) transcript.setChanges(turn, sessionId, record.id, turnChanges(record))");
     // Clicking another file of the same turn switches the shown diff in that tab:
     // VS Code matches multi-diff editors on the source URI, one per turn.
     const extension = await source("src/extension.ts");
