@@ -3111,7 +3111,10 @@ button.primary.stopping {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0.9;
+  /* The stack floats over the conversation, so it rests half faded and only its
+     own hover or focus brings it fully up. Any lower and the controls stop
+     being findable; any higher and they read as content. */
+  opacity: 0.45;
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease;
 }
 

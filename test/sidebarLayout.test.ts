@@ -644,6 +644,11 @@ describe("sidebar panel layout", () => {
     // end of the output, so the control uses the gutter main.ts measures.
     expect(css).toMatch(/\.stream-jump-latest \{[\s\S]*?right: calc\(var\(--dext-result-scroll-gutter, \d+px\) \+ \d+px\);/);
     expect(css).not.toMatch(/\.stream-jump-latest \{[\s\S]*?right: 28px;/);
+    // The stack floats over the conversation, so it rests half faded and comes
+    // fully up on its own hover or focus. Hovering the output does not count:
+    // the pointer rests on the transcript to read it.
+    expect(css).toMatch(/\.stream-jump-latest \{[\s\S]*?opacity: 0\.\d+;/);
+    expect(css).not.toMatch(/\.result-section:hover :is\(\.stream-jump-top/);
     const scrollSource = await source("src/features/conversations/browser/outputScrollController.ts");
     expect(scrollSource).toMatch(/syncGutter\(\): void \{[\s\S]*?body\.offsetWidth - body\.clientWidth/);
     expect(main).toMatch(/elements\.resultSection\.append\(jumpToTop\);\s*elements\.resultSection\.append\(jumpToPrevTurn\);\s*elements\.resultSection\.append\(jumpToNextTurn\);\s*elements\.resultSection\.append\(jumpToLatest\);\s*syncResultScrollGutter\(\);/);
