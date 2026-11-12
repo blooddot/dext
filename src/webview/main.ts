@@ -908,7 +908,6 @@ function renderResourceToolbar(): void {
   elements.resourceTarget.disabled = locked;
   elements.resourceChoose.disabled = locked;
   elements.resourcePreview.disabled = locked || !document;
-  elements.resourcePreview.textContent = resource.draft && resource.target ? "View changes" : "Preview";
   elements.resourceSave.disabled = locked || !resource.draft;
   elements.resourceSave.textContent = resource.target ? "Save changes" : "Create";
   elements.resourceStatus.dataset.state = resourceErrors.has(browser.activeId ?? "") ? "error" : !locked && !resource.draft && resource.saved ? "saved" : "idle";

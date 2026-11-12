@@ -1,4 +1,5 @@
 import type { ApiReferenceMember, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
+import type { ApiFlow } from "../../workflow/contracts/apiFlow.js";
 import type { EditorTabState } from "../../../platform/editor-tabs/editorTabState.js";
 import { skillEntryId, type ResourceDefinitionDocument, type ResourceEntry, type ResourceListDocument, type ResourcePackRef, type ResourcePanelOptions, type ResourceTreeNode } from "../contracts/resourceDocuments.js";
 import { RESOURCE_LABELS, RESOURCE_PAGE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourcePage } from "../contracts/resourceSession.js";
@@ -580,4 +581,27 @@ export function renderResourceDefinition(document: ResourceDefinitionDocument, o
     + `<header class="resource-toolbar"><h2>${escapeResourceHtml(entry.name)}</h2>`
     + actions
     + `</header>${apiDetails}${flow}${referenceDetails}${source}</div>${resourceClientScript(options.tabState)}`;
+}
+
+
+/** A draft's review page: the resource definition page's structure — execution flow,
+ * then source — for files that are not on disk yet. It carries no controls, so the
+ * tab needs no message routing. */
+export function renderResourcePreview(input: {
+  kind: ResourceKind;
+  /** The primary file's label below `.dext/` or the global resource root. */
+  label: string;
+  content: string;
+  files: ReadonlyArray<{ label: string; content: string }>;
+  flow?: ApiFlow;
+}): string {
+  const section = (label: string, content: string, highlight: boolean): string =>
+    `<h3 class="resource-source-heading">${escapeResourceHtml(label)}</h3>`
+    + `<pre class="resource-content"><code>${highlight ? highlightResourceSource(content) : escapeResourceHtml(content)}</code></pre>`;
+  return `<div class="resource-definition">`
+    + `<header class="resource-toolbar"><h2>${escapeResourceHtml(input.label)}</h2><span class="resource-source">Draft</span></header>`
+    + (input.flow ? renderApiFlow(input.flow, input.label) : "")
+    + section("Source", input.content, input.kind === "api")
+    + input.files.map((file) => section(file.label, file.content, false)).join("")
+    + `</div>`;
 }

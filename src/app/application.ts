@@ -354,7 +354,7 @@ export class DextApplication {
   private workspaceTrusted = false;
   private resourceWrite: Promise<void> = Promise.resolve();
   /** Static API flow analysis for creation rules. Absent in hostless unit setups. */
-  private apiFlowAnalyzer: ((content: string) => Promise<ApiFlow>) | undefined;
+  private apiFlowAnalyzer: ((content: string, entryName?: string) => Promise<ApiFlow>) | undefined;
   private globalDiagnostics: string[] = [];
   /** Why a configured server was dropped, by server name; a rejected server is
    * absent from the registry, so this is the only place that reason survives. */
@@ -388,8 +388,13 @@ export class DextApplication {
    * when a function breaks the single-purpose wrapper rule; existing APIs stay
    * editable and only show the flow issues.
    */
-  setApiFlowAnalyzer(analyzer: ((content: string) => Promise<ApiFlow>) | undefined): void {
+  setApiFlowAnalyzer(analyzer: ((content: string, entryName?: string) => Promise<ApiFlow>) | undefined): void {
     this.apiFlowAnalyzer = analyzer;
+  }
+
+  /** The draft preview shows the same flow the API page does. */
+  async apiFlow(content: string, entryName?: string): Promise<ApiFlow | undefined> {
+    return this.apiFlowAnalyzer?.(content, entryName);
   }
 
   private async apiFlowIssues(content: string): Promise<ApiFlowIssue[]> {

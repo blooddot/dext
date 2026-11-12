@@ -6,13 +6,15 @@ import { DextHistoryStore } from "../src/features/conversations/host/historyStor
 import { MemoryHistoryBackend } from "./historyBackend.js";
 import { conversationTitle } from "../src/features/conversations/presentation/historyRender.js";
 import type { ResourceDocument, ResourceSession, ResourceTarget } from "../src/features/resources/contracts/resourceSession.js";
+import type { ApiFlow } from "../src/features/workflow/contracts/apiFlow.js";
 import type { WebviewResponse } from "../src/platform/webviewProtocol.js";
 import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 import { conversation, createConversationHarness, HarnessState, seedHistory } from "./conversationHarness.js";
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 
 const webviewState = vi.hoisted(() => ({
   previewProvider: undefined as { provideTextDocumentContent(uri: unknown): string } | undefined,
+  panels: [] as Array<{ title: string; reveal(): void; webview: { html: string } }>,
   nextUri: 0
 }));
 
@@ -50,7 +52,19 @@ vi.mock("vscode", () => {
       onDidCloseTextDocument: () => ({ dispose: vi.fn() }),
       openTextDocument: vi.fn()
     },
+    ViewColumn: { Active: -1, Beside: -2 },
     window: {
+      createWebviewPanel: (viewType: string, title: string) => {
+        const panel = {
+          viewType,
+          title,
+          webview: { html: "", cspSource: "vscode-resource:", asWebviewUri: (value: unknown) => value },
+          reveal: vi.fn(),
+          onDidDispose: vi.fn()
+        };
+        webviewState.panels.push(panel);
+        return panel;
+      },
       showQuickPick: vi.fn(),
       showTextDocument: vi.fn(),
       showInformationMessage: vi.fn(),
@@ -82,6 +96,7 @@ interface SidebarHarnessOptions {
     metadata: Readonly<ExecutionMetadata>
   ) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
   saveResource?: (resource: ResourceSession) => Promise<ResourceTarget>;
+  apiFlow?: (content: string, entryName?: string) => Promise<ApiFlow | undefined>;
 }
 
 const defaultDraftResource = async (): Promise<{ draft: ResourceDocument; response: InputExecutionResponse }> => ({
@@ -103,6 +118,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
   const draftResource = vi.fn(options.draftResource ?? defaultDraftResource);
   const saveResource = vi.fn(options.saveResource ?? defaultSaveResource);
   const readResource = vi.fn(async (_type: string, _scope: string, path: string, name: string) => ({ name, path, content: "Existing document" }));
+  const apiFlow = vi.fn(options.apiFlow ?? (async () => undefined));
   const application = {
     state: () => ({
       agentSelection: { profileId: "codex", mode: "agent" },
@@ -113,6 +129,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
     draftResource,
     saveResource,
     readResource,
+    apiFlow,
     reload: async () => undefined,
     setAgentSelection: () => undefined,
     endAgentSession: () => undefined,
@@ -161,7 +178,7 @@ function createSidebarHarness(options: SidebarHarnessOptions = {}) {
     await receive({ type: "executeInput", mode: "ask", source });
   }
 
-  return { sidebar, history, posted, draftResource, saveResource, readResource, seed, receive, run };
+  return { sidebar, history, posted, draftResource, saveResource, readResource, apiFlow, seed, receive, run };
 }
 
 describe("resource conversations", () => {
@@ -394,7 +411,8 @@ describe("resource conversations", () => {
     expect((await harness.history.sessions())[0]?.resource?.target).toBeUndefined();
   });
 
-  it("previews a selected supporting file against its saved contents", async () => {
+  it("previews the draft in a preview tab that reuses the resource page", async () => {
+    webviewState.panels.length = 0;
     const harness = createSidebarHarness();
     const sessionId = await harness.seed({
       type: "rule",
@@ -404,24 +422,41 @@ describe("resource conversations", () => {
         files: [{ path: "rules/checks.md", content: "Original checks" }]
       },
       draft: {
-        name: "review", content: "Primary",
+        name: "review", content: "# Review <draft>",
         files: [{ path: "rules/checks.md", content: "Revised checks" }]
       }
     });
-    vi.mocked(vscode.window.showQuickPick).mockResolvedValueOnce({
-      label: "rules/checks.md", description: "Supporting file", content: "Revised checks", previous: "Original checks"
-    } as never);
-    const executeCommand = vi.mocked(vscode.commands.executeCommand);
-    executeCommand.mockClear();
 
     await harness.receive({ type: "previewResource", sessionId });
 
-    const diff = executeCommand.mock.calls.at(-1);
-    expect(diff?.[0]).toBe("vscode.diff");
-    expect(diff?.[3]).toBe("rules/checks.md — Resource changes");
-    const provider = webviewState.previewProvider;
-    if (!provider || !diff) throw new Error("The resource preview provider was not registered.");
-    expect(provider.provideTextDocumentContent(diff[1])).toBe("Original checks");
-    expect(provider.provideTextDocumentContent(diff[2])).toBe("Revised checks");
+    const panel = webviewState.panels.at(-1);
+    if (!panel) throw new Error("The preview tab was not opened.");
+    expect(panel.title).toBe("Dext Preview: review");
+    expect(panel.webview.html).toContain("<h2>rules/review.md</h2>");
+    expect(panel.webview.html).toContain("# Review &lt;draft&gt;");
+    expect(panel.webview.html).toContain("rules/checks.md");
+    expect(panel.webview.html).toContain("Revised checks");
+    expect(panel.webview.html).not.toContain("Original checks");
+    expect(panel.webview.html).not.toContain("data-api-flow");
+  });
+
+  it("draws the draft API's execution flow in the preview", async () => {
+    webviewState.panels.length = 0;
+    const harness = createSidebarHarness({
+      apiFlow: async () => ({ functions: [{ name: "review", line: 2, exported: true, calls: [], apiCalls: [], unused: false }], edges: [], issues: [] })
+    });
+    const sessionId = await harness.seed({
+      type: "api",
+      scope: "project",
+      draft: { name: "docs.review", content: "export function review() {}" }
+    });
+
+    await harness.receive({ type: "previewResource", sessionId });
+
+    expect(harness.apiFlow).toHaveBeenCalledWith("export function review() {}", "review");
+    const panel = webviewState.panels.at(-1);
+    if (!panel) throw new Error("The preview tab was not opened.");
+    expect(panel.webview.html).toContain("data-api-flow");
+    expect(panel.webview.html).toContain(".dext/api/docs/review.ts");
   });
 });

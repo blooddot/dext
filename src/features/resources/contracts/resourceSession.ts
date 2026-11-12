@@ -66,6 +66,13 @@ export function resourcePathSegments(type: ResourceKind, path: string): string[]
   return parts;
 }
 
+/** The labels a resource's own files are shown by, below `.dext/` or the global root. */
+export function resourceFileLabels(resource: Pick<ResourceSession, "type" | "scope" | "target">, draft: ResourceDocument): string[] {
+  const root = resource.scope === "project" ? ".dext/" : "";
+  const primary = resource.target?.path ?? resourceFileName(resource.type, draft.name);
+  return [`${root}${RESOURCE_DIRECTORIES[resource.type]}/${primary}`, ...(draft.files ?? []).map((file) => `${root}${file.path}`)];
+}
+
 /** Directories a resource lives in, below its kind's root. A rule or MCP manifest
  * owns one file, while a skill owns its whole directory including SKILL.md. */
 export function resourceDirectorySegments(type: ResourceKind, path: string): string[] {

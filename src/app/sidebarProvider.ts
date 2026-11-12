@@ -20,7 +20,9 @@ import { harnessPresetOrDefault } from "../features/agents/domain/harnessPresetD
 import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { dedupeSkillIds, withoutSkills } from "../features/conversations/domain/agentSelection.js";
 import type { McpServerConfig } from "../features/mcp/host/mcpRegistry.js";
-import { RESOURCE_LABELS, resourceFileName, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import { RESOURCE_LABELS, resourceFileLabels, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
+import { renderResourcePreview } from "../features/resources/presentation/resourceDocuments.js";
+import { renderEditorTabHtml } from "../platform/editor-tabs/editorTabHtml.js";
 import { FileSearchController } from "../features/workspace/host/fileSearchController.js";
 import { referencedAttachmentNames } from "../platform/vscode/dextStorage.js";
 import { ReadyMessageQueue } from "../shared/lib/readyMessageQueue.js";
@@ -82,8 +84,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private mcpAssistantExecution: { requestId: string; controller: AbortController } | undefined;
   private readonly pendingAttachmentDeletes = new Set<string>();
   private readonly resourceOperations = new Set<string>();
-  private readonly resourcePreviews = new Map<string, string>();
-  private resourcePreviewProvider: vscode.Disposable | undefined;
+  private draftPreview: vscode.WebviewPanel | undefined;
   private imageAnnotatorPanel: ImageAnnotatorPanel | undefined;
   private fileSearch = new FileSearchController(response => this.post(response));
   private disposed = false;
@@ -360,36 +361,53 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.persistResource(session);
   }
 
+  /** The draft is reviewed in a preview tab that reuses the resource detail page's
+   * structure, so the draft is never printed into the conversation. */
   private async previewResource(resource: ResourceSession): Promise<void> {
     const draft = resource.draft ?? resource.target;
     if (!draft) throw new Error("Generate a draft or select a resource first.");
-    const name = resource.target?.path ?? resourceFileName(resource.type, draft.name);
-    const files = [
-      { label: name, description: "Primary resource", content: draft.content, previous: resource.target?.content },
-      ...(draft.files ?? []).map((file) => ({ label: file.path, description: "Supporting file", content: file.content,
-        previous: resource.target?.files?.find((saved) => saved.path === file.path)?.content }))
-    ];
-    const selected = files.length > 1
-      ? await vscode.window.showQuickPick(files, { title: "Preview resource files", placeHolder: "Choose a file to review", matchOnDescription: true })
-      : files[0];
-    if (!selected) return;
-    this.resourcePreviewProvider ??= vscode.Disposable.from(
-      vscode.workspace.registerTextDocumentContentProvider("dext-resource-preview", {
-        provideTextDocumentContent: (uri) => this.resourcePreviews.get(uri.toString()) ?? ""
-      }),
-      vscode.workspace.onDidCloseTextDocument((document) => this.resourcePreviews.delete(document.uri.toString()))
-    );
-    const uri = (label: string, content: string): vscode.Uri => {
-      const value = vscode.Uri.from({ scheme: "dext-resource-preview", path: `/${randomBytes(12).toString("hex")}/${label}/${selected.label}` });
-      this.resourcePreviews.set(value.toString(), content);
-      return value;
-    };
-    if (resource.draft && selected.previous !== undefined) {
-      await vscode.commands.executeCommand("vscode.diff", uri("saved", selected.previous), uri("draft", selected.content), `${selected.label} — Resource changes`);
-    } else {
-      const document = await vscode.workspace.openTextDocument(uri("preview", selected.content));
-      await vscode.window.showTextDocument(document, { preview: true });
-    }
+    const [primary = draft.name, ...supporting] = resourceFileLabels(resource, draft);
+    const flow = resource.type === "api" ? await this.application.apiFlow(draft.content, draft.name.split(".").at(-1)) : undefined;
+    const body = renderResourcePreview({
+      kind: resource.type,
+      label: primary,
+      content: draft.content,
+      files: (draft.files ?? []).map((file, index) => ({ label: supporting[index] ?? file.path, content: file.content })),
+      ...(flow ? { flow } : {})
+    });
+    const panel = this.draftPreview ?? this.createDraftPreview();
+    panel.title = `Dext Preview: ${draft.name}`;
+    panel.webview.html = this.previewHtml(panel.webview, body);
+    panel.reveal();
+  }
+
+  private createDraftPreview(): vscode.WebviewPanel {
+    // shortcut: outside the editor-tab appearance broadcast, an open preview keeps
+    // its palette until reopened; move it into EditorTabManager if that matters.
+    const panel = vscode.window.createWebviewPanel("dext.resourcePreview", "Dext Preview", vscode.ViewColumn.Beside, {
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri]
+    });
+    this.draftPreview = panel;
+    panel.onDidDispose(() => { if (this.draftPreview === panel) this.draftPreview = undefined; });
+    return panel;
+  }
+
+  /** The editor-tab shell, so a preview reads like the Resources page it reuses. */
+  private previewHtml(webview: vscode.Webview, body: string): string {
+    const stamp = this.assetStamp();
+    const asset = (...parts: string[]): vscode.Uri =>
+      webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, ...parts)).with({ query: `v=${stamp}` });
+    return renderEditorTabHtml(body, asset("media", "editorTabs.css").toString(), webview.cspSource, {
+      mermaidUri: asset("dist", "webview", "mermaid.js").toString(),
+      appearance: {
+        theme: this.appearance?.current ?? "auto",
+        stylesheetUri: asset("media", "appearance.css").toString(),
+        scriptUri: asset("dist", "webview", "appearance.js").toString()
+      },
+      // Mermaid's SVG needs inline styles, so the script only loads with a flow.
+      ...(body.includes("data-api-flow") ? { scriptUri: asset("dist", "webview", "apiFlow.js").toString() } : {})
+    });
   }
 
   focusEditor(): void {
@@ -653,9 +671,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
     this.mcpAssistantExecution?.controller.abort();
     this.mcpAssistantExecution = undefined;
-    this.resourcePreviewProvider?.dispose();
+    this.draftPreview?.dispose();
     this.imageAnnotatorPanel?.dispose();
-    this.resourcePreviews.clear();
     this.attachments.dispose();
     this.messageQueue.clear();
   }

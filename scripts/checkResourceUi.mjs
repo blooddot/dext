@@ -79,7 +79,7 @@ try {
   await evaluate(`host({type:'executing',sessionId:'resource',value:false,turnId:'one'});resource={type:'rule',scope:'project',target:{name:'review',path:'review.md',content:'Review changes.'},draft:{name:'review',content:'# Review\\n\\nReview changes and run checks.'}};host({type:'resourceContext',sessionId:'resource',resource});`);
   assert.equal(await evaluate(`document.getElementById('mode-control-value').textContent`), "Rule");
   assert.equal(await evaluate(`document.getElementById('resource-save').textContent`), "Save changes");
-  assert.equal(await evaluate(`document.getElementById('resource-preview').textContent`), "View changes");
+  assert.equal(await evaluate(`document.getElementById('resource-preview').textContent`), "Preview");
   await evaluate(`document.getElementById('permission-control').click()`);
   assert.equal(await evaluate(`document.getElementById('permission-menu').textContent.includes('Save as · Global')`), true);
   await key("Escape", 27);
