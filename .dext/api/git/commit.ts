@@ -10,7 +10,6 @@ const DEFAULT_TASK = "请整理当前工作区的改动，按功能创建独立�
 async function commitChanges(input: string): Promise<AgentResult> {
   return agent({
     input: input || DEFAULT_TASK,
-    apply: true,
     patch: false,
     rules: ["git/commit.md"],
     echo: true
