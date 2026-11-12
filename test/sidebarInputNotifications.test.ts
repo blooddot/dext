@@ -215,7 +215,7 @@ describe("sidebar input notifications", () => {
     h.dispose();
   });
 
-  it.each([false, true])("reveals Dext only when it is not already on screen (visible: %s)", async (visible) => {
+  it.each([false, true])("never asks the host to reveal Dext, so a maximized layout stays (visible: %s)", async (visible) => {
     const h = await sidebarHarness(visible);
     const background = h.internals.conversation.controller.session("background");
     const execution = h.internals.conversation.coordinator.execute(background, "agent", "background question");
@@ -229,12 +229,12 @@ describe("sidebar input notifications", () => {
       && message.turnId === turnId && message.requestId === "question" && message.kind === "agent"
     )).toBe(true));
 
-    // Asking the host to focus a view that is already on screen rewrites the
-    // reader's layout (a maximized Secondary Side Bar loses its width), so an
-    // on-screen Dext must keep its display state. Coordinator notifier calls
-    // also use executeCommand for context keys, so look for the reveal itself.
+    // Revealing a view rewrites the reader's layout (a maximized Secondary Side
+    // Bar loses its width, which reads as leaving full screen), so the toast
+    // never focuses Dext. Coordinator notifier calls also use executeCommand for
+    // context keys, so look for the reveal itself.
     const focused = host.executeCommand.mock.calls.some(([command]) => command === "dext.sidebar.focus");
-    expect(focused).toBe(!visible);
+    expect(focused).toBe(false);
     expect(h.messages.some((message) => message.type === "activeConversation" && message.activeId === "background")).toBe(true);
     // The buffered events are restored before the focus hand-off, so the
     // revealed question is on screen when the Webview tries to focus it.

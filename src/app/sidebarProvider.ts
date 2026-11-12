@@ -1251,12 +1251,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async openInputTarget(target: InputNotificationTarget): Promise<void> {
-    // Asking the host to focus a view that is already on screen rewrites the
-    // layout the reader chose: a maximized Secondary Side Bar drops back to
-    // its docked width. Only a Dext the reader cannot see is revealed here; an
-    // on-screen one keeps the display state it has and still takes focus,
-    // because the Webview focuses the question field.
-    if (this.view?.visible !== true) await vscode.commands.executeCommand("dext.sidebar.focus");
+    // Revealing this view rewrites the layout the reader chose: a maximized
+    // Secondary Side Bar drops back to its docked width, which reads as leaving
+    // full screen. So the toast only switches and focuses the conversation; an
+    // off-screen Dext picks the question up when it is shown again.
     if (!this.conversation.interactions.isWaiting(target) || this.disposed
       || this.conversation.coordinator.turnOf(target.sessionId) !== target.turnId) return;
     const session = this.sessionInMap(target.sessionId);
