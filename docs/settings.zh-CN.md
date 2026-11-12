@@ -10,7 +10,7 @@
 
 ## 发送与历史
 
-- `dext.submitOnEnter`（布尔值，默认 `true`）— Agent、Ask、Plan 模式下按 Enter 发送，Shift+Enter 换行。设为 `false` 时改为 Ctrl/Cmd+Enter 发送。Code 模式始终使用 Ctrl/Cmd+Enter 运行。轮次运行中按 Enter（或点 Stop 旁的 Queue 按钮）排队下一条消息，而不是停止当前轮次；输入区上方的排队行可回填编辑或撤回，**Stop** 仍然立即停止，随后发出排队消息。
+- `dext.submitOnEnter`（布尔值，默认 `true`）— Agent、Ask、Plan 模式下按 Enter 发送，Shift+Enter 换行。设为 `false` 时改为 Ctrl/Cmd+Enter 发送。Code 模式始终使用 Ctrl/Cmd+Enter 运行。轮次运行中按 Enter 排队下一条消息，而不是停止当前轮次；输入区上方的排队行可回填编辑或撤回，**Stop** 仍然立即停止，随后发出排队消息。
 - `dext.history.maxTurns`（整数，默认 `0`，最小 `0`）— 所有对话合计保留的轮次数。`0` 表示全部保留；设为正数时超出部分先丢弃最旧的轮次，对话标签条中对应的项也一并消失。
 - `dext.history.maxOutputLength`（整数，默认 `64000`，最小 `1000`）— 每条存储的输入、进程事件和序列化输出保留的字符数。超长时保留首尾两半；保存轮次时被截掉的文本写入该对话的 overflow 文件，轮次可以打开它。同一个值也限制流式输出时单条 Process 行的长度。
 - `dext.captureSelectionOnCopy`（布尔值，默认 `true`）— 在任意工作区文本文件（含 Markdown、纯文本、日志和 CSV）中按 Ctrl+C（macOS 为 Cmd+C）复制选区时，把选区暂存为 Dext 文件引用；同样控制选中终端输出后按 Ctrl+Shift+C（macOS 为 Cmd+C）的复制。剪贴板仍收到精确的选中文本，多光标复制完全交给 VS Code。设为 `false` 时两种复制都交回 VS Code。由此生成的 Input 引用见 [文件与选区引用](workflows.zh-CN.md#文件与选区引用)；**Add to Dext** 悬浮入口与路径暂存分别由 `dext.selectionActions.enabled` 和 `dext.copyFilePathOnCopy` 控制。

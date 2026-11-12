@@ -107,12 +107,14 @@ describe("sidebar panel layout", () => {
     expect(html.match(/class="icon-button panel-fullscreen"/g)).toBeNull();
   });
 
-  it("places the queued message row and its queue button next to the composer", async () => {
+  it("places the queued message row next to the composer", async () => {
     const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
     expect(html).toMatch(/id="input-shell"[\s\S]*id="queued-turn"[\s\S]*id="attachment-bar"/);
     expect(html).toMatch(/id="queued-turn-label"[\s\S]*id="queued-turn-edit"[\s\S]*id="queued-turn-withdraw"/);
-    expect(html).toMatch(/class="action-actions"[\s\S]*id="queue-turn"[\s\S]*id="run"/);
+    // No second button for queueing: Enter is the only way in, as in Cursor and Codex.
+    expect(html).not.toContain('id="queue-turn"');
+    expect(main).not.toContain("elements.queueTurn");
     // Enter queues while a turn runs; only the Stop button still stops it.
     expect(main).toContain("elements.run.addEventListener(\"click\", () => (executing ? stopExecution() : run()));");
     expect(main).toMatch(/function run\(\): void \{\s*if \(executing\) \{\s*queueTurn\(\);/);

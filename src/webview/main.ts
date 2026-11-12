@@ -153,7 +153,6 @@ const elements = {
   composerMore: element<HTMLButtonElement>("composer-more"),
   composerCollapse: element<HTMLButtonElement>("composer-collapse"),
   run: element<HTMLButtonElement>("run"),
-  queueTurn: element<HTMLButtonElement>("queue-turn"),
   queuedTurn: element<HTMLElement>("queued-turn"),
   queuedTurnLabel: element<HTMLElement>("queued-turn-label"),
   queuedTurnEdit: element<HTMLButtonElement>("queued-turn-edit"),
@@ -604,7 +603,6 @@ function updateRunState(): void {
   if (runIcon) runIcon.className = `codicon codicon-${executing ? "debug-stop" : codeMode ? "play" : "arrow-up"}`;
   elements.run.classList.toggle("stopping", stopping);
   elements.run.classList.toggle("executing", executing);
-  elements.queueTurn.hidden = !executing || !editor.source.trim();
   for (const [turnId, turn] of transcript.entries()) {
     const running = executing && turnId === activeTurnId && activeExecutionSessionId === browser.activeId;
     // The spinner replaces the chevron in the leading slot while it runs, so the
@@ -631,7 +629,7 @@ function updateRunState(): void {
 function composerPlaceholder(resource: ResourceSession | undefined): string {
   // The run button is Stop while a turn runs, so the composer has to say the
   // next message waits rather than looking ready to send.
-  if (executing) return stopping ? "Stopping…" : "Working… Enter or Queue sends next, Stop cancels";
+  if (executing) return stopping ? "Stopping…" : "Working… Enter queues next, Stop cancels";
   if (resource) {
     return pristineNewSkill(resource) && resourceSource === "import"
       ? "Paste a GitHub URL"
@@ -2310,7 +2308,6 @@ function clearSubmittedInput(): void {
 }
 
 elements.run.addEventListener("click", () => (executing ? stopExecution() : run()));
-elements.queueTurn.addEventListener("click", queueTurn);
 elements.queuedTurnEdit.addEventListener("click", () => {
   const sessionId = browser.activeId;
   const turn = sessionId ? queuedTurns.peek(sessionId) : undefined;

@@ -1553,11 +1553,6 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   font: inherit;
 }
 
-#queue-turn {
-  flex: 0 0 auto;
-  border-radius: 50%;
-}
-
 .image-attachment {
   position: relative;
   width: 48px;
