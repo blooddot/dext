@@ -247,7 +247,8 @@ body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contra
   --dext-row-action-background: #fffaf1;
   --dext-quiet-divider: #d8cbb8;
   --dext-mark-foreground: #fffaf1;
-  --dext-code-accent: #1f6b6b;
+  /* Blue, not teal: teal read as a second green next to Ask's on cream. */
+  --dext-code-accent: #1f5f9e;
   --resource-api-accent: #1769b5;
   --resource-mcp-accent: #7546b6;
   --resource-rule-accent: #886000;
