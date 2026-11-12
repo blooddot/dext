@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,7 +48,7 @@ describe("Harness command resolution", () => {
     const invocation = harnessSpawnCommand(wrapper, ["--version"], { platform: "win32", env: {} });
 
     expect(invocation.command).toBe(join(directory, "node.exe"));
-    expect(invocation.args).toEqual([entry, "--version"]);
+    expect(invocation.args).toEqual([await realpath(entry), "--version"]);
     expect(invocation.env).toBeUndefined();
   });
 });
