@@ -1,4 +1,4 @@
-import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
+import type { ResourceDocument, ResourceSession, ResourceTarget } from "../../resources/contracts/resourceSession.js";
 import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 
 /** Persisted conversation shape. This contract is safe to import from the
@@ -84,6 +84,14 @@ export interface DextHistorySession {
   archivedAt?: number;
 }
 
+/** The index keeps what a tab and a title need. The resource document itself is
+ * stored beside the conversation body, so one large draft cannot make every
+ * history write rewrite megabytes. */
+export type ResourceSessionRef = Pick<ResourceSession, "type" | "scope" | "saved" | "origin"> & {
+  target?: Pick<ResourceTarget, "name" | "path">;
+  draft?: Pick<ResourceDocument, "name">;
+};
+
 /** One conversation's metadata. Listing, tabs and titles read only this, so
  * rendering History never parses a conversation body. */
 export interface DextHistorySummary {
@@ -95,7 +103,7 @@ export interface DextHistorySummary {
    * reading its body. */
   firstInput?: string;
   archivedAt?: number;
-  resource?: ResourceSession;
+  resource?: ResourceSessionRef;
   activePlanPath?: string;
   planStatus?: PlanStatus;
   planProgress?: { path: string; todos: AgentTodoItem[] };
@@ -150,13 +158,16 @@ export function historySummaryOf(session: DextHistorySession): DextHistorySummar
   };
 }
 
-export function historySessionOf(summary: DextHistorySummary, turns: readonly DextHistoryRecord[]): DextHistorySession {
+export function historySessionOf(summary: DextHistorySummary, turns: readonly DextHistoryRecord[], resource?: ResourceSession): DextHistorySession {
+  // Without the stored document, the index's name-only entry stands in; that is
+  // all a reader needs until the resource is chosen again.
+  const sessionResource = resource ?? summary.resource as ResourceSession | undefined;
   return {
     id: summary.id,
     createdAt: summary.createdAt,
     updatedAt: summary.updatedAt,
     turns: [...turns],
-    ...(summary.resource ? { resource: summary.resource } : {}),
+    ...(sessionResource ? { resource: sessionResource } : {}),
     ...(summary.activePlanPath !== undefined ? { activePlanPath: summary.activePlanPath } : {}),
     ...(summary.planStatus !== undefined ? { planStatus: summary.planStatus } : {}),
     ...(summary.planProgress ? { planProgress: summary.planProgress } : {}),

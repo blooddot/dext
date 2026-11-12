@@ -250,6 +250,34 @@ describe("file history storage", () => {
     expect(after.trimEnd().split("\n")).toHaveLength(2);
   });
 
+  it("keeps a resource document out of the index and reads it back", async () => {
+    const path = await directory();
+    const content = "x".repeat(200_000);
+    const resource = {
+      type: "skill" as const, scope: "project" as const, saved: true,
+      target: { name: "archify", path: "skills/archify/SKILL.md", content, files: [{ path: "skills/archify/LICENSE", content }] }
+    };
+    const files = await HistoryFiles.open(path);
+    await files.writeTurns({ ...session("resource"), resource });
+    // One saved pack used to make every history write rewrite its contents.
+    expect((await readFile(join(path, "index.json"), "utf8")).length).toBeLessThan(2_000);
+    expect(files.summaries()[0]?.resource).toEqual({ type: "skill", scope: "project", saved: true,
+      target: { name: "archify", path: "skills/archify/SKILL.md" } });
+    expect((await files.read("resource"))?.resource).toEqual(resource);
+  });
+
+  it("moves a resource document an index still carries out to its own file", async () => {
+    const path = await directory();
+    const content = "y".repeat(200_000);
+    const resource = { type: "rule" as const, scope: "global" as const, target: { name: "house", path: "house.md", content } };
+    await writeFile(join(path, "index.json"), JSON.stringify({ imported: true, order: ["old"],
+      sessions: { old: { id: "old", createdAt: 1, updatedAt: 2, turnCount: 1, resource } } }));
+    await writeFile(join(path, bodyName("old")), `${JSON.stringify(turn("first"))}\n`);
+    const files = await HistoryFiles.open(path);
+    expect((await readFile(join(path, "index.json"), "utf8")).length).toBeLessThan(2_000);
+    expect((await files.read("old"))?.resource?.target?.content).toBe(content);
+  });
+
   it("skips a damaged turn line, keeps the rest and heals the index from the body", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {

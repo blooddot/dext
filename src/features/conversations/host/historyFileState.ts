@@ -4,8 +4,10 @@ import { join } from "node:path";
 import type * as vscode from "vscode";
 import {
   DEFAULT_HISTORY_LIMITS, historySessionOf, historySummaryOf, legacyHistorySession,
-  type DextHistoryLimits, type DextHistoryRecord, type DextHistorySession, type DextHistorySummary, type HistoryBackend
+  type DextHistoryLimits, type DextHistoryRecord, type DextHistorySession, type DextHistorySummary, type HistoryBackend,
+  type ResourceSessionRef
 } from "../contracts/history.js";
+import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
 import { compactAgentEvents } from "../domain/agentEventLog.js";
 import { DextHistoryStore } from "./historyStore.js";
 
@@ -15,6 +17,7 @@ const ORDER_KEY = "dext.history.order";
 const IMPORTED_KEY = "dext.history.imported";
 const INDEX_FILE = "index.json";
 const BODY_SUFFIX = ".jsonl";
+const RESOURCE_SUFFIX = ".resource.json";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BACKUP_MAX_AGE_MS = 7 * DAY_MS;
 const OVERFLOW_MAX_AGE_MS = DAY_MS;
@@ -40,6 +43,27 @@ function bodyPath(directory: string, sessionId: string): string {
 
 function bodySessionId(name: string): string {
   return Buffer.from(name.slice(0, -BODY_SUFFIX.length), "hex").toString("utf8");
+}
+
+/** A resource draft or document is the one part of a conversation's metadata
+ * that can be megabytes, so it lives in a file of its own. */
+function resourcePath(directory: string, sessionId: string): string {
+  return join(directory, `${Buffer.from(sessionId, "utf8").toString("hex")}${RESOURCE_SUFFIX}`);
+}
+
+function richResource(resource: ResourceSession): boolean {
+  return Boolean(resource.draft || resource.target?.content || resource.target?.files?.length);
+}
+
+function resourceRef(resource: ResourceSession): ResourceSessionRef {
+  return {
+    type: resource.type,
+    scope: resource.scope,
+    ...(resource.target ? { target: { name: resource.target.name, path: resource.target.path } } : {}),
+    ...(resource.draft ? { draft: { name: resource.draft.name } } : {}),
+    ...(resource.saved !== undefined ? { saved: resource.saved } : {}),
+    ...(resource.origin ? { origin: resource.origin } : {})
+  };
 }
 
 /** Write the old Memento array one session at a time: backing up a 450 MB
@@ -153,6 +177,7 @@ export class HistoryFiles implements HistoryBackend {
     // file stays where the user was told to find it.
     await files.backup(legacy.filter((name) => !skipped.has(name)));
     await files.pruneOverflow();
+    await files.migrateResources();
     return files;
   }
 
@@ -166,13 +191,14 @@ export class HistoryFiles implements HistoryBackend {
   async read(sessionId: string): Promise<DextHistorySession | undefined> {
     const summary = this.index.sessions[sessionId];
     if (!summary) return undefined;
+    const resource = await this.readResource(sessionId);
     let body: string;
     try {
       body = await readFile(bodyPath(this.directory, sessionId), "utf8");
     } catch (error) {
       // A missing body keeps the entry: the user must still be able to delete
       // the conversation, and a conversation may legitimately have no turns.
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return historySessionOf(summary, []);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return historySessionOf(summary, [], resource);
       throw error;
     }
     const turns: DextHistoryRecord[] = [];
@@ -187,10 +213,11 @@ export class HistoryFiles implements HistoryBackend {
     // The body is the truth: a crash may have landed between the append and the
     // index write. Repairing here keeps the next History list honest.
     if (turns.length !== summary.turnCount) {
-      this.index.sessions[sessionId] = historySummaryOf(historySessionOf(summary, turns));
+      this.index.sessions[sessionId] = await this.storedSummary(
+        historySummaryOf(historySessionOf(summary, turns, resource)), resource);
       await this.writeIndex();
     }
-    return historySessionOf(summary, turns);
+    return historySessionOf(summary, turns, resource);
   }
 
   async appendTurn(sessionId: string, turn: DextHistoryRecord): Promise<void> {
@@ -217,17 +244,19 @@ export class HistoryFiles implements HistoryBackend {
 
   async writeTurns(session: DextHistorySession): Promise<void> {
     await writeBody(this.directory, session);
-    this.put(historySummaryOf(session));
+    const summary = await this.storedSummary(historySummaryOf(session), session.resource);
+    this.put(summary);
     await this.writeIndex();
   }
 
   async writeMeta(summary: DextHistorySummary): Promise<void> {
-    this.put(summary);
+    this.put(await this.storedSummary(summary));
     await this.writeIndex();
   }
 
   async remove(sessionId: string): Promise<void> {
     await rm(bodyPath(this.directory, sessionId), { force: true });
+    await rm(resourcePath(this.directory, sessionId), { force: true });
     delete this.index.sessions[sessionId];
     this.index.order = this.index.order.filter((id) => id !== sessionId);
     await this.writeIndex();
@@ -270,6 +299,37 @@ export class HistoryFiles implements HistoryBackend {
   private put(summary: DextHistorySummary): void {
     this.index.sessions[summary.id] = summary;
     if (!this.index.order.includes(summary.id)) this.index.order.push(summary.id);
+  }
+
+  /** Writes the resource document beside the body and keeps only its names in
+   * the index. The document goes first, so a crash cannot leave an index that
+   * names a resource whose content was never stored. */
+  private async storedSummary(summary: DextHistorySummary, resource?: ResourceSession): Promise<DextHistorySummary> {
+    const document = resource ?? summary.resource as ResourceSession | undefined;
+    if (!document || !richResource(document)) return summary;
+    await writeDurable(resourcePath(this.directory, summary.id), JSON.stringify(document));
+    return { ...summary, resource: resourceRef(document) };
+  }
+
+  private async readResource(sessionId: string): Promise<ResourceSession | undefined> {
+    try { return JSON.parse(await readFile(resourcePath(this.directory, sessionId), "utf8")) as ResourceSession; }
+    catch { return undefined; }
+  }
+
+  /** Indexes written before the split carry the whole document; move it out
+   * once, and never overwrite a document another window already wrote. */
+  private async migrateResources(): Promise<void> {
+    const rich = Object.values(this.index.sessions)
+      .filter((summary) => summary.resource && richResource(summary.resource as ResourceSession));
+    if (!rich.length) return;
+    for (const summary of rich) {
+      const resource = summary.resource as ResourceSession;
+      const path = resourcePath(this.directory, summary.id);
+      try { await stat(path); }
+      catch { await writeDurable(path, JSON.stringify(resource)); }
+      summary.resource = resourceRef(resource);
+    }
+    await this.writeIndex();
   }
 
   private async writeIndex(): Promise<void> {
