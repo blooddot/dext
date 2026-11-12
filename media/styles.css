@@ -2167,6 +2167,21 @@ body.image-page {
   color: var(--vscode-foreground);
 }
 
+/* Collapsed, the composer keeps the toolbar row and returns the editor's height
+   to the output. */
+.input-section.composer-collapsed .input-panel {
+  /* Clipped rather than display:none: a textarea-mode Monaco editor cannot be
+     focused again after its DOM was hidden. */
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.input-section.composer-collapsed .input-error {
+  display: none;
+}
+
+
 .action-actions {
   flex: 0 0 auto;
   margin-left: auto;

@@ -118,5 +118,22 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   assert.equal(annotated.split("Image annotations for @").length - 1, 1, `re-inserting edits the block in place: ${annotated}`);
   assert.match(annotated, /: second$/m);
   console.log('PASS re-annotating replaces the block in Input');
+  // The composer collapses to its toolbar row so the output can own the height.
+  const expandedHeight = (await bounds()).input.height;
+  await evaluate(`document.getElementById('composer-collapse').click()`);
+  await settle();
+  assert.equal(Math.round((await bounds()).editor.height), 0, 'collapsed composer clips the editor away');
+  assert.equal(await evaluate(`document.getElementById('composer-collapse').getAttribute('aria-expanded')`), 'false');
+  const collapsed = await bounds();
+  assert.ok(collapsed.input.height < expandedHeight - 40, `collapsed composer returns the editor height to the output: ${expandedHeight} -> ${collapsed.input.height}`);
+  assert.ok(collapsed.actions.bottom <= collapsed.body.bottom + 1, `collapsed footer stays inside the input body: ${JSON.stringify(collapsed)}`);
+  assert.ok(collapsed.sendVisible, 'Send stays clickable while collapsed');
+  const collapsedShot = await send('Page.captureScreenshot');
+  await writeFile(join(artifacts, 'collapsed-composer.png'), Buffer.from(collapsedShot.data, 'base64'));
+  await evaluate(`document.getElementById('composer-collapse').click()`);
+  await settle();
+  assert.equal(Math.round((await bounds()).input.height), Math.round(expandedHeight), 'expanding restores the input height');
+  assert.equal(await evaluate(`Boolean(document.activeElement?.closest('#code-editor'))`), true, 'expanding focuses the editor');
+  console.log('PASS Collapsing the composer gives the editor height back to the output');
   console.log('PASS Plan attachments and layout state');
 }, false);

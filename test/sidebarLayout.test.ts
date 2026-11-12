@@ -1174,6 +1174,18 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/if \(!options\.length\)[\s\S]*?No models discovered\.[\s\S]*?Dext: Configure Agent/);
   });
 
+  it("collapses the composer to its toolbar row and restores it", async () => {
+    const html = await source("src/app/sidebarProvider.ts");
+    const main = await source("src/webview/main.ts");
+    const css = await source("media/styles.css");
+    expect(html).toContain('id="composer-collapse"');
+    expect(html).toContain('aria-controls="input-shell"');
+    expect(main).toContain('elements.inputSection.classList.toggle("composer-collapsed", collapsed)');
+    expect(main).toContain('elements.composerCollapse.addEventListener("click", () => setComposerCollapsed(!composerCollapsed))');
+    expect(css).toContain(".input-section.composer-collapsed .input-panel");
+    expect(html).toContain('class="icon-button" type="button" title="Collapse input"');
+  });
+
   it("opens the complete API list in an editor tab with search, grouping and detail", async () => {
     const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");

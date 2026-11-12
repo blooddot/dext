@@ -151,6 +151,7 @@ const elements = {
   modelMenu: element<HTMLElement>("model-menu"),
   modelSubmenu: element<HTMLElement>("model-submenu"),
   composerMore: element<HTMLButtonElement>("composer-more"),
+  composerCollapse: element<HTMLButtonElement>("composer-collapse"),
   run: element<HTMLButtonElement>("run"),
   queueTurn: element<HTMLButtonElement>("queue-turn"),
   queuedTurn: element<HTMLElement>("queued-turn"),
@@ -2519,6 +2520,18 @@ elements.uiDialog.addEventListener("cancel", (event) => {
 });
 elements.uiDialogForm.addEventListener("submit", (event) => event.preventDefault());
 elements.attachFiles.addEventListener("click", () => vscode.postMessage({ type: "chooseFiles" }));
+let composerCollapsed = false;
+function setComposerCollapsed(collapsed: boolean): void {
+  composerCollapsed = collapsed;
+  elements.inputSection.classList.toggle("composer-collapsed", collapsed);
+  elements.composerCollapse.setAttribute("aria-expanded", String(!collapsed));
+  elements.composerCollapse.title = collapsed ? "Expand input" : "Collapse input";
+  elements.composerCollapse.setAttribute("aria-label", elements.composerCollapse.title);
+  const icon = elements.composerCollapse.querySelector<HTMLElement>("i");
+  if (icon) icon.className = `codicon codicon-chevron-${collapsed ? "up" : "down"}`;
+  if (!collapsed) editor.focus();
+}
+elements.composerCollapse.addEventListener("click", () => setComposerCollapsed(!composerCollapsed));
 for (const button of [elements.resourceSourceDescribe, elements.resourceSourceImport]) {
   button.addEventListener("click", () => {
     if (composerSelectionLocked()) return;

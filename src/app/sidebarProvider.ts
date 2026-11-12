@@ -1548,6 +1548,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             <button id="composer-more" class="composer-more icon-button" type="button" title="More options" aria-label="More options" aria-controls="composer-extras" aria-expanded="false"><i class="codicon codicon-ellipsis"></i></button>
           </div>
           <div class="action-actions">
+            <button id="composer-collapse" class="icon-button" type="button" title="Collapse input" aria-label="Collapse input" aria-controls="input-shell" aria-expanded="true"><i class="codicon codicon-chevron-down" aria-hidden="true"></i></button>
             <button id="problems" class="problems-status" type="button" disabled>No problems</button>
             <button id="queue-turn" class="icon-button" type="button" title="Queue message" aria-label="Queue message" hidden><i class="codicon codicon-debug-continue" aria-hidden="true"></i></button>
             <button id="run" class="primary circular-action" type="button" title="Send" aria-label="Send"><i class="codicon codicon-arrow-up" aria-hidden="true"></i><span id="run-label" hidden>Send</span></button>
