@@ -16,7 +16,10 @@ const conversationSchemaList = [
     mode: z.enum(["agent", "ask", "plan", "code"]),
     source: z.string().min(1),
     planPath: z.string().min(1).max(512).optional(),
-    resourceSource: z.enum(["describe", "import"]).optional()
+    resourceSource: z.enum(["describe", "import"]).optional(),
+    // A queued message is sent from another tab, so it names the conversation
+    // the host must run instead of relying on the one on screen.
+    sessionId: z.string().min(1).max(128).optional()
   }),
   z.object({ type: z.literal("stopExecution"), turnId: z.string().min(1) }),
   z.object({
