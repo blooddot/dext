@@ -765,16 +765,21 @@ describe("sidebar panel layout", () => {
     expect(stored).toMatchObject({ id: turnId, mode: "plan", input: "retry me" });
     expect(active.turns.at(-1)?.id).toBe(turnId);
     h.dispose();
-    // Hovering the Worked line raises the bar; hovering the Output must not.
-    expect(css).toMatch(/\.output-turn:has\(> \.output-turn-body > \.turn-section\[data-turn-section="process"\] > summary:hover\) \.output-turn-actions,[\s\S]*?opacity: 1;/);
+    // Hovering any row above the answer keeps the bar reachable, since the bar
+    // sits in the Worked row; hovering the Output must not raise it.
+    expect(css).toMatch(/\.output-turn:has\(> \.output-turn-body > :not\(\[data-turn-section="output"\]\):hover\) \.output-turn-actions,[\s\S]*?opacity: 1;/);
     expect(css).not.toMatch(/\.output-turn:hover \.output-turn-actions/);
     // A mouse click must not leave the bar pinned open via focus.
     expect(css).not.toContain(".output-turn:focus-within");
     expect(css).not.toContain(".history-record:focus-within");
     expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn actions";');
     expect(css).toMatch(/\.history-record:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
-    // An open turn parks its actions over the Worked line, clear of the prompt.
-    expect(css).toMatch(/\.output-turn-body > \.output-turn-actions \{[\s\S]*?top: 4px;[\s\S]*?transform: none;/);
+    // An open turn parks its actions in the Worked row, clear of the prompt and
+    // of any question card above it, so the row owns the space while it shows.
+    // It is flat there: the bordered card is taller than the row's line, so it
+    // would grow the row on hover and shift every row below it.
+    expect(css).toMatch(/\.turn-section > summary > \.output-turn-actions \{[\s\S]*?position: static;[\s\S]*?display: none;[\s\S]*?padding: 0;[\s\S]*?border: 0;/);
+    expect(transcript).toMatch(/disclosure\.open \? process\.summary : summary/);
     expect(css).toMatch(/\.history-record-body > \.history-turn-actions \{[\s\S]*?top: 4px;[\s\S]*?transform: none;/);
     expect(history).toContain('<summary title="${SESSION_ACTION_HINT}">');
   });

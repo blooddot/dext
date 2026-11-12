@@ -3374,26 +3374,40 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section[data-t
   font-size: 13px;
 }
 
-/* The Worked line is the one row that raises the bar; Output is read, not
-   acted on, so hovering prose must not cover it. A collapsed turn has no
-   Worked line, so its prompt row stands in. focus-visible, not focus-within:
-   a clicked action must not pin the bar open after the pointer has left. */
+/* The bar lives in the short Worked row, so every row before the answer raises
+   it: the pointer never crosses a row that drops the bar on its way up to the
+   buttons. Output is read, not acted on, so hovering prose must not raise it. A
+   collapsed turn has no body, so its prompt row stands in. focus-visible, not
+   focus-within: a clicked action must not pin the bar open after the pointer has
+   left. */
+/* In the row the bar takes layout space, so it is flat there: the buttons alone
+   fit the 26px line, and a bordered 28px card would grow the row on hover and
+   shift every row below it. The meta line truncates for it instead. */
+.turn-section > summary > .output-turn-actions {
+  position: static;
+  transform: none;
+  display: none;
+  margin-left: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.turn-section > summary:has(> .output-turn-actions) > .turn-section-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .output-turn:not([open]) > summary:hover .output-turn-actions,
-.output-turn:has(> .output-turn-body > .turn-section[data-turn-section="process"] > summary:hover) .output-turn-actions,
+.output-turn:has(> .output-turn-body > :not([data-turn-section="output"]):hover) .output-turn-actions,
 .output-turn-actions:hover,
 .output-turn:has(:focus-visible) .output-turn-actions {
+  display: flex;
   opacity: 1;
   pointer-events: auto;
-}
-
-/* Opened turns park the bar over the short Worked line, clear of the prompt. */
-.output-turn-body {
-  position: relative;
-}
-
-.output-turn-body > .output-turn-actions {
-  top: 4px;
-  transform: none;
 }
 
 .output-turn-action:disabled {

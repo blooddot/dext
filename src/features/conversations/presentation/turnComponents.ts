@@ -15,7 +15,7 @@ export interface TurnRenderAdapter<E> {
 export function renderTurnSection<E>(
   adapter: TurnRenderAdapter<E>, process: TurnRenderModel["process"], children: readonly E[] = [],
   open = false, action?: E
-): { disclosure: E; body: E; meta: E } {
+): { disclosure: E; body: E; meta: E; summary: E } {
   const el = adapter.element;
   const meta = el("span", { class: "turn-section-meta disclosure-meta" }, [process.detail ?? ""]);
   const summary = el("summary", {}, [
@@ -24,7 +24,7 @@ export function renderTurnSection<E>(
     ...(action ? [el("span", { class: "turn-section-actions" }, [action])] : [])
   ]);
   const body = el("div", { class: "turn-section-body" }, children);
-  return { disclosure: el("details", { class: "turn-section", "data-turn-section": "process", open }, [summary, body]), body, meta };
+  return { disclosure: el("details", { class: "turn-section", "data-turn-section": "process", open }, [summary, body]), body, meta, summary };
 }
 
 /** The answer is never a fold target: one divider separates it from the timeline. */

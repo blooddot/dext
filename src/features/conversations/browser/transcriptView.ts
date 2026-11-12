@@ -283,9 +283,9 @@ export class TranscriptView {
     // it hidden until it ends and the record says which files it touched.
     body.append(todos.element, questions.element, process.disclosure, output.section, changes);
     disclosure.append(summary, body);
-    // An open turn keeps its actions over the short Worked line instead of
-    // covering the prompt, which is the row label now.
-    const hostActions = (): void => { (disclosure.open ? body : summary).append(actions); };
+    // An open turn keeps its actions in the short Worked row instead of covering
+    // the prompt, which is the row label now, or the question card above it.
+    const hostActions = (): void => { (disclosure.open ? process.summary : summary).append(actions); };
     hostActions();
     disclosure.addEventListener("toggle", hostActions);
     this.host.result.append(disclosure);
@@ -321,6 +321,7 @@ export class TranscriptView {
     disclosure: HTMLDetailsElement;
     body: HTMLElement;
     meta: HTMLElement;
+    summary: HTMLElement;
   } {
     const view = renderTurnSection(turnDomAdapter(this.host.document), section, [], open, action);
     // Legacy hooks still identify cached turns.
