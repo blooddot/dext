@@ -714,7 +714,7 @@ describe("Dext history rendering", () => {
     expect(html.match(/class="history-record"/g)).toHaveLength(2);
     expect(html).toContain("2 turns");
     const summary = html.slice(0, html.indexOf("history-session-body"));
-    expect(summary).toMatch(/history-summary-input[^>]*>ask\(input=&quot;first&quot;\)<\/span><span class="history-meta">2 turns<\/span><span class="history-meta history-session-time">/);
+    expect(summary).toMatch(/history-summary-input[^>]*>ask\(input=&quot;first&quot;\)<\/span><span class="history-meta">2 turns<\/span><span class="history-meta" data-history-search-hits hidden><\/span><span class="history-meta history-session-time">/);
   });
 
   it("tags conversations and turns so the native context menu knows its target", () => {

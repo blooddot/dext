@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { ConversationHistoryStore } from "../contracts/history.js";
 import type { ConversationPreferences } from "../contracts/preferences.js";
 import { orderHistorySessions } from "../domain/conversationOrder.js";
+import { turnSearchText } from "../domain/historyResponse.js";
 import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "../presentation/historyRender.js";
 import { openDextFileReference } from "../../../platform/vscode/contextHost.js";
 import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
@@ -12,6 +13,8 @@ import { isDextAppearance, type DextAppearance } from "../../../shared/contracts
 export class DextHistoryPanel implements vscode.Disposable {
   static readonly viewType = "dext.history";
   private panel: vscode.WebviewPanel | undefined;
+  /** Searchable text per conversation, read from disk once per rendered panel. */
+  private readonly searchTexts = new Map<string, string[]>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -48,13 +51,16 @@ export class DextHistoryPanel implements vscode.Disposable {
       this.panel = undefined;
     });
     this.panel.webview.onDidReceiveMessage((raw: unknown) => {
-      const message = raw as { type?: string; theme?: string; text?: string; reference?: string; command?: string; sessionId?: string; turnId?: string; path?: string };
+      const message = raw as { type?: string; theme?: string; text?: string; reference?: string; command?: string; sessionId?: string; turnId?: string; path?: string; query?: string };
       if (message.type === "setDextAppearance") {
         if (isDextAppearance(message.theme)) void this.appearance?.set(message.theme);
         return;
       }
       if (message.type === "copy" && typeof message.text === "string") {
         void vscode.env.clipboard.writeText(message.text);
+      }
+      if (message.type === "searchHistory" && typeof message.query === "string") {
+        void this.searchHistory(message.query);
       }
       if (message.type === "loadHistorySession" && typeof message.sessionId === "string") {
         const sessionId = message.sessionId;
@@ -138,7 +144,32 @@ export class DextHistoryPanel implements vscode.Disposable {
 
   private render(): void {
     if (!this.panel) return;
+    this.searchTexts.clear();
     this.panel.webview.html = this.html(this.panel.webview);
+  }
+
+  /** Replies live only in the saved turns, so History asks the host to match them
+   * and reports the number of matching turns per conversation. */
+  private async searchHistory(query: string): Promise<void> {
+    const needle = query.trim().toLocaleLowerCase();
+    const matches: Record<string, number> = {};
+    if (needle.length >= 2) {
+      const ids = this.history.summaries(true).filter((summary) => summary.turnCount > 0).map((summary) => summary.id);
+      const texts = await Promise.all(ids.map((id) => this.searchTextsFor(id)));
+      ids.forEach((id, index) => {
+        const hits = texts[index]!.filter((text) => text.includes(needle)).length;
+        if (hits > 0) matches[id] = hits;
+      });
+    }
+    void this.panel?.webview.postMessage({ type: "historySearchResults", query, matches });
+  }
+
+  private async searchTextsFor(sessionId: string): Promise<string[]> {
+    const cached = this.searchTexts.get(sessionId);
+    if (cached) return cached;
+    const texts = (await this.history.session(sessionId))?.turns.map((turn) => turnSearchText(turn)) ?? [];
+    this.searchTexts.set(sessionId, texts);
+    return texts;
   }
 
   private html(webview: vscode.Webview): string {
@@ -202,20 +233,41 @@ export class DextHistoryPanel implements vscode.Disposable {
     const renderDiagrams = (root) => window.dextRenderDiagrams?.(root);
     const rerenderDiagrams = (root) => window.dextRerenderDiagrams?.(root);
     renderDiagrams(document.querySelector('.history-content'));
+    // Reply text lives only in the saved turns, so the host matches it; names and
+    // prompts filter instantly here and the host hits are unioned in.
+    const hostHits = new Map();
+    let hostQuery = '';
+    let searchTimer = 0;
     const filterSessions = () => {
       const input = document.querySelector('[data-history-search]');
       if (!input) return;
-      const needle = input.value.trim().toLocaleLowerCase();
+      const query = input.value.trim();
+      const needle = query.toLocaleLowerCase();
+      // Host hits belong to the query they answered, so a new query waits for its own.
+      const matched = query === hostQuery;
       let visible = 0;
       document.querySelectorAll('[data-history-search-text]').forEach((row) => {
-        row.hidden = needle !== '' && !(row.getAttribute('data-history-search-text') || '').includes(needle);
+        const hits = needle === '' || !matched ? 0 : hostHits.get(row.getAttribute('data-history-search-id') || '') || 0;
+        const local = needle !== '' && (row.getAttribute('data-history-search-text') || '').includes(needle);
+        row.hidden = needle !== '' && !local && hits === 0;
+        const badge = row.querySelector('[data-history-search-hits]');
+        if (badge) {
+          badge.hidden = hits === 0;
+          badge.textContent = hits + (hits === 1 ? ' turn' : ' turns');
+        }
         if (!row.hidden) visible += 1;
       });
       const empty = document.querySelector('[data-history-search-empty]');
       if (empty) empty.hidden = needle === '' || visible > 0;
     };
     document.addEventListener('input', (event) => {
-      if (event.target?.matches?.('[data-history-search]')) filterSessions();
+      if (!event.target?.matches?.('[data-history-search]')) return;
+      filterSessions();
+      window.clearTimeout(searchTimer);
+      const query = event.target.value.trim();
+      // Local names and prompts already cover a one-character search.
+      if (query.length < 2) return;
+      searchTimer = window.setTimeout(() => vscode.postMessage({ type: 'searchHistory', query }), 250);
     });
     document.addEventListener('keydown', (event) => {
       const input = event.target?.matches?.('[data-history-search]') ? event.target : null;
@@ -289,6 +341,16 @@ export class DextHistoryPanel implements vscode.Disposable {
     }, true);
     window.addEventListener('message', (event) => {
       const message = event.data;
+      if (message?.type === 'historySearchResults') {
+        // A result for an older query must not hide the rows the current one shows.
+        const input = document.querySelector('[data-history-search]');
+        if (!input || !message.matches || input.value.trim() !== message.query) return;
+        hostHits.clear();
+        Object.entries(message.matches).forEach(([id, hits]) => hostHits.set(id, hits));
+        hostQuery = message.query;
+        filterSessions();
+        return;
+      }
       if (message?.type === 'historyTurnTitle' && typeof message.title === 'string') {
         const target = [...document.querySelectorAll('details.history-record')].find((item) =>
           item.dataset.sessionId === message.sessionId && item.dataset.turnId === message.turnId);

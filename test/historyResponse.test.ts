@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readHistoryResponse } from "../src/features/conversations/domain/historyResponse.js";
+import { readHistoryResponse, turnSearchText } from "../src/features/conversations/domain/historyResponse.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { MemoryHistoryBackend } from "./historyBackend.js";
@@ -44,6 +44,17 @@ describe("historical result compatibility", () => {
     const store = new DextHistoryStore(new MemoryHistoryBackend({ legacy: persisted }));
     expect((await store.sessions())[0]?.turns[0]?.response?.executions[0]?.result.kind).toBe("agent");
     expect((record.response?.executions[0]?.result as unknown as { kind: string }).kind).toBe("chat");
+  });
+
+  it("matches History searches against the reply text, title and error too", () => {
+    const record = legacyRecord();
+    const text = turnSearchText({ ...record, title: "Rename me", error: "it broke" });
+    // Only the stored response carries the reply, so the question alone cannot match it.
+    expect(text).toContain("第一项");
+    expect(text).toContain("rename me");
+    expect(text).toContain("it broke");
+    expect(text).toBe(text.toLowerCase());
+    expect(turnSearchText({ input: "plain", output: "Plain response" }).trim()).toBe("plain");
   });
 
   it("leaves plain or truncated output available to the fallback renderer", () => {

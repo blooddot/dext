@@ -140,6 +140,27 @@ describe("History turn action routing", () => {
     expect(summaryTarget.append).toHaveBeenCalledWith(moved);
   });
 
+  it("matches reply text the page never renders, counting the matching turns", async () => {
+    const response = {
+      kind: "workflow" as const,
+      executions: [{
+        invocation: { kind: "invocation" as const, method: "agent", source: "chat" as const, arguments: [] as never[] },
+        method: { id: "agent", title: "Agent", kind: "command" as const, source: "builtin" as const },
+        result: { kind: "agent" as const, text: "The retry budget lives in retryPolicy.ts." }, durationMs: 1
+      }]
+    };
+    await history.addSuccess("unrelated prompt", [], response, "session-2", "agent", "turn-2");
+    panel.refresh();
+    state.receive?.({ type: "searchHistory", query: "retryPolicy" });
+    await vi.waitFor(() => expect(state.post).toHaveBeenCalledWith({
+      type: "historySearchResults", query: "retryPolicy", matches: { "session-2": 1 }
+    }));
+    // A one-character query stays local, so the host reports no server-side hits.
+    state.post.mockClear();
+    state.receive?.({ type: "searchHistory", query: " r " });
+    await vi.waitFor(() => expect(state.post).toHaveBeenCalledWith({ type: "historySearchResults", query: " r ", matches: {} }));
+  });
+
   it("lists only conversations that recorded a turn", async () => {
     await history.updateResourceContext("empty-shell", { type: "rule", scope: "global" });
     panel.refresh();
@@ -147,27 +168,53 @@ describe("History turn action routing", () => {
     expect(state.html).not.toContain("empty-shell");
   });
 
-  it("filters rendered conversations from the search box and clears on Escape", () => {
+  it("unions host reply matches with local name and prompt hits", () => {
     const listeners = new Map<string, (event: unknown) => void>();
-    const row = (text: string) => ({ text, hidden: false, getAttribute: (name: string) => name === "data-history-search-text" ? text : null });
-    const rows = [row("auth refactor explain a.ts"), row("release notes")];
+    const windowListeners = new Map<string, (event: unknown) => void>();
+    const posted: unknown[] = [];
+    const row = (text: string, id: string) => {
+      const hits = { hidden: true, textContent: "" };
+      return {
+        hidden: false,
+        hits,
+        getAttribute: (name: string) => name === "data-history-search-text" ? text
+          : name === "data-history-search-id" ? id : null,
+        querySelector: (selector: string) => selector === "[data-history-search-hits]" ? hits : null
+      };
+    };
+    const rows = [row("auth refactor explain a.ts", "session-1"), row("release notes", "session-2")];
     const input = { value: "", matches: (selector: string) => selector === "[data-history-search]" };
     const empty = { hidden: true };
+    let debounced: (() => void) | undefined;
     const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(state.html)![1]!;
     runInNewContext(script, {
-      acquireVsCodeApi: () => ({ postMessage: () => undefined }),
+      acquireVsCodeApi: () => ({ postMessage: (message: unknown) => posted.push(message) }),
       document: {
         addEventListener: (type: string, callback: (event: unknown) => void) => listeners.set(type, callback),
         querySelector: (selector: string) => selector === "[data-history-search]" ? input
           : selector === "[data-history-search-empty]" ? empty : null,
         querySelectorAll: (selector: string) => selector === "[data-history-search-text]" ? rows : []
       },
-      window: { addEventListener: () => undefined }
+      window: {
+        addEventListener: (type: string, callback: (event: unknown) => void) => windowListeners.set(type, callback),
+        setTimeout: (callback: () => void) => { debounced = callback; return 1; },
+        clearTimeout: () => undefined
+      }
     });
     input.value = "AUTH";
     listeners.get("input")!({ target: input });
     expect(rows.map((item) => item.hidden)).toEqual([false, true]);
     expect(empty.hidden).toBe(true);
+    // The reply text is not in the page, so the host is asked for it after a pause.
+    debounced!();
+    expect(posted).toContainEqual({ type: "searchHistory", query: "AUTH" });
+    // A result for a query the reader has already moved past changes nothing.
+    windowListeners.get("message")!({ data: { type: "historySearchResults", query: "AUT", matches: { "session-2": 3 } } });
+    expect(rows.map((item) => item.hidden)).toEqual([false, true]);
+    windowListeners.get("message")!({ data: { type: "historySearchResults", query: "AUTH", matches: { "session-2": 3 } } });
+    expect(rows.map((item) => item.hidden)).toEqual([false, false]);
+    expect(rows[1]!.hits.hidden).toBe(false);
+    expect(rows[1]!.hits.textContent).toBe("3 turns");
     input.value = "missing";
     listeners.get("input")!({ target: input });
     expect(rows.map((item) => item.hidden)).toEqual([true, true]);
@@ -175,6 +222,7 @@ describe("History turn action routing", () => {
     listeners.get("keydown")!({ key: "Escape", target: input });
     expect(input.value).toBe("");
     expect(rows.map((item) => item.hidden)).toEqual([false, false]);
+    expect(rows[1]!.hits.hidden).toBe(true);
     expect(empty.hidden).toBe(true);
   });
 

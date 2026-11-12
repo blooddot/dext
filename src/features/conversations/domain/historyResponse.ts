@@ -23,6 +23,17 @@ export function normalizeHistoryResponse(response: InputExecutionResponse, mode?
   return { ...response, executions, ...(steps ? { steps } : {}) };
 }
 
+/** Everything a History search can match in one turn: its title, question,
+ * reply text and error. Reply text only lives in the stored response. */
+export function turnSearchText(record: Pick<DextHistoryRecord, "title" | "input" | "error" | "response" | "output" | "mode">): string {
+  const parts = [record.title ?? "", record.input, record.error ?? ""];
+  for (const execution of readHistoryResponse(record)?.executions ?? []) {
+    const text = (execution.result as { text?: unknown }).text;
+    if (typeof text === "string") parts.push(text);
+  }
+  return parts.join("\n").toLowerCase();
+}
+
 /** Decode lazily when a turn is opened; never rewrite or truncate saved output. */
 export function readHistoryResponse(record: Pick<DextHistoryRecord, "response" | "output" | "mode">): InputExecutionResponse | undefined {
   if (record.response) return normalizeHistoryResponse(record.response, record.mode);

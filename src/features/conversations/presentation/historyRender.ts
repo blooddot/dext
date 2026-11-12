@@ -416,13 +416,12 @@ export function renderHistorySession(session: DextHistorySession | DextHistorySu
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
   const label = view.name ?? conversationTitle(session);
-  // shortcut: search covers names and prompts, not answer bodies; a summary row
-  // can only offer the first prompt. Upgrade to a host-side full-text search
-  // when replies need to be searchable too.
+  // shortcut: this row filters on names and prompts only; replies are matched by
+  // the host panel, which fills the hits span.
   const prompts = "turns" in session ? session.turns.map(historyTurnLabel) : [session.firstInput ?? ""];
   const searchText = [label, ...prompts].join(" ").toLocaleLowerCase();
   const lazyAttributes = view.lazy ? ` data-history-lazy="true" data-history-session-id="${escapeHtml(session.id)}"` : "";
-  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} data-history-search-text="${escapeHtml(searchText)}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
+  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} data-history-search-id="${escapeHtml(session.id)}" data-history-search-text="${escapeHtml(searchText)}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta" data-history-search-hits hidden></span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
 }
 
 export function historyTurnMarkdown(record: DextHistoryRecord, index = 0): string {
