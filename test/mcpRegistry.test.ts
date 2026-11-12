@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -437,20 +437,25 @@ describe("McpToolRegistry", () => {
     const transport = new StdioMcpTransport();
     const events: Array<{ source: string; text: string }> = [];
 
-    await expect(transport.call({
-      name: "noisy",
-      transport: "stdio",
-      command: process.execPath,
-      args: ["-e", script]
-    }, "readTask", {}, {
-      onProcessEvent: (event) => events.push(event)
-    })).resolves.toEqual({ content: "task content" });
-    expect(events).toEqual(expect.arrayContaining([
-      { source: "stdout", text: 'Executing tool "readTask"' },
-      { source: "progress", text: "Reading task · 1/1" },
-      { source: "stderr", text: "Task request completed" }
-    ]));
-    await transport.dispose();
+    try {
+      await expect(transport.call({
+        name: "noisy",
+        transport: "stdio",
+        command: process.execPath,
+        args: ["-e", script]
+      }, "readTask", {}, {
+        onProcessEvent: (event) => events.push(event)
+      })).resolves.toEqual({ content: "task content" });
+      // stdout and stderr are independent streams, so the response can arrive
+      // before stderr's data callback even when the server writes stderr first.
+      await vi.waitFor(() => expect(events).toEqual(expect.arrayContaining([
+        { source: "stdout", text: 'Executing tool "readTask"' },
+        { source: "progress", text: "Reading task · 1/1" },
+        { source: "stderr", text: "Task request completed" }
+      ])), { timeout: 5_000 });
+    } finally {
+      await transport.dispose();
+    }
   });
 
   it("reuses one stdio process for repeated calls and shuts it down on dispose", { timeout: 20_000 }, async () => {
