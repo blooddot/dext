@@ -94,6 +94,11 @@ function conversationContext(turns: readonly DextHistoryRecord[]): string | unde
   ].join("\n");
 }
 
+/** The workspace paths the turn's own tool steps reported writing. */
+function writtenPaths(events: readonly AgentStreamEvent[]): string[] {
+  return [...new Set(events.flatMap((event) => event.files ?? []))];
+}
+
 export interface TurnExecutionCoordinatorOptions {
   history: ConversationHistoryStore;
   host: TurnExecutionHost;
@@ -107,8 +112,9 @@ export interface TurnExecutionCoordinatorOptions {
   /** A resource operation in flight blocks a turn for that conversation. */
   resourceBusy: (sessionId: string) => boolean;
   /** Workspace paths this turn wrote, as of `since`; absent when the workspace
-   * offers no baseline to compare against. */
-  changedFiles?: (since: number, sessionId: string, turnId: string) => Promise<string[] | undefined>;
+   * offers no baseline to compare against. `written` holds the paths the turn's
+   * own tool steps reported writing, which need no comparison. */
+  changedFiles?: (since: number, sessionId: string, turnId: string, written: readonly string[]) => Promise<string[] | undefined>;
   /** Called when no conversation is running any more. */
   onIdle?: () => Promise<void>;
 }
@@ -199,7 +205,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     try {
       const session = this.options.sessions.session(sessionId);
       if (!session || (!error && !text.trim())) return;
-      const changed = await this.options.changedFiles?.(wake.startedAt, sessionId, wake.turnId);
+      const changed = await this.options.changedFiles?.(wake.startedAt, sessionId, wake.turnId, writtenPaths(wake.events));
       const turnContext: TurnRecordContext = changed?.length ? { changedFiles: changed } : {};
       if (error) {
         saved = await this.options.history.addFailure(wake.label, wake.events, new Error(error), sessionId, "agent", wake.turnId, turnContext);
@@ -323,7 +329,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     let saved: DextHistoryRecord | undefined;
     let outcome: PlanExecutionOutcome | undefined = planExecution?.planOutcome;
     const recordContext = async (): Promise<TurnRecordContext> => {
-      const changed = await this.options.changedFiles?.(startedAt, sessionId, turnId);
+      const changed = await this.options.changedFiles?.(startedAt, sessionId, turnId, writtenPaths(events));
       return {
         ...planExecution,
         ...(selectedSkills.length ? { skills: selectedSkills } : {}),

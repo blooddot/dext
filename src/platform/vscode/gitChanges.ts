@@ -26,29 +26,81 @@ async function gitApi(): Promise<GitApi | undefined> {
   return api?.getAPI(1);
 }
 
-/** Paths a turn wrote, derived from what Git already reports as dirty. Absent
- * when the workspace is not in a Git repository, which is the signal that no
- * diff can be offered.
- * shortcut: modified time is the only per-file timestamp Git exposes, so a tool
- * that writes an older mtime hides that file. Upgrade to a status + content-hash
- * snapshot taken around the turn. */
-export async function changedWorkspaceFiles(since: number): Promise<string[] | undefined> {
+/** What one file looked like when a turn started. mtime alone is too coarse for
+ * two writes in the same second, so the size comes along. */
+interface FileStamp {
+  mtime: number;
+  key: string;
+}
+
+async function fileStamp(uri: vscode.Uri): Promise<FileStamp | undefined> {
+  try {
+    const stat = await vscode.workspace.fs.stat(uri);
+    return { mtime: stat.mtime, key: `${stat.mtime}:${stat.size}` };
+  } catch {
+    return undefined; // Deleted, or outside the workspace.
+  }
+}
+
+/** Every path Git reports as dirty, worktree and index. The paths are
+ * workspace-relative — with the folder name only in a multi-root workspace,
+ * the form `contextHost.workspaceFileUri` resolves back to a file. */
+async function dirtyPaths(): Promise<{ path: string; uri: vscode.Uri }[] | undefined> {
   const git = await gitApi();
   if (!git?.repositories.length) return undefined;
+  return git.repositories.flatMap((repository) =>
+    [...repository.state.workingTreeChanges, ...repository.state.indexChanges]
+      .map((change) => ({ path: vscode.workspace.asRelativePath(change.uri), uri: change.uri })));
+}
+
+/** What Git reported dirty when a turn started, keyed by path. A file that was
+ * already uncommitted before the turn is only this turn's change if it moved. */
+export type DirtyBaseline = ReadonlyMap<string, string>;
+
+export async function dirtyBaseline(): Promise<DirtyBaseline> {
+  const baseline = new Map<string, string>();
+  for (const file of (await dirtyPaths()) ?? []) {
+    const stamp = await fileStamp(file.uri);
+    if (stamp) baseline.set(file.path, stamp.key);
+  }
+  return baseline;
+}
+
+/** A path as the agent named it, in the workspace-relative form the rest of
+ * Dext resolves. Undefined for a file outside every workspace folder. */
+function workspacePath(path: string): string | undefined {
+  const normalized = path.replaceAll("\\", "/");
+  if (!/^[A-Za-z]:\//.test(normalized) && !normalized.startsWith("/")) {
+    // Relative to the workspace root the agent ran in; `..` would leave it.
+    const segments = normalized.split("/");
+    return segments.some((segment) => !segment || segment === "." || segment === "..") ? undefined : normalized;
+  }
+  const uri = vscode.Uri.file(normalized);
+  return vscode.workspace.getWorkspaceFolder(uri) ? vscode.workspace.asRelativePath(uri) : undefined;
+}
+
+/** Paths a turn wrote. What the agent reported writing wins: it is the only
+ * source that names the turn's own files. Without it, Git's dirty files that
+ * moved since `since` stand in. Absent when the workspace is not a Git
+ * repository and the agent reported nothing, which is the signal that no diff
+ * can be offered.
+ * shortcut: the Git fallback compares mtime and size, so a file the turn
+ * rewrote to the same bytes is missed, and one another process rewrote inside
+ * the turn's window is counted. Providers that report writes never take it. */
+export async function changedWorkspaceFiles(
+  since: number,
+  written: readonly string[] = [],
+  baseline?: DirtyBaseline
+): Promise<string[] | undefined> {
+  const reported = [...new Set(written.flatMap((path) => workspacePath(path) ?? []))].sort();
+  if (reported.length) return reported;
+  const dirty = await dirtyPaths();
+  if (!dirty) return undefined;
   const paths = new Set<string>();
-  for (const repository of git.repositories) {
-    for (const change of [...repository.state.workingTreeChanges, ...repository.state.indexChanges]) {
-      let modified: number;
-      try {
-        modified = (await vscode.workspace.fs.stat(change.uri)).mtime;
-      } catch {
-        continue; // Deleted, or outside the workspace.
-      }
-      if (modified < since) continue;
-      // Default returns `<folder>/<path>` only for a multi-root workspace, which
-      // is the form `contextHost.workspaceFileUri` resolves back to a file.
-      paths.add(vscode.workspace.asRelativePath(change.uri));
-    }
+  for (const file of dirty) {
+    const stamp = await fileStamp(file.uri);
+    if (!stamp || stamp.mtime < since || baseline?.get(file.path) === stamp.key) continue;
+    paths.add(file.path);
   }
   return [...paths].sort();
 }

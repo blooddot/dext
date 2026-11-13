@@ -10,7 +10,7 @@ import { HarnessState, conversation, defaultSelection } from "./conversationHarn
 
 vi.mock("vscode", () => ({}));
 
-function services(options: { executeConversation?: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>; changedFiles?: (since: number, sessionId: string, turnId: string) => Promise<string[] | undefined> } = {}) {
+function services(options: { executeConversation?: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>; changedFiles?: (since: number, sessionId: string, turnId: string, written: readonly string[]) => Promise<string[] | undefined>; turnStarted?: (turnId: string) => void } = {}) {
   const state = new HarnessState();
   const history = new DextHistoryStore(new MemoryHistoryBackend({ sessions: [conversation("session")] }));
   const preferences = new DextConversationPreferences(state as never);
@@ -38,6 +38,7 @@ function services(options: { executeConversation?: (mode: "agent" | "ask" | "pla
     disposed: () => false,
     resourceBusy: () => false,
     ...(options.changedFiles ? { changedFiles: options.changedFiles } : {}),
+    ...(options.turnStarted ? { turnStarted: options.turnStarted } : {}),
     notifyInput: async () => false,
     openInputTarget: async () => undefined,
     postActiveExecution: async () => undefined,
@@ -81,6 +82,25 @@ describe("createConversationServices", () => {
       value: false,
       changes: [{ path: "src/a.ts", reason: "no stated reason" }]
     }));
+  });
+
+  it("takes a workspace baseline before the turn and hands it the turn's own writes", async () => {
+    const changedFiles = vi.fn<(since: number, sessionId: string, turnId: string, written: readonly string[]) => Promise<string[] | undefined>>(async () => ["src/a.ts"]);
+    const turnStarted = vi.fn();
+    const h = services({
+      changedFiles,
+      turnStarted,
+      executeConversation: async (_mode, _source, metadata): Promise<InputExecutionResponse> => {
+        metadata.onAgentEvent?.({ id: "w", phase: "tool", text: "", files: ["src/a.ts"] });
+        return { kind: "workflow", executions: [] };
+      }
+    });
+    await h.services.controller.hydrate();
+    h.services.controller.activate(h.services.controller.session("session")!);
+    await h.services.coordinator.execute(h.services.controller.active(), "agent", "edit a");
+    expect(turnStarted).toHaveBeenCalledOnce();
+    expect(changedFiles.mock.calls[0]?.[1]).toBe("session");
+    expect(changedFiles.mock.calls[0]?.[3]).toEqual(["src/a.ts"]);
   });
 
   it("releases a running turn when the services are disposed", async () => {

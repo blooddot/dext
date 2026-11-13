@@ -38,7 +38,7 @@ type SelectionTarget
 } from "../platform/vscode/attachments.js";
 import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "../platform/vscode/clipboardFiles.js";
 import { openDextFileReference, openExternalLink } from "../platform/vscode/contextHost.js";
-import { changedWorkspaceFiles } from "../platform/vscode/gitChanges.js";
+import { changedWorkspaceFiles, dirtyBaseline, type DirtyBaseline } from "../platform/vscode/gitChanges.js";
 import { TurnSnapshots } from "../platform/vscode/turnSnapshots.js";
 import { dextBuiltinNames } from "../features/workflow/domain/dextTypesStatus.js";
 import type { WebviewResponse } from "../platform/webviewProtocol.js";
@@ -65,6 +65,9 @@ function imageExtension(mimeType: string): string | undefined {
 /** The reverse of `imageExtension`, for opening an attachment in the annotation tab. */
 import { IMAGE_MIME_TYPES, isVideoAttachment } from "../features/conversations/host/attachmentImage.js";
 import { ImageAnnotatorPanel } from "../features/conversations/host/imageAnnotatorPanel.js";
+
+/** Baselines kept for turns that never finish recording one. */
+const MAX_TURN_BASELINES = 64;
 
 /** The Webview host. It owns the VS Code surface, the HTML shell, message
  * dispatch and the features outside this round (resources, MCP, attachments).
@@ -95,6 +98,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private harnessModelDiscovery: Promise<void> | undefined;
   private readonly piModelsDiscovered = new Set<string>();
   private readonly piModelDiscoveries = new Map<string, Promise<void>>();
+  /** Git's dirty files when each running turn started, keyed by turn id. */
+  private readonly turnBaselines = new Map<string, Promise<DirtyBaseline>>();
 
   private get activeSession(): DextHistorySession {
     return this.conversation.controller.active();
@@ -139,10 +144,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       disposed: () => this.disposed,
       maxEventTextLength: () => vscode.workspace.getConfiguration("dext").get<number>("history.maxOutputLength", DEFAULT_HISTORY_LIMITS.maxOutputLength),
       resourceBusy: (sessionId) => this.resourceOperations.has(sessionId),
-      changedFiles: async (since: number, sessionId: string, turnId: string) => {
-        const files = await changedWorkspaceFiles(since);
+      changedFiles: async (since: number, sessionId: string, turnId: string, written: readonly string[]) => {
+        const baseline = this.turnBaselines.get(turnId);
+        this.turnBaselines.delete(turnId);
+        const files = await changedWorkspaceFiles(since, written, await baseline);
         if (files?.length) await snapshots.save(sessionId, turnId, files);
         return files;
+      },
+      turnStarted: (turnId) => {
+        // Unlike the turn's own writes, this read starts before the provider does,
+        // so a wake that finishes immediately still finds it. Bounded like the
+        // live executions it mirrors: a dropped wake must not grow it forever.
+        if (this.turnBaselines.size >= MAX_TURN_BASELINES) this.turnBaselines.delete(this.turnBaselines.keys().next().value!);
+        this.turnBaselines.set(turnId, dirtyBaseline());
       },
       notifyInput: async () => await vscode.window.showInformationMessage(
         "Dext: AI needs your response. Choose an option or enter an answer.", "View question"

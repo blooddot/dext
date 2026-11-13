@@ -42,9 +42,12 @@ export interface ConversationSetupDependencies {
   disposed: () => boolean;
   maxEventTextLength?: () => number;
   resourceBusy: (sessionId: string) => boolean;
-  /** Workspace paths a turn wrote since a timestamp; absent when the workspace
-   * has no baseline to compare the turn against. */
-  changedFiles?: (since: number, sessionId: string, turnId: string) => Promise<string[] | undefined>;
+  /** Workspace paths a turn wrote since a timestamp, plus the paths the turn's
+   * own tool steps reported writing; absent when the workspace has no baseline
+   * to compare the turn against. */
+  changedFiles?: (since: number, sessionId: string, turnId: string, written: readonly string[]) => Promise<string[] | undefined>;
+  /** Records what the workspace looked like before the turn's first write. */
+  turnStarted?: (turnId: string) => void;
   notifyInput: () => PromiseLike<boolean>;
   openInputTarget: (target: InputNotificationTarget) => Promise<void>;
   postActiveExecution: (sessionId: string, switchId?: number, hostInitiated?: boolean) => Promise<void>;
@@ -132,6 +135,7 @@ export function createConversationServices(dependencies: ConversationSetupDepend
     events,
     notifier: {
       started: async (snapshot) => {
+        dependencies.turnStarted?.(snapshot.turnId);
         await dependencies.post({
           type: "executing",
           sessionId: snapshot.sessionId,
