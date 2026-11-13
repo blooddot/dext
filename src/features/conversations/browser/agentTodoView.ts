@@ -33,7 +33,13 @@ export class AgentTodoView {
     const progress = agentTodoProgress(items, this.running);
     this.element.hidden = items.length === 0;
     this.meta.textContent = progress.label;
+    // A status update re-renders the rows; keep a phase the user opened open.
+    const open = [...this.list.children].map((row) => row.querySelector("details")?.open === true);
     this.list.innerHTML = agentTodoRows(items, this.running);
+    [...this.list.children].forEach((row, index) => {
+      const details = row.querySelector("details");
+      if (details && open[index]) details.open = true;
+    });
     if (first || progress.complete !== this.complete) this.element.open = !progress.complete;
     this.complete = progress.complete;
   }

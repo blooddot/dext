@@ -40,7 +40,7 @@ const PLAN_DOCUMENT_SKELETON = [
 export const PLAN_TASKS_RULES = [
   "Tasks rules:",
   "- Every task is a top-level numbered checkbox such as `1. [ ] Do the thing.` One task per line, each small enough to verify on its own.",
-  "- Do not use nested lists, tables, extra checklists, or `##` subheadings inside `## Tasks`. You may use `###` phase headings to group tasks; a heading is not a task.",
+  "- Do not use nested lists, tables, extra checklists, or `##` subheadings inside `## Tasks`. Group tasks under `###` phase headings: the task panel shows one row per phase with its step count, so each heading names the outcome its tasks deliver together. A short single-stage plan may stay flat.",
   "- Leave new tasks unchecked. When revising an existing plan, keep the order and wording of existing tasks and change only what the revision requires.",
   "- Each task names the file or area it changes and ends with `verify: <command or check>`."
 ].join("\n");

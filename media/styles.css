@@ -233,6 +233,11 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
 .agent-todo-item[data-status="completed"] > .codicon { color: var(--vscode-testing-iconPassed, var(--vscode-foreground)); }
 .agent-todo-item[data-status="completed"] .agent-todo-text { color: var(--vscode-descriptionForeground); }
 .agent-todo-verify { margin-top: 2px; font-size: 12px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; white-space: normal; }
+.agent-todo-group > details > summary { list-style: none; cursor: pointer; }
+.agent-todo-group > details > summary::-webkit-details-marker { display: none; }
+.agent-todo-group > details > summary > .disclosure-chevron { transition: transform 60ms linear; }
+.agent-todo-group > details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
+.agent-todo-group > details > .agent-todo-list { padding-inline-start: 24px; }
 
 .conversation-tab {
   position: relative;

@@ -4,11 +4,14 @@ import { agentTodoEvent } from "../../agents/domain/agentTodoTracking.js";
 const MARKER = "<!-- dext-todo:";
 
 /** Read the document's task section, excluding examples and other checklists.
- * Checked boxes are explicit document state; prose is never treated as progress. */
+ * Checked boxes are explicit document state; prose is never treated as progress.
+ * A `###` phase heading is not a task: it labels the steps after it, which the
+ * panel collapses into one row so a long plan still reads as phases. */
 export function planTodoItems(document: string): AgentTodoItem[] {
   const items: AgentTodoItem[] = [];
   let sectionLevel = 0;
   let fence: string | undefined;
+  let phase: string | undefined;
   for (const line of document.split(/\r?\n/)) {
     const delimiter = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
     if (delimiter) {
@@ -21,12 +24,14 @@ export function planTodoItems(document: string): AgentTodoItem[] {
     if (heading) {
       if (sectionLevel && heading[1]!.length <= sectionLevel) break;
       if (/^(tasks|todo(?:s)?|任务(?:列表)?|待办(?:事项|列表)?)$/i.test(heading[2]!)) sectionLevel = heading[1]!.length;
+      else if (sectionLevel) phase = heading[2]!;
       continue;
     }
     if (!sectionLevel) continue;
     const task = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?(\S.*)$/.exec(line);
     if (!task) continue;
-    items.push({ id: `plan-${items.length + 1}`, text: task[2]!, status: task[1]?.toLowerCase() === "x" ? "completed" : "pending" });
+    items.push({ id: `plan-${items.length + 1}`, text: task[2]!, status: task[1]?.toLowerCase() === "x" ? "completed" : "pending",
+      ...(phase === undefined ? {} : { group: phase }) });
   }
   return items;
 }
@@ -42,7 +47,7 @@ export function planTodoInstruction(items: readonly AgentTodoItem[]): string {
     "When resuming, verify existing changes before reporting completion. Keep unfinished tasks unfinished if execution stops.",
     'Continue all actionable tasks. For an external blocker, add "blocked":[{"id":"plan-1","reason":"Specific external condition needed"}] to a dext-todo report; do not classify difficult or unfinished work as blocked. Other tasks must continue.',
     'When the host requests final verification, check the implementation and required checks before reporting "verification":"passed" in a dext-todo report. Reopen any tasks that are incomplete. Do not claim verification merely because all boxes are checked.',
-    JSON.stringify(items)
+    JSON.stringify(items.map(({ id, text, status }) => ({ id, text, status })))
   ].join("\n");
 }
 

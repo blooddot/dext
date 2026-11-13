@@ -127,6 +127,19 @@ describe("agent task progress", () => {
     expect(html).toContain('<div class="agent-todo-verify">verify: npm test</div>');
   });
 
+  it("collapses a plan phase into one row with its step count", () => {
+    const html = agentTodoRows([
+      { id: "plan-1", status: "completed", text: "Inspect", group: "阶段一" },
+      { id: "plan-2", status: "pending", text: "Apply", group: "阶段一" },
+      { id: "plan-3", status: "pending", text: "Loose task" }
+    ], true);
+    expect(html).toContain('<li class="agent-todo-group" data-status="pending">');
+    expect(html).toContain('<span class="agent-todo-status">1/2</span>');
+    expect(html).toContain("<details>");
+    expect(html).toContain("<p>Apply</p>");
+    expect(html).toContain("<p>Loose task</p>");
+  });
+
   it("keeps raw HTML and executable links inert in Todo Markdown", () => {
     const html = agentTodoRows([{ id: "untrusted", status: "pending",
       text: '<img src=x onerror="alert(1)"> [unsafe](javascript:alert(1)) **Safe bold**' }], true);

@@ -30,7 +30,7 @@ describe("plan task progress without native task tools", () => {
     expect(planTodoItems("No task section")).toEqual([]);
   });
 
-  it("ignores phase headings and Mermaid diagrams inside Tasks and keeps flat task IDs stable", () => {
+  it("labels phase tasks with their heading and ignores Mermaid diagrams", () => {
     const plan = [
       "## Tasks",
       "",
@@ -49,11 +49,16 @@ describe("plan task progress without native task tools", () => {
       "",
       "```mermaid",
       '  C["Verify"] --> D["Report"]',
-      "```"
+      "```",
+      "",
+      "### Phase 3",
+      "",
+      "1. [x] Confirm dependencies"
     ].join("\n");
     expect(planTodoItems(plan)).toEqual([
-      { id: "plan-1", text: "Inspect implementation", status: "pending" },
-      { id: "plan-2", text: "Run targeted tests", status: "pending" }
+      { id: "plan-1", text: "Inspect implementation", status: "pending", group: "Phase 1" },
+      { id: "plan-2", text: "Run targeted tests", status: "pending", group: "Phase 1" },
+      { id: "plan-3", text: "Confirm dependencies", status: "completed", group: "Phase 3" }
     ]);
   });
 

@@ -36,16 +36,40 @@ export function agentTodoProgress(items: readonly AgentTodoItem[], running: bool
 }
 
 export function agentTodoRows(items: readonly AgentTodoItem[], running: boolean): string {
-  return items.map((item) => {
-    const verify = TASK_VERIFY.exec(item.text);
-    const task = verify?.[1] ?? item.text;
-    const active = item.status === "in_progress" && running;
-    const label = item.status === "completed" ? "Completed" : active ? "In progress"
-      : item.status === "in_progress" ? "Paused" : "Pending";
-    const icon = item.status === "completed" ? "check" : active ? "loading codicon-modifier-spin"
-      : item.status === "in_progress" ? "debug-pause" : "circle-large-outline";
-    return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(task)}${verify ? `<div class="agent-todo-verify">verify: ${escapeHtml(verify[2]!)}</div>` : ""}</div><span class="agent-todo-status">${label}</span></li>`;
-  }).join("");
+  const rows: string[] = [];
+  for (let index = 0; index < items.length;) {
+    const group = items[index]!.group;
+    if (group === undefined) {
+      rows.push(todoRow(items[index]!, running));
+      index++;
+      continue;
+    }
+    let end = index + 1;
+    while (end < items.length && items[end]!.group === group) end++;
+    rows.push(phaseRow(group, items.slice(index, end), running));
+    index = end;
+  }
+  return rows.join("");
+}
+
+/** A plan phase shows how many of its steps are done and keeps the steps one
+ * click away, so a failure is visible without scanning every task up front. */
+function phaseRow(group: string, steps: readonly AgentTodoItem[], running: boolean): string {
+  const done = steps.filter((step) => step.status === "completed").length;
+  const state = done === steps.length ? "completed" : steps.some((step) => step.status === "in_progress") ? "in_progress" : "pending";
+  const active = state === "in_progress" && running;
+  return `<li class="agent-todo-group" data-status="${state}"><details><summary class="agent-todo-item${active ? " active" : ""}" data-status="${state}"><i class="disclosure-chevron codicon codicon-chevron-right" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(group)}</div><span class="agent-todo-status">${done}/${steps.length}</span></summary><ul class="agent-todo-list">${steps.map((step) => todoRow(step, running)).join("")}</ul></details></li>`;
+}
+
+function todoRow(item: AgentTodoItem, running: boolean): string {
+  const verify = TASK_VERIFY.exec(item.text);
+  const task = verify?.[1] ?? item.text;
+  const active = item.status === "in_progress" && running;
+  const label = item.status === "completed" ? "Completed" : active ? "In progress"
+    : item.status === "in_progress" ? "Paused" : "Pending";
+  const icon = item.status === "completed" ? "check" : active ? "loading codicon-modifier-spin"
+    : item.status === "in_progress" ? "debug-pause" : "circle-large-outline";
+  return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(task)}${verify ? `<div class="agent-todo-verify">verify: ${escapeHtml(verify[2]!)}</div>` : ""}</div><span class="agent-todo-status">${label}</span></li>`;
 }
 
 export function renderAgentTodos(items: readonly AgentTodoItem[]): string {

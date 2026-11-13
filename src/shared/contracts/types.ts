@@ -392,6 +392,8 @@ export interface AgentTodoItem {
   id: string;
   text: string;
   status: "pending" | "in_progress" | "completed";
+  /** The plan's `###` phase heading; the panel collapses its steps under it. */
+  group?: string;
 }
 
 export type AgentToolKind = "command" | "file" | "image" | "step";
