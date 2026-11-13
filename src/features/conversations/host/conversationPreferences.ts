@@ -1,6 +1,7 @@
 import type * as vscode from "vscode";
 import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type {
+  ComposerDraft,
   ConversationLayout,
   ConversationPreferences,
   HistoryOrdering
@@ -16,6 +17,7 @@ const MAX_TITLE_LENGTH = 140;
 const FAVORITES_ONLY_KEY = "dext.historyFavoritesOnly";
 const ARCHIVED_ONLY_KEY = "dext.historyArchivedOnly";
 const SELECTIONS_KEY = "dext.conversationSelections";
+const DRAFTS_KEY = "dext.composerDrafts";
 
 /** Pinning keeps a conversation open across reloads, favouriting keeps it at
  * the top of history, and renaming replaces the name taken from its first
@@ -89,6 +91,20 @@ export class DextConversationPreferences implements ConversationPreferences {
     await this.state.update(SELECTIONS_KEY, selections);
   }
 
+  /** An unsent draft must survive a hidden, reloaded or restarted Webview, so it
+   * is kept beside the other per-conversation choices instead of in the
+   * document that typed it. */
+  composerDrafts(): Record<string, ComposerDraft> {
+    return this.state.get<Record<string, ComposerDraft>>(DRAFTS_KEY, {});
+  }
+
+  async setComposerDraft(sessionId: string, draft: ComposerDraft): Promise<void> {
+    const drafts = { ...this.composerDrafts() };
+    if (draft.source.trim() || draft.attachments.length) drafts[sessionId] = draft;
+    else delete drafts[sessionId];
+    await this.state.update(DRAFTS_KEY, drafts);
+  }
+
   favoritesOnly(): boolean {
     return this.state.get<boolean>(FAVORITES_ONLY_KEY, false);
   }
@@ -121,10 +137,12 @@ export class DextConversationPreferences implements ConversationPreferences {
       Object.fromEntries(Object.entries(entries).filter(([id]) => ids.has(id)));
     const selections = this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {});
     const titles = this.state.get<Record<string, string>>(TITLES_KEY, {});
+    const drafts = this.composerDrafts();
     const pins = this.pinned(), favorites = this.favorites();
-    const nextSelections = kept(selections), nextTitles = kept(titles);
+    const nextSelections = kept(selections), nextTitles = kept(titles), nextDrafts = kept(drafts);
     if (Object.keys(nextSelections).length !== Object.keys(selections).length) await this.state.update(SELECTIONS_KEY, nextSelections);
     if (Object.keys(nextTitles).length !== Object.keys(titles).length) await this.state.update(TITLES_KEY, nextTitles);
+    if (Object.keys(nextDrafts).length !== Object.keys(drafts).length) await this.state.update(DRAFTS_KEY, nextDrafts);
     if (pins.some((id) => !ids.has(id))) await this.state.update(PINNED_KEY, pins.filter((id) => ids.has(id)));
     if (favorites.some((id) => !ids.has(id))) await this.state.update(FAVORITES_KEY, favorites.filter((id) => ids.has(id)));
   }

@@ -187,4 +187,33 @@ describe("conversation preferences", () => {
     expect(store.conversationSelection("b")).toBeUndefined();
     expect(store.title("b")).toBeUndefined();
   });
+
+  it("keeps an unsent draft for the conversation and forgets it once it is empty", async () => {
+    const store = preferences();
+    await store.setComposerDraft("session", {
+      source: "half a thought @.dext-global/attachments/a.png",
+      attachments: [{ relativePath: ".dext-global/attachments/a.png", name: "a.png" }]
+    });
+
+    // A document opened later reads what the closed one typed.
+    expect(store.composerDrafts()).toEqual({
+      session: {
+        source: "half a thought @.dext-global/attachments/a.png",
+        attachments: [{ relativePath: ".dext-global/attachments/a.png", name: "a.png" }]
+      }
+    });
+
+    await store.setComposerDraft("session", { source: "   ", attachments: [] });
+    expect(store.composerDrafts()).toEqual({});
+  });
+
+  it("drops a draft whose conversation history trimmed away", async () => {
+    const store = preferences();
+    await store.setComposerDraft("a", { source: "kept", attachments: [] });
+    await store.setComposerDraft("b", { source: "trimmed", attachments: [] });
+
+    await store.pruneConversations(["a"]);
+
+    expect(store.composerDrafts()).toEqual({ a: { source: "kept", attachments: [] } });
+  });
 });
