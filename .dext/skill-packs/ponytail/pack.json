@@ -5,12 +5,12 @@
   "upstreamVersion": "5.3.3",
   "releaseTag": "v5.3.3",
   "notes": [
-    ".claude-plugin/plugin.json: native plugin configuration and hooks are not installed.",
-    ".codex-plugin/plugin.json: native plugin configuration and hooks are not installed."
+    ".codex-plugin/plugin.json: native plugin configuration is not installed; 1 hook configuration file(s) are copied under upstream/ and never executed.",
+    ".claude-plugin/plugin.json: native plugin configuration is not installed; 2 hook configuration file(s) are copied under upstream/ and never executed."
   ],
   "commit": "7801d061243d7b753bad0e0b3c057cd250b11755",
   "license": "LICENSE",
-  "importedAt": "2026-11-13T02:21:19.731Z",
+  "importedAt": "2026-11-13T06:39:16.815Z",
   "skills": [
     {
       "id": "ponytail",
@@ -265,6 +265,58 @@
       "warnings": [
         "Adapted a compatible OpenCode prompt template as a shared Dext command."
       ]
+    }
+  ],
+  "hooks": [
+    {
+      "agent": "codex",
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-activate.js'))\"",
+      "timeout": 15,
+      "source": "hooks/claude-codex-hooks.json",
+      "root": ""
+    },
+    {
+      "agent": "codex",
+      "event": "SubagentStart",
+      "command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-subagent.js'))\"",
+      "timeout": 15,
+      "source": "hooks/claude-codex-hooks.json",
+      "root": ""
+    },
+    {
+      "agent": "codex",
+      "event": "UserPromptSubmit",
+      "command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-mode-tracker.js'))\"",
+      "timeout": 15,
+      "source": "hooks/claude-codex-hooks.json",
+      "root": ""
+    },
+    {
+      "agent": "claude",
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-activate.js'))\"",
+      "timeout": 15,
+      "source": "hooks/claude-codex-hooks.json",
+      "root": ""
+    },
+    {
+      "agent": "claude",
+      "event": "SubagentStart",
+      "command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-subagent.js'))\"",
+      "timeout": 15,
+      "source": "hooks/claude-codex-hooks.json",
+      "root": ""
+    },
+    {
+      "agent": "claude",
+      "event": "UserPromptSubmit",
+      "command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-mode-tracker.js'))\"",
+      "timeout": 15,
+      "source": "hooks/claude-codex-hooks.json",
+      "root": ""
     }
   ],
   "analysis": {

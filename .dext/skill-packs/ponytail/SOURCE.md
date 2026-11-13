@@ -5,7 +5,7 @@
 - Upstream version: 5.3.3
 - Versions: all imported; each turn uses its Agent's version, then shared
 - Commit: 7801d061243d7b753bad0e0b3c057cd250b11755
-- Imported: 2026-11-13T02:21:19.731Z
+- Imported: 2026-11-13T06:39:16.815Z
 - Discovery: deterministic
 - Skills: ponytail, ponytail-audit, ponytail-debt, ponytail-gain, ponytail-help, ponytail-review
 - Commands: ponytail-audit (available), ponytail-debt (available), ponytail-gain (available), ponytail-help (available), ponytail-review (available), ponytail (available)
@@ -37,7 +37,18 @@
 - Command /ponytail: .opencode/command/ponytail.md (shared)
   - Adapted a compatible OpenCode prompt template as a shared Dext command.
 
+## Hooks
+
+Copied under `upstream/` and recorded verbatim; Dext never executes them.
+
+- codex SessionStart (matcher: startup|resume|clear|compact, 15s): node -e "require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-activate.js'))"
+- codex SubagentStart (15s): node -e "require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-subagent.js'))"
+- codex UserPromptSubmit (15s): node -e "require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-mode-tracker.js'))"
+- claude SessionStart (matcher: startup|resume|clear|compact, 15s): node -e "require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-activate.js'))"
+- claude SubagentStart (15s): node -e "require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-subagent.js'))"
+- claude UserPromptSubmit (15s): node -e "require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT.split(String.fromCharCode(92)).join('/'), 'hooks/ponytail-mode-tracker.js'))"
+
 ## Import notes
 
-- .claude-plugin/plugin.json: native plugin configuration and hooks are not installed.
-- .codex-plugin/plugin.json: native plugin configuration and hooks are not installed.
+- .codex-plugin/plugin.json: native plugin configuration is not installed; 1 hook configuration file(s) are copied under upstream/ and never executed.
+- .claude-plugin/plugin.json: native plugin configuration is not installed; 2 hook configuration file(s) are copied under upstream/ and never executed.
