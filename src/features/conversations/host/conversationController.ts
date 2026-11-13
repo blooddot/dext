@@ -432,8 +432,9 @@ export class ConversationController {
     this.options.application.endAgentSession(sessionId);
     this.openConversations = this.openConversations.filter((id) => id !== sessionId);
     // Closing is an explicit dismissal, so a pinned conversation must not come
-    // back on the next reload.
+    // back on the next reload — and the Webview already discarded its draft.
     if (this.preferences.isPinned(sessionId)) await this.preferences.setPinned(sessionId, false);
+    await this.preferences.setComposerDraft(sessionId, { source: "", attachments: [] });
     if (sessionId !== this.activeSession.id) {
       await this.persistLayout();
       await this.postConversationState();
