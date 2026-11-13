@@ -2,15 +2,15 @@
   "name": "ponytail",
   "version": 2,
   "source": "https://github.com/DietrichGebert/ponytail.git",
-  "upstreamVersion": "5.3.2",
-  "releaseTag": "v5.3.2",
+  "upstreamVersion": "5.3.3",
+  "releaseTag": "v5.3.3",
   "notes": [
-    ".codex-plugin/plugin.json: native plugin configuration and hooks are not installed.",
-    ".claude-plugin/plugin.json: native plugin configuration and hooks are not installed."
+    ".claude-plugin/plugin.json: native plugin configuration and hooks are not installed.",
+    ".codex-plugin/plugin.json: native plugin configuration and hooks are not installed."
   ],
-  "commit": "16352ac229eb08a9598dcae48fe9f2b342567d86",
+  "commit": "7801d061243d7b753bad0e0b3c057cd250b11755",
   "license": "LICENSE",
-  "importedAt": "2026-10-27T02:42:28.314Z",
+  "importedAt": "2026-11-13T02:21:19.731Z",
   "skills": [
     {
       "id": "ponytail",

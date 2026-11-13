@@ -1,11 +1,11 @@
 # ponytail skill pack
 
 - Source: https://github.com/DietrichGebert/ponytail.git
-- Release: v5.3.2
-- Upstream version: 5.3.2
+- Release: v5.3.3
+- Upstream version: 5.3.3
 - Versions: all imported; each turn uses its Agent's version, then shared
-- Commit: 16352ac229eb08a9598dcae48fe9f2b342567d86
-- Imported: 2026-10-27T02:42:28.314Z
+- Commit: 7801d061243d7b753bad0e0b3c057cd250b11755
+- Imported: 2026-11-13T02:21:19.731Z
 - Discovery: deterministic
 - Skills: ponytail, ponytail-audit, ponytail-debt, ponytail-gain, ponytail-help, ponytail-review
 - Commands: ponytail-audit (available), ponytail-debt (available), ponytail-gain (available), ponytail-help (available), ponytail-review (available), ponytail (available)
@@ -39,5 +39,5 @@
 
 ## Import notes
 
-- .codex-plugin/plugin.json: native plugin configuration and hooks are not installed.
 - .claude-plugin/plugin.json: native plugin configuration and hooks are not installed.
+- .codex-plugin/plugin.json: native plugin configuration and hooks are not installed.
