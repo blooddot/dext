@@ -428,6 +428,10 @@ export interface AgentStreamEvent {
   /** A step the agent showed on its own row, so it needs no enclosing group. */
   solo?: boolean;
   toolKind?: AgentToolKind;
+  /** Files this step wrote, as the provider reported them. The turn's changed
+   * files come from here; only a provider that reports nothing falls back to
+   * comparing the workspace. */
+  files?: string[];
   replace?: boolean;
   done?: boolean;
   eventType?: string;

@@ -142,6 +142,8 @@ lines.on("line", async (line) => {
           options: [{ label: "A" }, { label: "B", description: "Second" }] }]));
       }
       update(p.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "tool-1", status: "completed", content: [{ type: "content", content: { type: "text", text: "done" } }] });
+      if (text === "edit") update(p.sessionId, { sessionUpdate: "tool_call_update", toolCallId: "tool-2", title: "Write file", kind: "edit", status: "completed",
+        content: [{ type: "diff", path: "/w/src/a.ts", oldText: "old", newText: "new" }] });
       if (text === "tool-silent-hang") return;
       if (text === "todo") update(p.sessionId, { sessionUpdate: "plan", entries: [
         { content: "Inspect", status: "completed", priority: "high" },

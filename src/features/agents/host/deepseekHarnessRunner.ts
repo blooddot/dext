@@ -202,8 +202,11 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       if (tool.status === "completed" || tool.status === "failed") session.timeout?.toolFinished(tool.toolCallId);
       else session.timeout?.toolStarted(tool.toolCallId);
       const details = tool.content?.map((item) => item.type === "content" && item.content.type === "text" ? item.content.text : item.type === "diff" ? `${item.path}\n${item.newText}` : "").filter(Boolean).join("\n");
+      // A diff content item is ACP's report that this tool wrote `path`.
+      const files = (tool.content ?? []).flatMap((item) => item.type === "diff" ? [item.path] : []);
       request.onEvent?.({ id: `${session.id}:${tool.toolCallId}`, phase: "tool", group: "work-log", title: tool.title ?? "Tool", text: details || tool.title || "Tool", replace: true,
-        done: tool.status === "completed" || tool.status === "failed", toolKind: tool.kind === "execute" ? "command" : tool.kind === "edit" || tool.kind === "read" ? "file" : "step" });
+        done: tool.status === "completed" || tool.status === "failed", ...(files.length ? { files } : {}),
+        toolKind: tool.kind === "execute" ? "command" : tool.kind === "edit" || tool.kind === "read" ? "file" : "step" });
     } else if (update.sessionUpdate === "usage_update") {
       // ACP's `usage_update` is context occupancy, not a per-turn charge: Dext
       // shows it as `used/window context` and never as billed token usage.

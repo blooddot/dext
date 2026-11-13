@@ -31,4 +31,10 @@ describe("Pi event snapshots", () => {
     expect(events.consume({ type: "compaction_end", willRetry: true })[0]?.phase).toBe("status");
     expect(events.consume({ type: "agent_end", willRetry: true })).toEqual([]);
   });
+  it("names the file a writing tool was given, and only for the tools that write", () => {
+    const events = new PiEvents("turn");
+    expect(events.consume({ type: "tool_execution_start", toolCallId: "w", toolName: "write", args: { path: "src/a.ts", content: "x" } })[0]?.files).toEqual(["src/a.ts"]);
+    expect(events.consume({ type: "tool_execution_end", toolCallId: "w", toolName: "edit", result: { content: [] } })[0]?.files).toBeUndefined();
+    expect(events.consume({ type: "tool_execution_start", toolCallId: "r", toolName: "read", args: { path: "src/a.ts" } })[0]?.files).toBeUndefined();
+  });
 });

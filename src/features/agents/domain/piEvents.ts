@@ -91,8 +91,11 @@ export class PiEvents {
     if (record.type.startsWith("tool_execution_")) {
       const done = record.type === "tool_execution_end", name = piText(record.toolName, "Tool");
       const result = piObject(done ? record.result : record.partialResult);
+      // Only the tools that write take a path, and Pi reports it in its args.
+      const path = ["write", "edit"].includes(name) ? piText(piObject(record.args).path, "") : "";
       return [{ id: `${this.prefix}:tool:${String(record.toolCallId)}`, phase: "tool", group: "work-log", title: name,
         text: contentText(result.content, "text") || JSON.stringify(record.args ?? {}), replace: true, done,
+        ...(path ? { files: [path] } : {}),
         toolKind: ["bash", "powershell"].includes(name) ? "command" : ["read", "write", "edit", "grep", "find", "ls"].includes(name) ? "file" : "step" }];
     }
     if (/^(auto_retry_|compaction_|summarization_retry_)/.test(record.type)) return [{ phase: "status", text: "", title: record.type.replaceAll("_", " "),

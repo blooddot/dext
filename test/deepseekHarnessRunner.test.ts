@@ -63,6 +63,11 @@ describe("Harness runner", { timeout: 15000 }, () => {
     expect(await r.runConversation({ ...req, onEvent })).toBe("hello");
     expect(onEvent.mock.calls.map(([event]) => event).filter((event) => event.phase === "tool")).toMatchObject([{ done: false }, { done: true, replace: true, text: "done" }]);
   });
+  it("reports the file an edit tool wrote, from its diff content", async () => {
+    const events: AgentStreamEvent[] = [];
+    await runner().runConversation({ ...request("edit"), onEvent: (event) => events.push(event) });
+    expect(events.filter((event) => event.phase === "tool").flatMap((event) => event.files ?? [])).toEqual(["/w/src/a.ts"]);
+  });
   it("reports Harness context occupancy without presenting it as billed usage", async () => {
     const events: AgentStreamEvent[] = [];
     await runner().runConversation({ ...request("usage"), onEvent: (event) => events.push(event) });

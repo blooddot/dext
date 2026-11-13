@@ -51,9 +51,13 @@ export function codexConversationEvent(method: string, params: Record<string, un
   if (item.type === "reasoning") return { ...common, phase: "reasoning", text: (Array.isArray(item.summary) && item.summary.length
     ? item.summary : Array.isArray(item.content) ? item.content : []).map(text).join("\n\n") };
   if (item.type === "commandExecution") return { ...common, phase: "tool", toolKind: "command", title: text(item.command), text: text(item.aggregatedOutput) };
-  if (item.type === "fileChange") return { ...common, phase: "tool", toolKind: "file", title: "File changes", text: (Array.isArray(item.changes) ? item.changes : []).map((raw) => {
-    const change = object(raw); return `${text(change.path)}\n${text(change.diff)}`;
-  }).join("\n\n") };
+  if (item.type === "fileChange") {
+    const changes = (Array.isArray(item.changes) ? item.changes : []).map(object);
+    const files = changes.map((change) => text(change.path)).filter(Boolean);
+    return { ...common, phase: "tool", toolKind: "file", title: "File changes",
+      text: changes.map((change) => `${text(change.path)}\n${text(change.diff)}`).join("\n\n"),
+      ...(files.length ? { files } : {}) };
+  }
   if (["mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch", "imageView"].includes(text(item.type))) {
     return { ...common, phase: "tool", toolKind: item.type === "imageView" ? "image" : "step",
       title: text(item.tool) || text(item.type), text: text(item.path) || text(item.query) || JSON.stringify(item.result ?? item.arguments ?? item.status ?? "") };
