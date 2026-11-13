@@ -141,8 +141,11 @@ export async function fetchGithubSkillSnapshot(source: GithubSource, options: Fe
             const path = pending[next++]!;
             const entry = indexed.get(path)!;
             const url = `https://raw.githubusercontent.com/${source.owner}/${source.repo}/${commit}/${path.split("/").map(encodeURIComponent).join("/")}`;
+            // GitHub gzips the transfer, and for a file of a few dozen bytes the
+            // framing makes it larger than the raw size; the exact size is
+            // checked after the download, so a small padding cannot hide a lie.
             const bytes = await fetchGithubBytes(url, fetcher, signal,
-              { ...limits, maxCompressedBytes: entry.size! }, `GitHub file '${path}'`);
+              { ...limits, maxCompressedBytes: entry.size! + 1024 }, `GitHub file '${path}'`);
             if (bytes.byteLength !== entry.size) throw new Error(`GitHub returned an unexpected size for '${path}'.`);
             files.set(path, bytes);
             downloadedBytes += bytes.byteLength;
