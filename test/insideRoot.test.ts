@@ -57,6 +57,14 @@ describe("insideRealRoot", () => {
     expect(await insideRealRoot(missingRoot, aliasRoot, { allowRoot: false })).toBe(false);
   });
 
+  it("climbs out of a link to a target inside the workspace", async () => {
+    const { workspace, alias } = await aliasedWorkspace();
+    await mkdir(join(workspace, "inner", "deep"), { recursive: true });
+    await symlink(join(workspace, "inner"), join(workspace, "link"), process.platform === "win32" ? "junction" : "dir");
+    expect(await insideRealRoot(alias, `${join(alias, "link", "deep")}${sep}..`)).toBe(true);
+    expect(await insideRealRoot(alias, `${join(alias, "link")}${sep}..`)).toBe(true);
+  });
+
   it("rejects missing descendants reached through a symlink outside the workspace", async () => {
     const { directory, workspace, alias } = await aliasedWorkspace();
     const outside = join(directory, "outside");
