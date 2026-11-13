@@ -55,6 +55,7 @@ All notable changes to Dext are documented in this file.
 - A screenshot annotation tab zooms like a picture viewer: a bar with zoom, **Fit**, **1:1**, pixel size and **Hide annotations**, plus Ctrl/Cmd + wheel around the pointer.
 - A Code run keeps every API result out of Output by default; pass `echo: true` on an `ask`, `plan`, `agent`, `template` or `skill` call to show it.
 - An MCP tool result that returns images now shows them, and an image that cannot be loaded reports why while its text and structured output stay intact.
+- A plan's Todo panel shows one row per `###` phase with a `done/total` step count, expandable to its steps; a phase without tasks is not a row.
 
 ## 0.1.1 - 2026-09-09
 
