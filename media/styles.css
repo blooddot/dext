@@ -1209,7 +1209,10 @@ main {
 }
 
 .input-section {
-  --input-editor-height: var(--dext-composer-height);
+  /* The editor starts at the composer height and grows with the draft until it
+     hits 2.5x, where it scrolls instead of pushing the conversation away. */
+  --input-editor-min-height: var(--dext-composer-height);
+  --input-editor-max-height: calc(var(--dext-composer-height) * 2.5);
   /* Agent is the default mode, so it keeps the plain button accent. Every
      other mode tints the composer through these properties. */
   --composer-accent: var(--vscode-button-background);
@@ -1265,8 +1268,10 @@ main {
 
 .code-editor {
   width: 100%;
-  height: var(--input-editor-height);
-  min-height: 0;
+  /* codeEditor.ts writes the content height inline; these are its floor and cap. */
+  height: var(--input-editor-min-height);
+  min-height: var(--input-editor-min-height);
+  max-height: var(--input-editor-max-height);
   flex: 0 1 auto;
   overflow: hidden;
   /* A soft lifted edge instead of contrastBorder: the composer should sit on
@@ -2922,7 +2927,7 @@ details:not([open]) > :not(summary) {
   }
 
   .input-section {
-    --input-editor-height: clamp(56px, 20vh, 96px);
+    --dext-composer-height: clamp(56px, 20vh, 96px);
     max-height: calc(100% - 32px);
     margin-top: 4px;
     padding-bottom: 4px;

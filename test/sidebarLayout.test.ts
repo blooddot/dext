@@ -625,14 +625,20 @@ describe("sidebar panel layout", () => {
     const css = await source("media/styles.css");
     // The composer height is a shared token; the short-viewport rule below still overrides it.
     expect(css).toMatch(/--dext-composer-height: clamp\(96px, 12vh, 128px\);/);
-    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-height: var\(--dext-composer-height\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: calc\(100% - 44px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
+    expect(css).toMatch(/\.input-section \{[\s\S]*?--input-editor-min-height: var\(--dext-composer-height\);[\s\S]*?--input-editor-max-height: calc\(var\(--dext-composer-height\) \* 2\.5\);[\s\S]*?flex: 0 0 auto;[\s\S]*?max-height: calc\(100% - 44px\);[\s\S]*?overflow: hidden;[\s\S]*?\}/);
     expect(css).toMatch(/\.input-panel \{[\s\S]*?flex-direction: column;[\s\S]*?flex: 0 1 auto;[\s\S]*?\}/);
-    expect(css).toMatch(/\.code-editor \{[\s\S]*?height: var\(--input-editor-height\);[\s\S]*?min-height: 0;[\s\S]*?\}/);
+    expect(css).toMatch(/\.code-editor \{[\s\S]*?height: var\(--input-editor-min-height\);[\s\S]*?max-height: var\(--input-editor-max-height\);[\s\S]*?\}/);
     expect(css).toMatch(/\.attachment-bar \{[\s\S]*?max-height: 76px;[\s\S]*?overflow: auto;[\s\S]*?\}/);
     expect(css).toMatch(/\.result-section \{[\s\S]*?flex: 1 1 0;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?flex-basis: 0;[\s\S]*?min-height: 0;[\s\S]*?overflow: auto;/);
     expect(css).toMatch(/#result-body \{[\s\S]*?scrollbar-gutter: stable;/);
-    expect(css).toMatch(/@media \(max-height: 480px\)[\s\S]*?\.input-section \{[\s\S]*?--input-editor-height: clamp\(56px, 20vh, 96px\);/);
+    expect(css).toMatch(/@media \(max-height: 480px\)[\s\S]*?\.input-section \{[\s\S]*?--dext-composer-height: clamp\(56px, 20vh, 96px\);/);
+  });
+
+  it("grows the editor with its content up to the composer cap", async () => {
+    const editor = await source("src/webview/codeEditor.ts");
+    expect(editor).toContain("this.view.onDidContentSizeChange(event => this.sizeToContent(event.contentHeight))");
+    expect(editor).toMatch(/this\.options\.parent\.style\.height = next;/);
   });
 
   it("keeps the jump-to-latest control clear of the host scrollbar", async () => {

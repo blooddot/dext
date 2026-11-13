@@ -134,6 +134,10 @@ export class DextCodeEditor {
     }));
     this.disposables.push({ dispose: () => options.parent.classList.remove("dext-projected-composition") });
     this.disposables.push(this.view.onDidLayoutChange(() => this.renderReferences()));
+    // Starts at the composer height and grows with the draft; CSS holds the floor
+    // and the cap, so a long draft scrolls instead of eating the conversation.
+    this.disposables.push(this.view.onDidContentSizeChange(event => this.sizeToContent(event.contentHeight)));
+    this.sizeToContent(this.view.getContentHeight());
     this.disposables.push(this.view.onDidChangeConfiguration(event => { if (event.hasChanged(monaco.editor.EditorOption.fontInfo)) this.renderReferences(); }));
     // Monaco's suggest widget otherwise consumes the first Escape while
     // parameter help remains open. Dismiss both through their native commands;
@@ -225,6 +229,12 @@ export class DextCodeEditor {
   focus(): void { this.view.focus(); }
   setSubmitOnEnter(enabled: boolean): void { this.submitOnEnter = enabled; this.chatEnter.set(!this.languageEnabled && enabled); }
   setPlaceholder(text: string): void { this.view.updateOptions({ placeholder: text }); }
+  /** The rendered height includes this box's own borders; Monaco's does not. */
+  private sizeToContent(height: number): void {
+    if (!(height > 0)) return;
+    const next = `${height + 2}px`;
+    if (this.options.parent.style.height !== next) this.options.parent.style.height = next;
+  }
   setValue(value: string, cursor = value.length): void {
     this.dropRevision++;
     this.pendingReferenceProjection = false;
