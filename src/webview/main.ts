@@ -2292,6 +2292,15 @@ function persistComposerDraft(): void {
   // The store drops attachments whose @ reference no longer appears in the
   // editor, so removing one directly does not resurrect its chip later.
   drafts.save(browser.activeId, editor.source, attachments.all());
+  // The host keeps the same draft: this document disappears when the view is
+  // hidden, the window is reloaded or Dext is closed.
+  vscode.postMessage({
+    type: "composerDraft",
+    sessionId: browser.activeId,
+    source: editor.source,
+    attachments: (drafts.draft(browser.activeId)?.attachments ?? [])
+      .map(({ relativePath, name }) => ({ relativePath, name }))
+  });
 }
 
 function restoreComposerDraft(sessionId: string): void {
@@ -2639,6 +2648,11 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
       attachments.add(message.relativePath, message.webviewUri, message.name);
       editor.insertFileReferences([`@${message.relativePath}`]);
     }
+  }
+  if (message.type === "composerDrafts") {
+    drafts.replace(message.drafts);
+    // Anything already typed in this document wins over the stored copy.
+    if (browser.activeId && !editor.source.trim()) restoreComposerDraft(browser.activeId);
   }
   if (message.type === "outputSession") {
     if (message.switchId !== undefined && message.switchId !== browser.switchId) return;

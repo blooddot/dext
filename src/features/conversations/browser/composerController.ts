@@ -31,6 +31,11 @@ export class ComposerDraftStore {
     return this.drafts.get(sessionId);
   }
 
+  /** Drafts the host kept while this document was hidden, reloaded or closed. */
+  replace(drafts: Readonly<Record<string, ConversationDraft>>): void {
+    for (const [sessionId, draft] of Object.entries(drafts)) this.drafts.set(sessionId, draft);
+  }
+
   /** A draft that the reader never sent - text or a referenced image. */
   hasUnsent(sessionId: string): boolean {
     const draft = this.drafts.get(sessionId);

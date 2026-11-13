@@ -12,7 +12,7 @@ writeExactClipboardText
 } from "../shared/lib/attachmentStore.js";
 import type { AgentSelection } from "../features/agents/contracts/agent.js";
 import { DEFAULT_HISTORY_LIMITS, type ConversationHistoryStore, type DextHistorySession } from "../features/conversations/contracts/history.js";
-import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
+import type { ComposerDraft, ConversationPreferences } from "../features/conversations/contracts/preferences.js";
 import { planPathSegments } from "../features/conversations/domain/planFile.js";
 import type { InputNotificationTarget } from "../features/conversations/host/inputNotifications.js";
 import { normalizeInputReferenceSource } from "../features/workspace/domain/fileReference.js";
@@ -86,6 +86,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   // cancel it.
   private mcpAssistantExecution: { requestId: string; controller: AbortController } | undefined;
   private readonly pendingAttachmentDeletes = new Set<string>();
+  /** The last draft each conversation reported, written on a pause in typing
+   * because a Memento update serializes the extension's whole workspace state. */
+  private readonly pendingComposerDrafts = new Map<string, ComposerDraft>();
+  private composerDraftTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly resourceOperations = new Set<string>();
   private draftPreview: vscode.WebviewPanel | undefined;
   private imageAnnotatorPanel: ImageAnnotatorPanel | undefined;
@@ -231,6 +235,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     );
     void this.discoverPiModelsOnce().then(() => this.refresh()).catch(() => undefined);
     view.onDidDispose(() => {
+      // A hidden or reloaded view is gone before its last keystroke's debounce
+      // would fire.
+      void this.flushComposerDrafts();
       if (this.view === view) {
         this.fileSearch.dispose();
         this.view = undefined;
@@ -680,6 +687,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   dispose(): void {
     this.fileSearch.dispose();
     this.disposed = true;
+    void this.flushComposerDrafts();
     this.conversation.dispose();
     for (const session of this.conversation.controller.sessionsList()) {
       if (this.conversation.coordinator.running(session.id)) this.application.endAgentSession(session.id);
@@ -710,6 +718,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           this.updateRunningContext();
           await this.refresh();
           await this.conversation.controller.postConversationState();
+          await this.postComposerDrafts();
           await this.post({ type: "outputSession", session: this.activeSession });
           await this.post({ type: "dextAppearance", theme: this.appearance?.current ?? "auto" });
           await this.postDextTypes("ready");
@@ -717,6 +726,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await this.flushPendingMessages(pendingMessages);
           break;
         }
+        case "composerDraft":
+          this.queueComposerDraft(request.sessionId, { source: request.source, attachments: request.attachments });
+          break;
         case "composerTypes": {
           await this.postDextTypes("requested");
           break;
@@ -1300,6 +1312,38 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   private async flushPendingMessages(messages: readonly WebviewResponse[]): Promise<void> {
     for (const message of messages) await this.post(message);
+  }
+
+  /** Typing coalesces into one write: each Memento update serializes the
+   * extension's whole workspace state across renderer IPC. */
+  private queueComposerDraft(sessionId: string, draft: ComposerDraft): void {
+    this.pendingComposerDrafts.set(sessionId, draft);
+    this.composerDraftTimer ??= setTimeout(() => void this.flushComposerDrafts(), 500);
+  }
+
+  private async flushComposerDrafts(): Promise<void> {
+    if (this.composerDraftTimer) clearTimeout(this.composerDraftTimer);
+    this.composerDraftTimer = undefined;
+    const writes = [...this.pendingComposerDrafts];
+    this.pendingComposerDrafts.clear();
+    for (const [sessionId, draft] of writes) await this.preferences.setComposerDraft(sessionId, draft);
+  }
+
+  /** Drafts belong to the conversation, not to the document showing it, so a
+   * hidden, reloaded or restarted Webview gets them back on its first state.
+   * Image chips are re-resolved: a stored Webview URI dies with its document. */
+  private async postComposerDrafts(): Promise<void> {
+    const view = this.view;
+    if (!view) return;
+    const drafts = Object.entries(this.preferences.composerDrafts()).map(([sessionId, draft]) => [sessionId, {
+      source: draft.source,
+      attachments: draft.attachments.flatMap((attachment) => {
+        const uri = this.application.storage.uriForReference("attachments", attachment.relativePath);
+        // A file pruned since the draft was kept takes its chip with it.
+        return uri ? [{ ...attachment, webviewUri: view.webview.asWebviewUri(uri).toString() }] : [];
+      })
+    }] as const);
+    await this.post({ type: "composerDrafts", drafts: Object.fromEntries(drafts) });
   }
 
   private async addFileUris(uris: readonly vscode.Uri[]): Promise<void> {

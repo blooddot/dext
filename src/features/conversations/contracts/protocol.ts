@@ -80,7 +80,17 @@ const conversationSchemaList = [
       piPlugins: z.array(z.string().min(1).max(256)).max(32).optional()
     }).strict()
   }),
-  z.object({ type: z.literal("harnessPresetAction"), action: z.enum(["create", "copy", "edit", "refresh"]) })
+  z.object({ type: z.literal("harnessPresetAction"), action: z.enum(["create", "copy", "edit", "refresh"]) }),
+  // The host keeps the unsent draft, so it outlives the document that typed it.
+  z.object({
+    type: z.literal("composerDraft"),
+    sessionId: z.string().min(1).max(128),
+    source: z.string(),
+    attachments: z.array(z.object({
+      relativePath: z.string().min(1).max(8192).regex(/^[^\r\n]+$/),
+      name: z.string().min(1).max(512)
+    }).strict()).max(200)
+  })
 ] as const;
 
 /** A tuple, not a widened array: spreading it into the global discriminated
@@ -112,6 +122,12 @@ export type ConversationWebviewResponse =
     hostInitiated?: true;
   }
   | { type: "planContext"; path?: string; status: PlanStatus }
+  | {
+    type: "composerDrafts";
+    /** Drafts kept for a hidden, reloaded or restarted Webview. The attachment
+     * URI is minted for the document that receives them. */
+    drafts: Record<string, { source: string; attachments: { relativePath: string; webviewUri: string; name: string }[] }>;
+  }
   | { type: "resourceContext"; sessionId: string; resource: ResourceSession; busy?: boolean }
   | {
     type: "conversations";

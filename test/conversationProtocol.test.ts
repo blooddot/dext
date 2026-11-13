@@ -11,7 +11,8 @@ describe("conversation protocol", () => {
     expect(types).toContain("selectConversation");
     expect(types).toContain("agentSelection");
     expect(types).toContain("correctPlan");
-    expect(types).toHaveLength(24);
+    expect(types).toContain("composerDraft");
+    expect(types).toHaveLength(25);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 
@@ -30,7 +31,8 @@ describe("conversation protocol", () => {
       { type: "pinConversation", sessionId: "a", pinned: true },
       { type: "agentSelection", selection },
       { type: "agentSelection", selection: { ...selection, skills: ["ponytail", "ponytail-review"] } },
-      { type: "harnessPresetAction", action: "refresh" }
+      { type: "harnessPresetAction", action: "refresh" },
+      { type: "composerDraft", sessionId: "session", source: "half a thought", attachments: [{ relativePath: ".dext-global/attachments/a.png", name: "a.png" }] }
     ];
     for (const request of accepted) expect(webviewRequestSchema.safeParse(request).success, JSON.stringify(request)).toBe(true);
     expect(webviewRequestSchema.safeParse({ type: "agentSelection", selection: { ...selection, skills: Array.from({ length: 65 }, (_, index) => `skill-${index}`) } }).success).toBe(false);
