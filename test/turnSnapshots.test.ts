@@ -85,6 +85,16 @@ describe("TurnSnapshots", () => {
     expect(await snapshots.find("s1", "t1", "src/a.ts")).toBeDefined();
   });
 
+  it("diffs against the project file until that file differs from the turn", async () => {
+    const snapshots = new TurnSnapshots(storage as never);
+    await snapshots.save("s1", "t1", ["src/a.ts"]);
+    expect(mocks.slash((await snapshots.end("s1", "t1", "src/a.ts"))!.fsPath)).toBe(workspaceFile("src", "a.ts"));
+    mocks.files.set(workspaceFile("src", "a.ts"), "one, later");
+    expect(mocks.slash((await snapshots.end("s1", "t1", "src/a.ts"))!.fsPath)).toBe(snapshot("s1", "t1", "src", "a.ts"));
+    mocks.files.delete(workspaceFile("src", "a.ts"));
+    expect(mocks.slash((await snapshots.end("s1", "t1", "src/a.ts"))!.fsPath)).toBe(snapshot("s1", "t1", "src", "a.ts"));
+  });
+
   it("keeps the newest 100 turns per conversation", async () => {
     const snapshots = new TurnSnapshots(storage as never);
     for (let index = 0; index < 101; index++) mocks.dirs.set(snapshot("s1", `t${index}`), index);

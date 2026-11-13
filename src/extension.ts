@@ -658,7 +658,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const files: { path: string; reason: string; before: vscode.Uri; after: vscode.Uri }[] = [];
         for (const change of changes) {
           const workspace = workspaceFileUri(change.path)?.uri;
-          const after = await snapshots.find(session.id, turn.id, change.path) ?? workspace;
+          const after = await snapshots.end(session.id, turn.id, change.path);
           // The turn's own starting point is the closest earlier turn that saved
           // this file; only a file no turn touched before falls back to HEAD.
           let before: vscode.Uri | undefined;

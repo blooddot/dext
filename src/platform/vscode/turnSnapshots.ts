@@ -52,6 +52,25 @@ export class TurnSnapshots {
     }
   }
 
+  /** What a turn's diff shows on its right: the project file itself when it still
+   * holds exactly the turn's last content, so VS Code's own "open file" opens the
+   * real file; once the file changed since, only the copy is that turn's content. */
+  async end(sessionId: string, turnId: string, path: string): Promise<vscode.Uri | undefined> {
+    const copy = await this.find(sessionId, turnId, path);
+    try {
+      const live = workspaceFileUri(path)?.uri;
+      if (!live) return copy;
+      if (!copy) return live;
+      const same = Buffer.compare(
+        await vscode.workspace.fs.readFile(live),
+        await vscode.workspace.fs.readFile(copy)
+      ) === 0;
+      return same ? live : copy;
+    } catch {
+      return copy;
+    }
+  }
+
   /** shortcut: pruned by turn count, not by history retention, so a deleted
    * conversation keeps its copies until newer turns push them out. */
   private async prune(sessionId: string): Promise<void> {
