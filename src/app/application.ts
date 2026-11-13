@@ -1200,7 +1200,11 @@ export class DextApplication {
     const to = skillPackRelease(imported.manifest);
     const commitFrom = shortCommit(installed.manifest.commit);
     const commitTo = shortCommit(imported.manifest.commit);
-    if (installed.manifest.commit && imported.manifest.commit === installed.manifest.commit) {
+    // A pack installed before Dext recorded hooks lacks the files those hooks
+    // read even at the same commit, so it has to reach the content comparison.
+    const recordedHooks = (manifest: SkillPackManifest): number => manifest.hooks?.length ?? 0;
+    if (installed.manifest.commit && imported.manifest.commit === installed.manifest.commit
+      && recordedHooks(installed.manifest) >= recordedHooks(imported.manifest)) {
       return { updated: false, name: installed.manifest.name, from, to };
     }
     this.validateResource("skill", imported.draft);

@@ -1,11 +1,15 @@
 /** Skill pack manifests and the human-readable import report. A pack is a
- * plain directory under `.dext/skill-packs/<id>/`; it never executes code. */
+ * plain directory under `.dext/skill-packs/<id>/`. Dext never executes a pack:
+ * hook files are copied and recorded, never run. */
 
 export const SKILL_PACKS_DIRECTORY = "skill-packs";
 export const SKILLS_DIRECTORY = "skills";
 export const SKILL_PACK_MANIFEST_FILE = "pack.json";
 export const SKILL_PACK_COMMANDS_DIRECTORY = "commands";
 export const SKILL_PACK_SOURCE_FILE = "SOURCE.md";
+/** Upstream files a declared hook needs, mirrored at their repository paths so
+ * `__dirname/..` and `CLAUDE_PLUGIN_ROOT` resolve as they do in the source. */
+export const SKILL_PACK_UPSTREAM_DIRECTORY = "upstream";
 
 export const SKILL_PACK_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 export const SKILL_PACK_ID_MAX_LENGTH = 64;
@@ -56,6 +60,22 @@ export interface SkillPackAnalysis {
   skipped: Array<{ path: string; reason: string }>;
 }
 
+/** One hook command a pack's native plugin manifest declared. Events and
+ * matchers are copied verbatim from the source host; Dext never rewrites them
+ * into another host's vocabulary. */
+export interface SkillPackHookRecord {
+  /** Native host the declaration belongs to, e.g. `claude` or `codex`. */
+  agent: string;
+  event: string;
+  matcher?: string;
+  command: string;
+  timeout?: number;
+  /** Repository path of the hook configuration file. */
+  source: string;
+  /** Repository-relative plugin root, mirrored under `upstream/`. */
+  root: string;
+}
+
 export interface SkillPackManifest {
   name: string;
   /** Manifest format, not the upstream package version. */
@@ -72,6 +92,7 @@ export interface SkillPackManifest {
   importedAt: string;
   skills: SkillPackSkillRecord[];
   commands: SkillPackCommandRecord[];
+  hooks?: SkillPackHookRecord[];
   analysis: SkillPackAnalysis;
 }
 
@@ -143,6 +164,28 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
       ...(text(command.reason) ? { reason: text(command.reason)! } : {})
     }];
   }) : [];
+  // Hook records are optional provenance: an older manifest has none, and a
+  // malformed entry must not invalidate the Skills beside it.
+  const hooks = Array.isArray(data.hooks) ? data.hooks.flatMap((item) => {
+    const hook = record(item);
+    const agent = text(hook?.agent);
+    const event = text(hook?.event);
+    const command = text(hook?.command);
+    if (!agent || !event || !command) return [];
+    const timeout = typeof hook?.timeout === "number" && Number.isFinite(hook.timeout) && hook.timeout > 0
+      ? hook.timeout
+      : undefined;
+    const matcher = text(hook?.matcher);
+    return [{
+      agent,
+      event,
+      command,
+      ...(matcher ? { matcher } : {}),
+      ...(timeout ? { timeout } : {}),
+      source: text(hook?.source) ?? "",
+      root: text(hook?.root) ?? ""
+    }];
+  }) : [];
   const analysisData = record(data.analysis);
   const mode: SkillPackAnalysisMode = analysisData?.mode === "ai" ? "ai" : "deterministic";
   const selected = strings(analysisData?.selected);
@@ -173,6 +216,7 @@ export function normalizeSkillPackManifest(value: unknown, fallbackId: string): 
     importedAt: text(data.importedAt) ?? "",
     skills,
     commands,
+    ...(hooks.length ? { hooks } : {}),
     analysis: {
       mode,
       ...(summary ? { summary } : {}),
@@ -208,6 +252,15 @@ export function formatSkillPackReport(manifest: SkillPackManifest): string {
   for (const command of manifest.commands.filter((item) => item.status === "available")) {
     lines.push(`- Command /${command.id}: ${command.source} (${command.agent ?? "shared"})`);
     for (const warning of command.warnings ?? []) lines.push(`  - ${warning}`);
+  }
+  if (manifest.hooks?.length) {
+    lines.push("", "## Hooks", "",
+      "Copied under `upstream/` and recorded verbatim; Dext never executes them.", "");
+    for (const hook of manifest.hooks) {
+      const options = [hook.matcher ? `matcher: ${hook.matcher}` : undefined, hook.timeout ? `${hook.timeout}s` : undefined]
+        .filter(Boolean).join(", ");
+      lines.push(`- ${hook.agent} ${hook.event}${options ? ` (${options})` : ""}: ${hook.command}`);
+    }
   }
   if (manifest.notes?.length) lines.push("", "## Import notes", "", ...manifest.notes.map((note) => `- ${note}`));
   if (manifest.analysis.skipped.length) {

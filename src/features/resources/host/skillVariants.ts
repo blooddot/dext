@@ -10,39 +10,82 @@ const AGENT_DIRECTORIES: Record<string, string> = {
 
 export const PLUGIN_MANIFEST = /(?:^|\/)\.(?:codex|claude)-plugin\/plugin\.json$/;
 
+export interface SkillSourcePlugin {
+  manifestPath: string;
+  /** Repository-relative plugin root; empty for the repository itself. */
+  pluginRoot: string;
+  agent: string;
+  /** Repository paths of the hook configuration files this manifest declares. */
+  hookFiles: string[];
+  /** Repository paths of the skill roots this manifest declares. */
+  skillRoots: string[];
+}
+
 export interface SkillSourceDeclarations {
   roots: Array<{ path: string; agent: string; packRoot: string }>;
+  plugins: SkillSourcePlugin[];
   notes: string[];
+}
+
+/** Resolves one manifest-declared path against the plugin root. Anything that
+ * could leave the repository is dropped rather than sanitized. */
+function declaredPath(path: string, value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const relative = value.replace(/^\.\//, "").replace(/\/$/, "");
+  if (!relative || /[\\:]/.test(relative) || relative.split("/").some((part) => !part || part === "." || part === "..")) {
+    return undefined;
+  }
+  return path === "" ? relative : `${path}/${relative}`;
 }
 
 /** Read only known manifest fields. Paths are relative to the plugin root;
  * declarations never create candidates or execute hooks. */
 export function skillSourceDeclarations(files: ReadonlyMap<string, Uint8Array>): SkillSourceDeclarations {
   const roots: SkillSourceDeclarations["roots"] = [];
+  const plugins: SkillSourcePlugin[] = [];
   const notes: string[] = [];
   for (const [path, bytes] of files) {
     if (!PLUGIN_MANIFEST.test(path)) continue;
-    notes.push(`${path}: native plugin configuration and hooks are not installed.`);
     if (bytes.byteLength > 200_000) { notes.push(`${path}: manifest is too large to inspect.`); continue; }
+    const pluginRoot = posix.dirname(posix.dirname(path));
+    const agent = path.includes(".codex-plugin/") ? "codex" : "claude";
+    let data: { skills?: unknown; hooks?: unknown };
     try {
-      const data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { skills?: unknown };
-      const values = data.skills === undefined ? ["./skills"] : Array.isArray(data.skills) ? data.skills : [data.skills];
-      const pluginRoot = posix.dirname(posix.dirname(path));
-      const agent = path.includes(".codex-plugin/") ? "codex" : "claude";
-      for (const value of values) {
-        if (typeof value !== "string") continue;
-        const relative = value.replace(/^\.\//, "").replace(/\/$/, "");
-        if (!relative || /[\\:]/.test(relative) || relative.split("/").some((part) => !part || part === "." || part === "..")) {
-          notes.push(`${path}: ignored unsafe skill path '${value}'.`);
-          continue;
-        }
-        roots.push({ path: pluginRoot === "." ? relative : `${pluginRoot}/${relative}`, agent, packRoot: pluginRoot });
-      }
+      data = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as typeof data;
     } catch {
       notes.push(`${path}: manifest is not valid JSON; only directory conventions were used.`);
+      continue;
+    }
+    const root = pluginRoot === "." ? "" : pluginRoot;
+    const skillRoots: string[] = [];
+    const values = data.skills === undefined ? ["./skills"] : Array.isArray(data.skills) ? data.skills : [data.skills];
+    for (const value of values) {
+      const declared = declaredPath(root, value);
+      if (!declared) {
+        if (typeof value === "string") notes.push(`${path}: ignored unsafe skill path '${value}'.`);
+        continue;
+      }
+      skillRoots.push(declared);
+      roots.push({ path: declared, agent, packRoot: root === "" ? "." : root });
+    }
+    const hookValues = data.hooks === undefined ? [] : Array.isArray(data.hooks) ? data.hooks : [data.hooks];
+    const hookFiles: string[] = [];
+    for (const value of hookValues) {
+      const declared = declaredPath(root, value);
+      if (!declared) {
+        if (typeof value === "string") notes.push(`${path}: ignored unsafe hook path '${value}'.`);
+        continue;
+      }
+      hookFiles.push(declared);
+    }
+    if (hookFiles.length) {
+      plugins.push({ manifestPath: path, pluginRoot: root, agent, hookFiles, skillRoots });
+      notes.push(`${path}: native plugin configuration is not installed; ${hookFiles.length} hook configuration file(s) are copied under upstream/ and never executed.`);
+    } else {
+      notes.push(`${path}: native plugin configuration and hooks are not installed.`);
     }
   }
-  return { roots, notes };
+  return { roots, plugins, notes };
 }
 
 /** Mirror directories of one pack share a logical parent. Package prefixes

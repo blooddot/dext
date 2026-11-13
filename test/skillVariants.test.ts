@@ -118,7 +118,7 @@ describe("import all Skill versions and resolve per Agent", () => {
     expect(result.manifest.skills[0]?.agent).toBe("claude");
   });
 
-  it("recognizes custom plugin roots and keeps native hooks out of the install", async () => {
+  it("recognizes custom plugin roots and mirrors a declared hook configuration under upstream/", async () => {
     const result = await install({
       ".codex-plugin/plugin.json": JSON.stringify({ skills: "./codex-prompts/", hooks: "./hooks.json" }),
       ".claude-plugin/plugin.json": JSON.stringify({ skills: ["./claude-prompts/"] }),
@@ -127,8 +127,12 @@ describe("import all Skill versions and resolve per Agent", () => {
     });
     expect(result.manifest.skills).toHaveLength(2);
     expect(normalizeSkillPackManifest(result.manifest, "pack")?.version).toBe(2);
-    expect(result.report).toContain("native plugin configuration and hooks are not installed");
-    expect(result.draft.files?.some((file) => file.path.endsWith("hooks.json"))).toBe(false);
+    // Copied for the backend to run, never installed as a Dext hook itself.
+    expect(result.report).toContain("hook configuration file(s) are copied under upstream/");
+    expect(result.draft.files?.some((file) => file.path === "skill-packs/pack/upstream/hooks.json")).toBe(true);
+    // A configuration without a `hooks` object declares nothing to run.
+    expect(result.manifest.hooks).toBeUndefined();
+    expect(result.report).toContain("hook configuration has no 'hooks' object");
   });
 
   it("records unknown sources without treating them as shared fallback", async () => {

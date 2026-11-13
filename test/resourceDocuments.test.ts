@@ -303,8 +303,46 @@ describe("resource documents", () => {
     expect(await readFile(join(project, "skills", "alpha", "SKILL.md"), "utf8")).toBe("# Alpha\n");
   });
 
-  it("refreshes release metadata without replacing a pack whose files are unchanged", async () => {
+  it("installs hooks a same-commit pack was imported without", async () => {
     Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
+    Object.assign(application, { workspaceTrusted: true });
+    const project = join(root, ".dext");
+    await mkdir(join(project, "skill-packs", "demo"), { recursive: true });
+    await mkdir(join(project, "skills", "alpha"), { recursive: true });
+    const installed = {
+      name: "demo", version: 2, source: "https://github.com/acme/demo", upstreamVersion: "1.0.0", commit: "same",
+      importedAt: "2026-10-01T00:00:00.000Z",
+      skills: [{ id: "alpha", name: "alpha", description: "Alpha", directory: "skills/alpha", agent: "shared", file: "skills/alpha/SKILL.md", commands: [], warnings: [] }],
+      commands: [], analysis: { mode: "deterministic", selected: ["skills/alpha"], excluded: [], skipped: [] }
+    };
+    await writeFile(join(project, "skill-packs", "demo", "pack.json"), JSON.stringify(installed));
+    await writeFile(join(project, "skills", "alpha", "SKILL.md"), "# Alpha\n");
+    const nextManifest = {
+      ...installed,
+      hooks: [{ agent: "claude", event: "SessionStart", command: "node activate.js", source: "hooks/hooks.json", root: "" }]
+    };
+    Object.assign(application, {
+      importSkillPack: vi.fn(async () => ({
+        draft: {
+          name: "alpha", content: "# Alpha\n", files: [
+            { path: "skill-packs/demo/upstream/hooks/hooks.json", content: "{}\n" },
+            { path: "skill-packs/demo/pack.json", content: `${JSON.stringify(nextManifest, null, 2)}\n` },
+            { path: "skill-packs/demo/SOURCE.md", content: "# Demo\n" }
+          ]
+        },
+        report: "# Demo", manifest: nextManifest, primarySkillId: "alpha"
+      }))
+    });
+    const confirm = vi.fn(async () => true);
+    const trash = vi.fn(async (path: string) => rm(path, { recursive: true, force: true }));
+    const result = await application.upgradeSkillPack("demo", "project", { confirm, dirtyPaths: () => [], trash });
+    // The commit is unchanged, but the pack gained the files its hooks read.
+    expect(result).toMatchObject({ updated: true });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(await readFile(join(project, "skill-packs", "demo", "upstream", "hooks", "hooks.json"), "utf8")).toBe("{}\n");
+  });
+
+  it("refreshes release metadata without replacing a pack whose files are unchanged", async () => {    Object.assign(vscode.workspace, { workspaceFolders: [{ uri: vscode.Uri.file(root) }] });
     Object.assign(application, { workspaceTrusted: true });
     const project = join(root, ".dext");
     await mkdir(join(project, "skill-packs", "demo"), { recursive: true });

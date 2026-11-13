@@ -146,4 +146,22 @@ describe("skill pack content comparison", () => {
     expect(diff.added).toEqual(["skills/gamma/SKILL.md"]);
     expect(diff.removed).toEqual(["skills/alpha/extra.md", "skills/beta/SKILL.md"]);
   });
+
+  it("treats a changed upstream hook file as a pack update", () => {
+    const installed = new Map([
+      ["skills/alpha/SKILL.md", encoder.encode("# Alpha\n")],
+      ["skill-packs/demo/upstream/hooks/activate.js", encoder.encode("version 1\n")]
+    ]);
+    const diff = compareSkillPackContent({
+      packId: "demo",
+      planFiles: [
+        { path: "skills/alpha/SKILL.md", content: "# Alpha\n" },
+        { path: "skill-packs/demo/upstream/hooks/activate.js", content: "version 2\n" }
+      ],
+      installed
+    });
+    // A release that only changes hooks is still a content update.
+    expect(diff.identical).toBe(false);
+    expect(diff.changed).toEqual(["skill-packs/demo/upstream/hooks/activate.js"]);
+  });
 });

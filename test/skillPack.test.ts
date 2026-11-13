@@ -58,4 +58,21 @@ describe("skill pack manifest", () => {
     expect(report).toContain("examples/demo: example directory");
     expect(report).toContain("Commands: ponytail-review (available)");
   });
+
+  it("keeps hook records and lists them with their verbatim command", () => {
+    const normalized = normalizeSkillPackManifest({
+      ...manifest,
+      hooks: [
+        { agent: "claude", event: "SessionStart", matcher: "startup", command: "node activate.js", timeout: 15, source: "hooks/hooks.json", root: "" },
+        { agent: "claude", event: "UserPromptSubmit", command: "node tracker.js", source: "hooks/hooks.json", root: "" },
+        { agent: "claude", event: "Stop" }
+      ]
+    }, "fallback");
+    expect(normalized?.hooks).toHaveLength(2);
+    const report = formatSkillPackReport(normalized!);
+    expect(report).toContain("## Hooks");
+    expect(report).toContain("- claude SessionStart (matcher: startup, 15s): node activate.js");
+    // A manifest without the field stays valid; an older Dext ignores it.
+    expect(normalizeSkillPackManifest(manifest, "fallback")?.hooks).toBeUndefined();
+  });
 });

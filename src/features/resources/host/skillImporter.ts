@@ -8,6 +8,7 @@ import {
   SKILL_PACK_COMMANDS_DIRECTORY,
   SKILL_PACK_MANIFEST_FILE,
   SKILL_PACK_SOURCE_FILE,
+  SKILL_PACK_UPSTREAM_DIRECTORY,
   SKILLS_DIRECTORY,
   SKILL_PACKS_DIRECTORY,
   formatSkillPackReport,
@@ -25,6 +26,7 @@ import {
 import type { FetchedArchive } from "./githubArchive.js";
 import { fetchGithubSkillSnapshot } from "./githubSkillSnapshot.js";
 import { PLUGIN_MANIFEST, collectSkillVariants, fileHash, logicalSkillDirectory, skillSourceDeclarations, sourceAgent } from "./skillVariants.js";
+import { hookUpstreamPaths, readSkillPackHooks } from "./skillHooks.js";
 
 export const SKILL_PACK_MAX_FILES = 500;
 export const SKILL_PACK_MAX_BYTES = 50 * 1024 * 1024;
@@ -289,6 +291,25 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
   }
   const upstreamVersion = repositoryVersion(files);
   const declarations = skillSourceDeclarations(allFiles);
+  // A hook configuration is fetched only after a plugin manifest names it, and
+  // the files a hook reads are mirrored so `__dirname/..` and the plugin root
+  // resolve exactly as they do upstream. Nothing is executed here.
+  const present = new Set(paths);
+  const upstreamPaths = hookUpstreamPaths(declarations.plugins, present);
+  let upstreamError: string | undefined;
+  if (upstreamPaths.length) {
+    try {
+      await loadFiles(upstreamPaths);
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      // The download budget refused the hook files: the pack still installs,
+      // its hooks do not, and the report says why rather than going quiet.
+      upstreamError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const hookDeclarations = upstreamError
+    ? { hooks: [], notes: [] }
+    : readSkillPackHooks({ plugins: declarations.plugins, files, present });
   if ((source.kind === "blob" || source.kind === "raw")
     && !files.has(`${source.path ? `${source.path}/` : ""}SKILL.md`)) {
     throw new Error(`The linked SKILL.md was not found in the downloaded archive: ${source.skillFile ?? source.path}.`);
@@ -425,6 +446,26 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     });
   }
 
+  // A declared hook is only useful with the files it reads, mirrored at their
+  // repository paths under `upstream/`.
+  const upstreamRoot = `${SKILL_PACKS_DIRECTORY}/${packId}/${SKILL_PACK_UPSTREAM_DIRECTORY}`;
+  const upstreamNotes: string[] = [];
+  const upstreamFiles: Array<{ path: string; content: string }> = [];
+  for (const path of upstreamPaths) {
+    const bytes = files.get(path);
+    if (!bytes) continue;
+    const content = decodeText(bytes);
+    if (content === undefined) {
+      upstreamNotes.push(`Skipped non-UTF-8 hook supporting file '${path}'.`);
+      continue;
+    }
+    if (bytes.byteLength > SKILL_SUPPORT_FILE_MAX_BYTES) {
+      upstreamNotes.push(`Skipped hook supporting file '${path}' larger than ${SKILL_SUPPORT_FILE_MAX_BYTES} bytes.`);
+      continue;
+    }
+    upstreamFiles.push({ path: `${upstreamRoot}/${path}`, content });
+  }
+
   // Commands are copied only when their syntax is a plain prompt template and
   // they map to a selected skill. Everything else is reported, never written.
   const commands: SkillPackCommandRecord[] = [];
@@ -503,7 +544,8 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
 
   const licenses = [...allFiles.keys()].filter((path) => !path.includes("/") && LICENSE_NAME.test(path)).sort();
   const licenseBytes = licenses[0] ? allFiles.get(licenses[0]) : undefined;
-  const notes = [...declarations.notes];
+  const notes = [...declarations.notes, ...hookDeclarations.notes, ...upstreamNotes];
+  if (upstreamError) notes.push(`Hooks were not installed: ${upstreamError}`);
   if (!source.ref && !archive.releaseTag) {
     notes.push("No published GitHub release was found; the default branch was imported.");
   }
@@ -519,6 +561,7 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     importedAt: new Date().toISOString(),
     skills: records,
     commands,
+    ...(hookDeclarations.hooks.length ? { hooks: hookDeclarations.hooks } : {}),
     analysis: {
       mode: analysisMode,
       ...(summary ? { summary } : {}),
@@ -545,6 +588,7 @@ export async function importSkillPack(input: string, options: ImportSkillPackOpt
     })),
     ...(licenseBytes ? [{ path: `${SKILL_PACKS_DIRECTORY}/${packId}/LICENSE`, content: decodeText(licenseBytes) ?? "" }] : []),
     ...[...commandFiles].map(([path, bytes]) => ({ path, content: decodeText(bytes)! })),
+    ...upstreamFiles,
     { path: manifestPath, content: `${JSON.stringify(manifest, null, 2)}\n` },
     { path: sourcePath, content: `${report}\n` }
   ];
