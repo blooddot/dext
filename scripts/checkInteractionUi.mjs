@@ -404,7 +404,24 @@ try {
   assert.equal(chipAnswer.includes("@src/review.ts#L5,1-L6,2"), true, "a pasted code reference reaches the answer");
   assert.equal(chipAnswer.includes("AgentProfile"), true, "Ctrl+Shift+V keeps the copied text instead of turning it into a reference");
   await evaluate(`chipDialog.element.remove()`);
-  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, fullscreen/restore toggle in inline/dialog forms, dropped files and pasted images in a form field, reference chips and Ctrl+Shift+V literal paste in single- and multiline answers, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
+  // A composed plain-text answer must not paint Monaco's clipped 1px IME textarea
+  // across the line: only a reference draft needs that workaround, prose does not.
+  await evaluate(`window.plainForm=new InteractionUI.InteractionForm(InteractionUI.parseUiForm({title:'Plain',fields:[{id:'note',type:'input',label:'补充说明',multiline:true}]}),()=>{},{},()=>{},{...chipFiles,referenceField:(options)=>new ReferenceUI.ReferenceField(chipFiles,clipboardStub,options)});
+    document.body.append(plainForm.element);window.plainEditor=plainForm.element.querySelector('.interaction-reference-field');`);
+  await evaluate("new Promise((done)=>requestAnimationFrame(()=>requestAnimationFrame(done)))");
+  await evaluate(`plainEditor.querySelector('textarea').focus()`);
+  await send("Input.insertText", { text: "只想小改一点" });
+  await send("Input.imeSetComposition", { text: "hou", selectionStart: 3, selectionEnd: 3 });
+  await evaluate("new Promise((done)=>requestAnimationFrame(()=>requestAnimationFrame(done)))");
+  const ime = JSON.parse(await evaluate(`{const ta=plainEditor.querySelector('textarea.ime-input'),cursor=plainEditor.querySelector('.cursors-layer > .cursor');
+    JSON.stringify({focused:document.activeElement===ta,opacity:getComputedStyle(ta).opacity,cursor:getComputedStyle(cursor).visibility,visibleText:plainEditor.querySelector('.view-lines').textContent})}`));
+  assert.equal(ime.focused, true, "native IME keeps focus on a form answer");
+  assert.equal(ime.opacity, "0", "the clipped IME textarea never paints a stripe across the answer");
+  assert.equal(ime.cursor, "visible", "the answer keeps its caret while composing");
+  assert.ok(ime.visibleText.includes("hou"), "composition text stays visible in the editor");
+  await send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 });
+  await evaluate(`new Promise((done)=>requestAnimationFrame(()=>requestAnimationFrame(done))).then(()=>plainForm.element.remove())`);
+  console.log("PASS: shared fields, dropdown keyboard and bounds, radio/checkbox keyboard, forms, action requirements in inline/dialog forms, fullscreen/restore toggle in inline/dialog forms, dropped files and pasted images in a form field, IME composition in a form answer, reference chips and Ctrl+Shift+V literal paste in single- and multiline answers, Markdown reports and HTTPS images under CSP, Mermaid flowcharts/classes and error recovery under CSP, duplicate submission, draft reconstruction, modal Escape/focus, native answers/secrets, 320px dark/light/contrast, MCP dialog. Screenshots: .tmp-tb/interaction-ui");
 } finally {
   try { await shutdown?.(); } catch {}
   socket?.close(); browser.kill();
