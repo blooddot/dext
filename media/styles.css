@@ -239,6 +239,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
 .agent-todo-group > details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 .agent-todo-group > details > .agent-todo-list { padding-inline-start: 24px; }
 
+/* Same shape as the workbench's connected tab strip: the whole bar is one band of
+   `editorGroupHeader.connectedTabsBackground`, idle tabs are only their labels,
+   and the open conversation is the one white chip with two rounded top corners. */
 .conversation-tab {
   position: relative;
   user-select: none;
@@ -246,31 +249,72 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   flex: 0 0 auto;
   max-width: 190px;
   min-width: 0;
-  height: 32px;
+  height: 100%;
   padding: 0 4px 0 10px;
   display: flex;
   align-items: center;
   gap: 2px;
-  border-right: 1px solid var(--vscode-tab-border, var(--vscode-widget-border));
+  /* A transparent border keeps every label on one baseline once the active chip
+     adds its outline; the chip has no bottom border, so it opens into the page. */
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
   color: var(--vscode-tab-inactiveForeground, var(--vscode-descriptionForeground));
-  background: var(--vscode-tab-inactiveBackground, transparent);
+  background: transparent;
+  font-size: 13px;
 }
 
+/* Three states, like the workbench: the band itself, a hover tint and the open
+   chip. Hover is 6% of the foreground mixed into the band, not
+   `tab.hoverBackground` — Light Modern leaves that near white, which turned a
+   merely hovered tab into a second open chip. Only palette variables belong
+   here: `modernEditorTab.hoverForeground` is injected by the host as the
+   workbench's own foreground, so a Light Dext inside a Dark workbench drew
+   near-invisible #d4d4d4 labels on the light band. */
 .conversation-tab:hover {
-  background: var(--vscode-tab-hoverBackground, var(--vscode-list-hoverBackground));
+  background: color-mix(in srgb, var(--vscode-foreground) 6%, var(--dext-tab-band, var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background))));
+  color: var(--vscode-foreground);
 }
 
 .conversation-tab.active {
+  --dext-tab-chip: var(--vscode-tab-activeBackground, var(--vscode-editor-background));
+  border-color: var(--vscode-tab-border, var(--vscode-widget-border));
   color: var(--vscode-tab-activeForeground, var(--vscode-foreground));
-  background: var(--vscode-tab-activeBackground, var(--vscode-editor-background));
-  box-shadow: inset 0 1px 0 0 var(--vscode-tab-activeBorderTop, var(--vscode-focusBorder));
+  background: var(--dext-tab-chip);
 }
 
-/* Editor tabs draw the hairline only between two inactive tabs, so the active
-   tab joins its neighbours instead of sitting in a box. */
-.conversation-tab.active,
-.conversation-tab:has(+ .conversation-tab.active) {
-  border-right-color: transparent;
+/* The workbench flares the connected tab into the strip's bottom edge with an
+   inverse shoulder; without it the chip ends in two square corners and reads as
+   pasted on. The arc is tangent to the chip's edge and to the band's bottom
+   edge, which is what makes it a flare instead of a step; its radius matches
+   the chip's own corner radius, and it is one chip-sized square whose far
+   quarter is the band left above the arc. The drag drop markers reuse these
+   pseudo elements and are declared later, so they take over while a tab is
+   being dragged. */
+.conversation-tab.active::before,
+.conversation-tab.active::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background-repeat: no-repeat;
+  background-position: bottom;
+  background-size: 6px 6px;
+  pointer-events: none;
+}
+
+/* `:where` keeps both shoulders at the lowest specificity so the drag drop
+   markers below replace them, and the first tab skips its left one: a strip has
+   no left edge to flare into, which is also what the workbench does. */
+:where(.conversation-tab.active:not(:first-child))::before {
+  left: -6px;
+  background-image: radial-gradient(circle at 0 0, transparent 6px, var(--dext-tab-chip) 0);
+}
+
+:where(.conversation-tab.active)::after {
+  right: -6px;
+  background-image: radial-gradient(circle at 100% 0, transparent 6px, var(--dext-tab-chip) 0);
 }
 
 .conversation-tab-label {

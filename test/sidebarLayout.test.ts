@@ -473,6 +473,19 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/^\.app-shell \{[\s\S]*?flex-direction: column;/m);
     expect(css).toMatch(/^main \{\r?\n {2}flex: 1 1 auto;/m);
     expect(css).toMatch(/\.conversation-tab \{[\s\S]*?max-width: 190px;[\s\S]*?\}/);
+    // Hover is a tint mixed into the strip, not `tab.hoverBackground`: that token
+    // is near white in Light Modern and made a hovered tab look open. Its label
+    // colour must come from the palette too, never from a host-injected token.
+    const hover = /\.conversation-tab:hover \{([\s\S]*?)\}/.exec(css)?.[1] ?? "";
+    expect(hover).toContain("color-mix(in srgb, var(--vscode-foreground) 6%, var(--dext-tab-band");
+    expect(hover).not.toContain("tab-hoverBackground");
+    expect(hover).toContain("color: var(--vscode-foreground);");
+    // The active chip flares into the strip's bottom edge through shoulders that
+    // share the drag markers' pseudo elements, so the markers must stay declared
+    // after them to replace the flare while a tab is dragged.
+    const shoulder = css.indexOf("--dext-tab-chip");
+    expect(shoulder).toBeGreaterThan(-1);
+    expect(css.indexOf(".conversation-tab.drop-before::before,")).toBeGreaterThan(shoulder);
     const tabs = await source("src/features/conversations/browser/conversationTabs.ts");
     expect(main).toMatch(/function renderConversations[\s\S]*?renderConversationTabs\(\{/);
     expect(tabs).toMatch(/conversation-tab-label[\s\S]*?conversation-tab-close/);
