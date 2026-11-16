@@ -95,7 +95,7 @@ export function renderMarkdownDiagrams(root: HTMLElement): void {
 /**
  * Re-renders diagrams that are already on screen after the Dext appearance
  * changes. Mermaid inlines its palette into the SVG, so a CSS swap alone would
- * leave a dark diagram on Paper (or the reverse). The source remains inside the
+ * leave a dark diagram on Light (or the reverse). The source remains inside the
  * saved “Mermaid source” disclosure.
  */
 export function rerenderMarkdownDiagrams(root: HTMLElement): void {

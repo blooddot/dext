@@ -30,7 +30,6 @@ import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs
 import { DextSidebarProvider } from "./app/sidebarProvider.js";
 import { DextAppearanceController } from "./platform/vscode/appearance.js";
 import { parseDextAppearanceRequest } from "./platform/webviewProtocol.js";
-import type { DextAppearance } from "./shared/contracts/appearance.js";
 import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./features/conversations/presentation/turnPresentation.js";
 import type { SelectionTarget } from "./platform/vscode/attachments.js";
 import { DextSelectionActions } from "./platform/vscode/selectionActions.js";
@@ -830,19 +829,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           void vscode.window.showInformationMessage("Dext follows VS Code while a high-contrast theme is active.");
           return;
         }
-        const options: Array<vscode.QuickPickItem & { appearance: DextAppearance }> = [
-          { label: "Auto", description: "Follow VS Code", appearance: "auto" },
-          { label: "Paper", description: "Warm light", appearance: "paper" },
-          { label: "Dim", description: "Warm dark", appearance: "dim" }
-        ];
-        for (const option of options) {
-          if (option.appearance === appearance.current) option.description = `Current · ${option.description}`;
-        }
-        const choice = await vscode.window.showQuickPick(options, {
-          title: "Dext Theme",
-          placeHolder: "Choose how Dext pages and the reading area look"
-        });
-        if (choice) await appearance.set(choice.appearance);
+        // One click, one palette: the first click after `auto` flips whatever the
+        // workbench is already showing.
+        const light = appearance.current === "light"
+          || (appearance.current === "auto" && kind === vscode.ColorThemeKind.Light);
+        await appearance.set(light ? "dark" : "light");
       })
     ),
     vscode.commands.registerCommand("dext.openWorkspaceTrust", openWorkspaceTrust),

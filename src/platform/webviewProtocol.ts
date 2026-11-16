@@ -16,7 +16,7 @@ import { isDextAppearance, type DextAppearance } from "../shared/contracts/appea
  * it uses this one shape and every surface receives the matching response. */
 export const setDextAppearanceRequestSchema = z.object({
   type: z.literal("setDextAppearance"),
-  theme: z.enum(["auto", "paper", "dim"])
+  theme: z.enum(["auto", "light", "dark"])
 });
 
 export function parseDextAppearanceRequest(value: unknown): DextAppearance | undefined {

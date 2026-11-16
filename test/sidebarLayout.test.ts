@@ -405,7 +405,7 @@ describe("sidebar panel layout", () => {
     const layout = await source("media/styles.css");
     // The choice belongs to the extension host, not one webview's document:
     // globalState persists it and the controller broadcasts to every surface.
-    expect(contracts).toContain('export const DEXT_APPEARANCES = ["auto", "paper", "dim"] as const;');
+    expect(contracts).toContain('export const DEXT_APPEARANCES = ["auto", "light", "dark"] as const;');
     expect(controller).toContain("this.state.update(DEXT_APPEARANCE_KEY, theme);");
     expect(controller).toContain("for (const listener of [...this.listeners]) listener(theme);");
     // The only control is the native view-title action, so it cannot compress
@@ -414,9 +414,9 @@ describe("sidebar panel layout", () => {
     expect(manifest).toContain('"icon": "$(color-mode)"');
     expect(manifest).toMatch(/"view\/title": \[[\s\S]*?"command": "dext\.chooseAppearance",\s*"when": "view == dext\.sidebar",\s*"group": "navigation@4"/);
     expect(extension).toContain('vscode.commands.registerCommand("dext.chooseAppearance"');
-    expect(extension).toContain('title: "Dext Theme"');
-    expect(extension).toContain('appearance: "paper"');
-    expect(extension).toContain('appearance: "dim"');
+    // The action is the toggle: the old three-item picker is gone.
+    expect(extension).not.toContain('title: "Dext Theme"');
+    expect(extension).toContain('await appearance.set(light ? "dark" : "light");');
     // The tab bar stays, but no webview draws a theme menu or toggle.
     expect(sidebar).toContain('<div class="dext-topbar">');
     expect(sidebar).not.toContain("data-dext-appearance");
@@ -425,13 +425,13 @@ describe("sidebar panel layout", () => {
     expect(webview).not.toContain("setDextAppearance");
     expect(webview).toContain('document.body.dataset.dextTheme = effective;');
     expect(webview).toContain('message?.type !== "dextAppearance"');
-    // Paper and Dim replace the variables the existing CSS already reads, and
+    // Light and Dark replace the variables the existing CSS already reads, and
     // the guards keep a real VS Code high-contrast theme in charge.
-    expect(css).toContain('body[data-dext-theme="paper"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
-    expect(css).toContain('body[data-dext-theme="dim"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
+    expect(css).toContain('body[data-dext-theme="light"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
+    expect(css).toContain('body[data-dext-theme="dark"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {');
     expect(css).not.toContain(".dext-appearance-menu");
-    expect(css).toContain("--vscode-sideBar-background: #f7f2e8;");
-    expect(css).toContain("--vscode-sideBar-background: #211e1a;");
+    expect(css).toContain("--vscode-sideBar-background: #f8f8f8;");
+    expect(css).toContain("--vscode-sideBar-background: #181818;");
     // The old reading-only prototype is gone, including its narrow measure.
     expect(layout).not.toContain("--dext-reading-measure");
     expect(layout).not.toContain(".reading-mode-button");

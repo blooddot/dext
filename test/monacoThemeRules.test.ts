@@ -47,7 +47,7 @@ describe("the active theme as Monaco token rules", () => {
     expect(mixDefaultForeground("var(--vscode-foreground)", "#000000", 0.92)).toBeUndefined();
   });
 
-  it("takes Paper and Dim code colors from the palette, not the workbench theme", () => {
+  it("takes Light and Dark code colors from the palette, not the workbench theme", () => {
     const palette: Record<string, string> = {
       "--resource-syntax-keyword": "#9700bd",
       "--vscode-editor-foreground": "#322d26"

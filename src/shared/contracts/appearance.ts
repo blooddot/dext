@@ -1,7 +1,8 @@
-/** The three appearance states every Dext surface shares. `auto` follows the
- * workbench theme, including its high-contrast variants; `paper` and `dim` are
- * self-contained palettes so a reading surface never depends on the editor theme. */
-export const DEXT_APPEARANCES = ["auto", "paper", "dim"] as const;
+/** The appearance states every Dext surface shares. The view-title action toggles
+ * `light` and `dark`, two self-contained palettes keyed to VS Code's default
+ * themes; `auto` is only the starting point and the high-contrast fallback, and
+ * follows the workbench theme. */
+export const DEXT_APPEARANCES = ["auto", "light", "dark"] as const;
 
 export type DextAppearance = (typeof DEXT_APPEARANCES)[number];
 
@@ -9,5 +10,5 @@ export type DextAppearance = (typeof DEXT_APPEARANCES)[number];
 export const DEXT_APPEARANCE_KEY = "dext.appearance";
 
 export function isDextAppearance(value: unknown): value is DextAppearance {
-  return value === "auto" || value === "paper" || value === "dim";
+  return value === "auto" || value === "light" || value === "dark";
 }

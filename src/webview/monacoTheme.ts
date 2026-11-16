@@ -15,11 +15,11 @@ export function applyMonacoTheme(theme: EditorTokenTheme | undefined = appliedTh
   const appearance = document.body.dataset.dextTheme;
   const contrast = document.body.className.includes("high-contrast");
   const workbenchLight = document.body.classList.contains("vscode-light") || document.body.classList.contains("vscode-high-contrast-light");
-  // Paper and Dim are self-contained palettes, so Monaco cannot infer its base
+  // Light and Dark are self-contained palettes, so Monaco cannot infer its base
   // from the workbench classes alone. High contrast still wins over both.
-  const light = appearance === "paper" ? true : appearance === "dim" ? false : workbenchLight;
-  // Paper and Dim paint their own syntax palette; Auto keeps the workbench theme.
-  const palette = appearance === "paper" || appearance === "dim";
+  const light = appearance === "light" ? true : appearance === "dark" ? false : workbenchLight;
+  // Light and Dark paint their own syntax palette; Auto keeps the workbench theme.
+  const palette = appearance === "light" || appearance === "dark";
   const colors: Record<string, string> = {};
   for (const name of MONACO_COLOR_IDS) {
     const value = css.getPropertyValue(`--vscode-${name.replaceAll(".", "-")}`).trim();

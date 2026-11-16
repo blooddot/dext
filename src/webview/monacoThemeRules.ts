@@ -64,7 +64,7 @@ export function monacoColor(value: string): string | undefined {
   return /^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex) ? hex : undefined;
 }
 
-/** Monaco token type → the palette variable that paints it in Paper and Dim. */
+/** Monaco token type → the palette variable that paints it in Light and Dark. */
 const PALETTE: readonly (readonly [EditorTokenName, string])[] = [
   ["keyword", "--resource-syntax-keyword"],
   ["string", "--resource-syntax-string"],
@@ -83,8 +83,8 @@ const PALETTE: readonly (readonly [EditorTokenName, string])[] = [
 ];
 
 /**
- * Paper and Dim are self-contained palettes, so the workbench's own token colors are
- * tuned for a background they are no longer painting: they read pastel on cream. These
+ * Light and Dark are self-contained palettes, so the workbench's own token colors are
+ * tuned for a background they are no longer painting. These
  * palettes already carry their own syntax colors for the resource pages, so code uses
  * them too, and only the font styles (italic comments) come from the workbench theme.
  */
@@ -114,7 +114,7 @@ export function paletteTokenTheme(
  * `.monaco-editor` and `.monaco-component` themselves, and a variable declared on an
  * element wins over whatever the palette sets on the body. So an id Monaco reads but
  * this list leaves out is painted with Monaco's own base `vs` colors — white text on
- * the focused suggest row — no matter what Paper says.
+ * the focused suggest row — no matter what Light says.
  *
  * Only the ids a color cannot be derived from are listed. Monaco's registry derives
  * most widget colors from a handful of roots (`editorWidget.background` paints the

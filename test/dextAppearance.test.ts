@@ -25,14 +25,14 @@ describe("Dext appearance", () => {
 
     const listener = vi.fn();
     controller.onDidChange(listener);
-    await controller.set("paper");
+    await controller.set("light");
 
-    expect(state.values.get(DEXT_APPEARANCE_KEY)).toBe("paper");
-    expect(controller.current).toBe("paper");
-    expect(listener).toHaveBeenCalledWith("paper");
+    expect(state.values.get(DEXT_APPEARANCE_KEY)).toBe("light");
+    expect(controller.current).toBe("light");
+    expect(listener).toHaveBeenCalledWith("light");
 
     // A reloaded extension keeps the stored choice.
-    expect(new DextAppearanceController(state).current).toBe("paper");
+    expect(new DextAppearanceController(state).current).toBe("light");
   });
 
   it("ignores unknown values and does not rebroadcast an unchanged choice", async () => {
@@ -43,21 +43,21 @@ describe("Dext appearance", () => {
 
     const listener = vi.fn();
     controller.onDidChange(listener);
-    await controller.set("dim");
-    await controller.set("dim");
+    await controller.set("dark");
+    await controller.set("dark");
     await controller.set("neon" as never);
 
-    expect(controller.current).toBe("dim");
+    expect(controller.current).toBe("dark");
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(state.updates).toEqual(["dim"]);
+    expect(state.updates).toEqual(["dark"]);
   });
 
   it("only accepts a well-formed appearance request from a webview", () => {
-    expect(parseDextAppearanceRequest({ type: "setDextAppearance", theme: "paper" })).toBe("paper");
+    expect(parseDextAppearanceRequest({ type: "setDextAppearance", theme: "light" })).toBe("light");
     expect(parseDextAppearanceRequest({ type: "setDextAppearance", theme: "auto" })).toBe("auto");
-    expect(parseDextAppearanceRequest({ type: "setDextAppearance", theme: "dim" })).toBe("dim");
+    expect(parseDextAppearanceRequest({ type: "setDextAppearance", theme: "dark" })).toBe("dark");
     expect(parseDextAppearanceRequest({ type: "setDextAppearance", theme: "neon" })).toBeUndefined();
-    expect(parseDextAppearanceRequest({ type: "other", theme: "paper" })).toBeUndefined();
+    expect(parseDextAppearanceRequest({ type: "other", theme: "light" })).toBeUndefined();
     expect(parseDextAppearanceRequest(undefined)).toBeUndefined();
   });
 
@@ -65,12 +65,12 @@ describe("Dext appearance", () => {
     const html = renderEditorTabHtml("<div data-project-page></div>", "https://webview.test/editorTabs.css", "https://webview.test", {
       scriptUri: "https://webview.test/project.js",
       appearance: {
-        theme: "dim",
+        theme: "dark",
         stylesheetUri: "https://webview.test/appearance.css",
         scriptUri: "https://webview.test/appearance.js"
       }
     });
-    expect(html).toContain('<body class="editor-tab" data-dext-theme="dim">');
+    expect(html).toContain('<body class="editor-tab" data-dext-theme="dark">');
     // The theme is chosen from the sidebar's view title; editor pages only sync.
     expect(html).not.toContain("dext-topbar");
     expect(html).not.toContain("data-dext-appearance");
@@ -111,11 +111,11 @@ describe("Dext appearance", () => {
     manager.open({ key: "dext.editor:history", kind: "history", viewType: "dext.history", title: "History" });
     manager.open({ key: "dext.editor:globalResources", kind: "globalResources", viewType: "dext.globalResources", title: "Resources" });
 
-    manager.postAll({ type: "dextAppearance", theme: "paper" });
+    manager.postAll({ type: "dextAppearance", theme: "light" });
 
     expect(panels.map((panel) => panel.posted)).toEqual([
-      [{ type: "dextAppearance", theme: "paper" }],
-      [{ type: "dextAppearance", theme: "paper" }]
+      [{ type: "dextAppearance", theme: "light" }],
+      [{ type: "dextAppearance", theme: "light" }]
     ]);
   });
 });

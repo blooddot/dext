@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { MONACO_COLOR_IDS } from "../src/webview/monacoThemeRules.js";
 
 /**
- * Paper and Dim are self-contained palettes, but Monaco 0.56 paints its widgets from
+ * Light and Dark are self-contained palettes, but Monaco 0.56 paints its widgets from
  * `--vscode-*` CSS variables: every id the palette leaves out is painted with the
- * user's own workbench theme instead, which is how cream rows kept ending up with the
+ * user's own workbench theme instead, which is how palette rows kept ending up with the
  * dark theme's white text. Guard both blocks so the next gap fails here instead of in
  * a screenshot.
  */
@@ -52,7 +52,7 @@ const MONACO_DEFAULT = /^(symbolIcon-|scrollbar|editorSuggestWidget|editorHoverW
 
 const css = readFileSync("media/appearance.css", "utf8");
 
-function palette(theme: "paper" | "dim"): Set<string> {
+function palette(theme: "light" | "dark"): Set<string> {
   const selector = `body[data-dext-theme="${theme}"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) {`;
   const start = css.indexOf(selector);
   expect(start, `${theme} block`).toBeGreaterThan(-1);
@@ -77,17 +77,17 @@ function paintedIds(): Set<string> {
   return painted;
 }
 
-describe("Paper and Dim palettes", () => {
-  const paper = palette("paper");
-  const dim = palette("dim");
+describe("Light and Dark palettes", () => {
+  const light = palette("light");
+  const dark = palette("dark");
 
   it("define the same variables, so neither drifts into the workbench theme alone", () => {
-    expect([...paper].sort()).toEqual([...dim].sort());
+    expect([...light].sort()).toEqual([...dark].sort());
   });
 
   it("colour every Monaco surface the editor actually paints", () => {
     const missing = [...paintedIds()]
-      .filter((id) => !UNPAINTED.has(id) && !NOT_A_COLOUR.test(id) && !MONACO_DEFAULT.test(id) && !paper.has(`--vscode-${id}`))
+      .filter((id) => !UNPAINTED.has(id) && !NOT_A_COLOUR.test(id) && !MONACO_DEFAULT.test(id) && !light.has(`--vscode-${id}`))
       .sort();
     expect(missing).toEqual([]);
   });
@@ -95,17 +95,17 @@ describe("Paper and Dim palettes", () => {
   it("hands those colours to Monaco as theme colors, not only as body variables", () => {
     // Monaco re-declares each registered color on `.monaco-editor`, which shadows the
     // palette's body scope: a palette entry missing from MONACO_COLOR_IDS is painted
-    // with Monaco's base theme (white focused suggest rows) instead of Paper.
+    // with Monaco's base theme (white focused suggest rows) instead of Light.
     const routed = new Set(MONACO_COLOR_IDS.map((id) => id.replaceAll(".", "-")));
     const missing = [...paintedIds()]
-      .filter((id) => !UNPAINTED.has(id) && !NOT_A_COLOUR.test(id) && paper.has(`--vscode-${id}`) && !routed.has(id))
+      .filter((id) => !UNPAINTED.has(id) && !NOT_A_COLOUR.test(id) && light.has(`--vscode-${id}`) && !routed.has(id))
       .sort();
     expect(missing).toEqual([]);
   });
 
   it("colour every id Monaco copies from the variables into its own theme", () => {
     const missing = MONACO_COLOR_IDS
-      .filter((id) => !paper.has(`--vscode-${id.replaceAll(".", "-")}`))
+      .filter((id) => !light.has(`--vscode-${id.replaceAll(".", "-")}`))
       .sort();
     expect(missing).toEqual([]);
   });
