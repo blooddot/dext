@@ -38,6 +38,7 @@ type SelectionTarget
 } from "../platform/vscode/attachments.js";
 import { clipboardFileReferences, copyFilePathKeepingFiles, copyFilePathKeepingLine } from "../platform/vscode/clipboardFiles.js";
 import { openDextFileReference, openExternalLink } from "../platform/vscode/contextHost.js";
+import { appearanceColorStyle } from "../platform/vscode/appearanceColors.js";
 import { changedWorkspaceFiles, dirtyBaseline, type DirtyBaseline } from "../platform/vscode/gitChanges.js";
 import { TurnSnapshots } from "../platform/vscode/turnSnapshots.js";
 import { dextBuiltinNames } from "../features/workflow/domain/dextTypesStatus.js";
@@ -424,7 +425,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       appearance: {
         theme: this.appearance?.current ?? "auto",
         stylesheetUri: asset("media", "appearance.css").toString(),
-        scriptUri: asset("dist", "webview", "appearance.js").toString()
+        scriptUri: asset("dist", "webview", "appearance.js").toString(),
+        colorStyle: appearanceColorStyle()
       },
       // Mermaid's SVG needs inline styles, so the script only loads with a flow.
       ...(body.includes("data-api-flow") ? { scriptUri: asset("dist", "webview", "apiFlow.js").toString() } : {})
@@ -1524,6 +1526,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${asset("dist", "markdown", "github-markdown.css").toString()}">
   <link rel="stylesheet" href="${style.toString()}">
   <link rel="stylesheet" href="${appearanceStyle.toString()}">
+  <style>${appearanceColorStyle()}</style>
   <title>Dext</title>
 </head>
 <body data-dext-theme="${theme}">

@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("vscode", () => ({
   ViewColumn: { Active: -1 },
+  workspace: { getConfiguration: () => ({ get: () => undefined }) },
   Uri: { joinPath: (_: unknown, ...parts: string[]) => ({ toString: () => parts.join("/") }) },
   commands: { executeCommand: state.execute },
   window: {

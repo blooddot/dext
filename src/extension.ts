@@ -29,6 +29,7 @@ import { restoreEditorTabState } from "./platform/editor-tabs/editorTabState.js"
 import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs/editorTabTypes.js";
 import { DextSidebarProvider } from "./app/sidebarProvider.js";
 import { DextAppearanceController } from "./platform/vscode/appearance.js";
+import { appearanceColorStyle } from "./platform/vscode/appearanceColors.js";
 import { parseDextAppearanceRequest } from "./platform/webviewProtocol.js";
 import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./features/conversations/presentation/turnPresentation.js";
 import type { SelectionTarget } from "./platform/vscode/attachments.js";
@@ -108,7 +109,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         appearance: {
           theme: appearance.current,
           stylesheetUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "media", "appearance.css")).toString(),
-          scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "appearance.js")).toString()
+          scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", "appearance.js")).toString(),
+          colorStyle: appearanceColorStyle()
         },
         ...(script ? { scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "dist", "webview", script)).toString() } : {})
       });

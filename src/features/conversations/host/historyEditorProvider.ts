@@ -6,6 +6,7 @@ import { orderHistorySessions } from "../domain/conversationOrder.js";
 import { turnSearchText } from "../domain/historyResponse.js";
 import { historyTokenStyles, historyTurnTitle, renderHistorySession, renderHistorySessionBody } from "../presentation/historyRender.js";
 import { openDextFileReference } from "../../../platform/vscode/contextHost.js";
+import { appearanceColorStyle } from "../../../platform/vscode/appearanceColors.js";
 import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
 import type { DextAppearanceController } from "../../../platform/vscode/appearance.js";
 import { isDextAppearance, type DextAppearance } from "../../../shared/contracts/appearance.js";
@@ -217,6 +218,7 @@ export class DextHistoryPanel implements vscode.Disposable {
   <link rel="stylesheet" href="${markdownStyle.toString()}">
   <link rel="stylesheet" href="${style.toString()}">
   <link rel="stylesheet" href="${appearanceStyle.toString()}">
+  <style>${appearanceColorStyle()}</style>
   <style>${historyTokenStyles()}</style>
   <title>Dext History</title>
 </head>

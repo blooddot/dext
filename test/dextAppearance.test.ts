@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEXT_APPEARANCE_KEY } from "../src/shared/contracts/appearance.js";
+import { DEXT_APPEARANCE_KEY, effectiveDextAppearance } from "../src/shared/contracts/appearance.js";
 import { DextAppearanceController, type AppearanceMemento } from "../src/platform/vscode/appearance.js";
 import { parseDextAppearanceRequest } from "../src/platform/webviewProtocol.js";
 import { renderEditorTabHtml } from "../src/platform/editor-tabs/editorTabHtml.js";
@@ -82,6 +82,24 @@ describe("Dext appearance", () => {
     expect(html).toContain(`script-src 'nonce-${nonce}'`);
   });
 
+  it("bakes the user's own palette colours into the shell", () => {
+    const colorStyle = 'body[data-dext-theme="dark"]{--vscode-editor-background:#000000 !important}';
+    const html = renderEditorTabHtml("<div></div>", "https://webview.test/editorTabs.css", "https://webview.test", {
+      appearance: {
+        theme: "dark",
+        stylesheetUri: "https://webview.test/appearance.css",
+        scriptUri: "https://webview.test/appearance.js",
+        colorStyle
+      }
+    });
+    expect(html).toContain(`<style>${colorStyle}</style>`);
+    expect(html.indexOf(colorStyle)).toBeGreaterThan(html.indexOf("appearance.css"));
+    // The inline block needs the policy to allow it, as Mermaid's SVG does.
+    expect(html).toContain("style-src https://webview.test 'unsafe-inline';");
+    expect(renderEditorTabHtml("<div></div>", "https://webview.test/editorTabs.css", "https://webview.test"))
+      .toContain("style-src https://webview.test;");
+  });
+
   it("allows the codicon font only when a page asks for its stylesheet", () => {
     const html = renderEditorTabHtml("<div></div>", "https://webview.test/editorTabs.css", "https://webview.test", {
       codiconStylesheetUri: "https://webview.test/codicon.css"
@@ -91,6 +109,16 @@ describe("Dext appearance", () => {
     expect(html).toContain("font-src https://webview.test;");
     expect(renderEditorTabHtml("<div></div>", "https://webview.test/editorTabs.css", "https://webview.test"))
       .not.toContain("font-src");
+  });
+
+  it("only paints a palette where it differs from the workbench", () => {
+    // Matching kinds defer to VS Code so `workbench.colorCustomizations` reach Dext.
+    expect(effectiveDextAppearance("dark", false, false)).toBe("auto");
+    expect(effectiveDextAppearance("light", true, false)).toBe("auto");
+    // The palettes still cover the opposite kind, and high contrast wins over both.
+    expect(effectiveDextAppearance("dark", true, false)).toBe("dark");
+    expect(effectiveDextAppearance("light", false, false)).toBe("light");
+    expect(effectiveDextAppearance("dark", false, true)).toBe("auto");
   });
 
   it("broadcasts appearance changes to every open editor tab", () => {

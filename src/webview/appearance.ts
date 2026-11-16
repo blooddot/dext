@@ -1,7 +1,7 @@
-import { isDextAppearance, type DextAppearance } from "../shared/contracts/appearance.js";
+import { effectiveDextAppearance, isDextAppearance, type DextAppearance } from "../shared/contracts/appearance.js";
 
 /**
- * The Dext theme is chosen from the sidebar's view-title action and persisted by
+ * The Dext palette is toggled from the sidebar's view-title action and persisted by
  * the extension host. Every Dext document (sidebar, History and each editor tab)
  * only mirrors that decision onto <body>, where the palette CSS and Monaco read
  * it. No page draws its own theme control.
@@ -10,12 +10,15 @@ import { isDextAppearance, type DextAppearance } from "../shared/contracts/appea
 const highContrast = (): boolean => document.body.classList.contains("vscode-high-contrast")
   || document.body.classList.contains("vscode-high-contrast-light");
 
+const workbenchLight = (): boolean => document.body.classList.contains("vscode-light")
+  || document.body.classList.contains("vscode-high-contrast-light");
+
 const initialTheme = document.body.dataset.dextTheme;
 let requested: DextAppearance = isDextAppearance(initialTheme) ? initialTheme : "auto";
 let lastEffective: DextAppearance | undefined;
 
 function update(): void {
-  const effective: DextAppearance = highContrast() ? "auto" : requested;
+  const effective = effectiveDextAppearance(requested, workbenchLight(), highContrast());
   document.body.dataset.dextTheme = effective;
 
   if (effective === lastEffective) return;
@@ -26,8 +29,9 @@ function update(): void {
 update();
 
 // VS Code adds and removes its theme classes on <body> after the document has
-// loaded. High contrast must win over Paper/Dim immediately, and leaving high
-// contrast must restore the persisted choice.
+// loaded. High contrast must win over Light/Dark immediately, a workbench that
+// switches into the palette's own kind must fall back to its variables, and
+// leaving either must restore the persisted choice.
 new MutationObserver(update).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
 window.addEventListener("message", (event) => {

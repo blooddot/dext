@@ -16,14 +16,17 @@ export interface EditorTabHtmlOptions {
     theme: DextAppearance;
     stylesheetUri: string;
     scriptUri: string;
+    /** The user's own `workbench.colorCustomizations` for the two palettes. */
+    colorStyle?: string;
   };
 }
 
 /** Shared document shell for new and restored resource editor pages. */
 export function renderEditorTabHtml(body: string, stylesheetUri: string, cspSource: string, options: EditorTabHtmlOptions = {}): string {
   const nonce = randomBytes(16).toString("hex");
-  const policy = `default-src 'none'; style-src ${escapeAttribute(cspSource)}${options.scriptUri ? " 'unsafe-inline'" : ""};${options.codiconStylesheetUri ? ` font-src ${escapeAttribute(cspSource)};` : ""} script-src 'nonce-${nonce}';`;
   const appearance = options.appearance;
+  const colorStyle = appearance?.colorStyle ?? "";
+  const policy = `default-src 'none'; style-src ${escapeAttribute(cspSource)}${options.scriptUri || colorStyle ? " 'unsafe-inline'" : ""};${options.codiconStylesheetUri ? ` font-src ${escapeAttribute(cspSource)};` : ""} script-src 'nonce-${nonce}';`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">`
     + `<meta name="viewport" content="width=device-width, initial-scale=1.0">`
     + `<meta http-equiv="Content-Security-Policy" content="${policy}">`
@@ -32,6 +35,7 @@ export function renderEditorTabHtml(body: string, stylesheetUri: string, cspSour
     + (options.codiconStylesheetUri ? `<link rel="stylesheet" href="${escapeAttribute(options.codiconStylesheetUri)}">` : "")
     + `<link rel="stylesheet" href="${escapeAttribute(stylesheetUri)}">`
     + (appearance ? `<link rel="stylesheet" href="${escapeAttribute(appearance.stylesheetUri)}">` : "")
+    + (colorStyle ? `<style>${colorStyle}</style>` : "")
     + `</head><body class="editor-tab"${appearance ? ` data-dext-theme="${appearance.theme}"` : ""}>`
     + body.replaceAll("<script>", `<script nonce="${nonce}">`)
     + (appearance ? `<script nonce="${nonce}" src="${escapeAttribute(appearance.scriptUri)}"></script>` : "")

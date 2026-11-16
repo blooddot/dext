@@ -42,6 +42,7 @@ vi.mock("vscode", () => {
     },
     workspace: {
       workspaceFolders: undefined,
+      getConfiguration: () => ({ get: () => undefined }),
       registerTextDocumentContentProvider: (
         _scheme: string,
         provider: { provideTextDocumentContent(uri: unknown): string }
