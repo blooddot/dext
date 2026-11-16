@@ -184,10 +184,10 @@ export class OutputScrollController {
   }
 
   /** A scroll range the reader cannot read makes the scrollbar lie: the range
-   * runs past the content, a box owns height without painting anything, or the
-   * content reaches past the range so its end can never be scrolled into view.
-   * Measure the port against what it paints and name the box that owns the
-   * difference instead of repeatedly moving the position. */
+   * runs past the content, or the content reaches past the range so its end can
+   * never be scrolled into view. Measure the port against what it paints and
+   * name the box that owns the difference instead of repeatedly moving the
+   * position. */
   reportStaleRange(): void {
     const { body, result } = this.viewport;
     // The measurement walks the whole transcript, so take it at the one moment
@@ -201,7 +201,9 @@ export class OutputScrollController {
     this.measuredRange = { conversation, scrollHeight: body.scrollHeight };
     const report = measureResultScroll(this.viewport);
     const { excess, blank, unreachable } = report.content;
-    if (excess <= RESULT_RANGE_TOLERANCE && blank <= RESULT_BLANK_TOLERANCE && unreachable <= RESULT_RANGE_TOLERANCE) return;
+    // A blank tail below the last ink only pads the end of the transcript, so it
+    // rides along in the summary instead of reporting on its own.
+    if (excess <= RESULT_RANGE_TOLERANCE && unreachable <= RESULT_RANGE_TOLERANCE) return;
     this.reportedRangeFor = conversation;
     const summary = [
       `port ${body.clientHeight}px view / ${body.scrollHeight}px range`,
