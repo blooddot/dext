@@ -49,6 +49,11 @@ type TypescriptContribution = typeof typescriptRegister;
 /** Virtual path the `dext` declaration is registered under. The declaration is
  * an ambient `declare module "dext"`, so the path only names the virtual file. */
 export const DEXT_DECLARATION_PATH = "file:///dext.d.ts";
+/** Virtual path the workspace's `@types/node` is registered under. The files keep the
+ * path they have below their package, because the tree references some of itself by
+ * relative `/// <reference path>`; each declares its `node:*` modules ambiently, so
+ * registering all of them is what `/// <reference types="node" />` does in VS Code. */
+export const DEXT_NODE_TYPES_PATH = "file:///node_modules/@types/node";
 /** Virtual root the workspace's API modules are registered under. It stands in for
  * `.dext`, and `apiPaths` — the generated project's own `dext/api/*` mapping — is
  * resolved against it, so a specifier resolves here exactly as it does in VS Code. */
@@ -93,6 +98,8 @@ export interface DextComposerTypes {
   apiPaths: string[];
   /** The workspace's API sources, keyed by their path under the virtual `.dext` root. */
   modules: { path: string; specifier: string; content: string }[];
+  /** The workspace's installed `@types/node`, keyed by its path below the package. */
+  nodeTypes?: { path: string; content: string }[];
 }
 
 let requested: Promise<TypescriptContribution> | undefined;
@@ -218,7 +225,10 @@ export function installDextTypescript(options: DextTypescriptOptions = {}): { di
       defaults.addExtraLib(types.declaration, DEXT_DECLARATION_PATH),
       // The workspace's own APIs, so `import { commit } from "dext/api/git/commit"`
       // resolves and completes here the way it does in `.dext/api/*.ts`.
-      ...types.modules.map((source) => defaults.addExtraLib(source.content, `${DEXT_WORKSPACE_PATH}/${source.path}`))
+      ...types.modules.map((source) => defaults.addExtraLib(source.content, `${DEXT_WORKSPACE_PATH}/${source.path}`)),
+      // The Node built-ins an API imports. Without them a correct
+      // `import fs from "node:fs/promises"` was `Cannot find module` here.
+      ...(types.nodeTypes ?? []).map((source) => defaults.addExtraLib(source.content, `${DEXT_NODE_TYPES_PATH}/${source.path}`))
     ];
     hasTypes = true;
     builtins = dextBuiltinNames(types.declaration).length;
@@ -228,7 +238,7 @@ export function installDextTypescript(options: DextTypescriptOptions = {}): { di
     symbols = dextApiSymbols(types.declaration, types.modules);
     // The composer's view of the workspace is otherwise invisible, and the Webview
     // console is where a missing API module gets diagnosed.
-    console.debug(`[dext] composer types: ${builtins} built-in name(s), ${modules} API module(s)`);
+    console.debug(`[dext] composer types: ${builtins} built-in name(s), ${modules} API module(s), ${types.nodeTypes?.length ?? 0} Node type file(s)`);
     configure(defaults, module, types.apiPaths);
     options.onTypesApplied?.({ builtins, modules });
   };
@@ -244,6 +254,10 @@ export function installDextTypescript(options: DextTypescriptOptions = {}): { di
       modules: Array.isArray(message.modules)
         ? message.modules.filter((module): module is DextComposerTypes["modules"][number] =>
           !!module && typeof module.path === "string" && typeof module.specifier === "string" && typeof module.content === "string")
+        : [],
+      nodeTypes: Array.isArray(message.nodeTypes)
+        ? message.nodeTypes.filter((file): file is NonNullable<DextComposerTypes["nodeTypes"]>[number] =>
+          !!file && typeof file.path === "string" && typeof file.content === "string")
         : []
     };
     void contribution().then((module) => applyTypes(module.typescriptDefaults, module, types));

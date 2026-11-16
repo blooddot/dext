@@ -194,7 +194,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
    */
   private async postDextTypes(reason: "ready" | "requested" | "reload"): Promise<void> {
     const types = await this.application.composerTypes();
-    this.logComposer(`types ${reason}: ${dextBuiltinNames(types.declaration).length} built-in name(s), ${types.modules.length} API module(s)`);
+    this.logComposer(`types ${reason}: ${dextBuiltinNames(types.declaration).length} built-in name(s), ${types.modules.length} API module(s), ${types.nodeTypes.length} Node type file(s)`);
     this.postWhenReady({ type: "dextTypes", ...types });
   }
 

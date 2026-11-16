@@ -34,7 +34,8 @@ const types = {
     path: "api/git/commit.ts",
     specifier: "dext/api/git/commit",
     content: 'export async function commit(): Promise<string> { return "ok"; }'
-  }]
+  }],
+  nodeTypes: [{ path: "fs/promises.d.ts", content: 'declare module "node:fs/promises" { export function readFile(path: string): Promise<unknown>; }' }]
 };
 
 const selection: AgentSelection = {
@@ -91,6 +92,14 @@ describe("the composer's TypeScript support", () => {
     expect(posted.map((message) => message.type)).toEqual(["dextTypes"]);
     expect((posted[0] as unknown as typeof types).modules[0]!.specifier).toBe("dext/api/git/commit");
     expect((posted[0] as unknown as typeof types).declaration).toContain("declare module \"dext\"");
+  });
+
+  it("carries the Node declarations the workspace installed", async () => {
+    const { sidebar, posted } = sidebarHarness();
+    await receive(sidebar, { type: "composerTypes" });
+    // Without these the composer's worker has nothing that declares `node:*`, so a
+    // correct `import fs from "node:fs/promises"` was a `Cannot find module` there.
+    expect((posted[0] as unknown as typeof types).nodeTypes[0]!.path).toBe("fs/promises.d.ts");
   });
 
   it("answers with the same payload the host pushes on ready", async () => {

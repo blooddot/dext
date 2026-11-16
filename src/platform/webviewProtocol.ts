@@ -160,12 +160,15 @@ export type WebviewResponse =
    * own API modules, because Monaco has no filesystem and cannot read `.dext/api`.
    * `apiPaths` is the generated project's `dext/api/*` mapping, `path` is where each
    * module lives under the virtual `.dext` root the mapping resolves against, and
-   * `specifier` is the `dext/api/<id>` the module answers to. */
+   * `specifier` is the `dext/api/<id>` the module answers to. `nodeTypes` is the
+   * workspace's installed `@types/node`, keyed by its path below the package, so
+   * `import fs from "node:fs/promises"` type-checks in Code mode too. */
   | {
     type: "dextTypes";
     declaration: string;
     apiPaths: string[];
     modules: { path: string; specifier: string; content: string }[];
+    nodeTypes?: { path: string; content: string }[];
   }
   | { type: "mcpAssistant" }
   | { type: "mcpProgress"; requestId: string; event: AgentStreamEvent }

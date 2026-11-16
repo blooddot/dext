@@ -64,6 +64,9 @@ import { insideRoot } from "../platform/node/insideRoot.js";
  * bytes of source, so a large workspace cannot flood the Webview channel. */
 const COMPOSER_MODULE_LIMIT = 200;
 const COMPOSER_MODULE_BYTES = 2 * 1024 * 1024;
+/** `@types/node` is 72 files today; the cap keeps a substituted package from
+ * flooding the same channel. */
+const COMPOSER_NODE_TYPES_LIMIT = 200;
 
 /** A repository ships its own `.dext/mcp` manifests, and an untrusted workspace still
  * has them read on every activation, so the walk is bounded in file size and count. */
@@ -110,7 +113,7 @@ function shortCommit(commit: string | undefined): string | undefined {
 /** The TypeScript sources below an API root, without requiring a workspace folder.
  * `workspace.findFiles` searches the workspace, while Dext's global API directory lives
  * in global storage; reading it directly keeps both roots on one code path. */
-async function apiSourceFiles(root: vscode.Uri, limit: number): Promise<vscode.Uri[]> {
+async function apiSourceFiles(root: vscode.Uri, limit: number, pattern: RegExp = /\.(ts|mts)$/i): Promise<vscode.Uri[]> {
   const files: vscode.Uri[] = [];
   const directories = [root];
   while (directories.length && files.length < limit) {
@@ -126,12 +129,39 @@ async function apiSourceFiles(root: vscode.Uri, limit: number): Promise<vscode.U
       const uri = vscode.Uri.joinPath(directory, name);
       if (type === vscode.FileType.Directory) {
         if (name !== "node_modules") directories.push(uri);
-      } else if (type === vscode.FileType.File && /\.(ts|mts)$/i.test(name)) {
+      } else if (type === vscode.FileType.File && pattern.test(name)) {
         files.push(uri);
       }
     }
   }
   return files;
+}
+
+/**
+ * The `@types/node` declaration files a workspace has installed, keyed by their path
+ * below the package, so the composer can register them as virtual files.
+ *
+ * The files reference each other by ambient `node:*` specifier, so registering all of
+ * them is what `/// <reference types="node" />` does for a generated API file in VS
+ * Code; the relative `/// <reference path>` lines in the tree resolve because the path
+ * below the package is preserved. A root without the package yields nothing, and the
+ * next root is tried.
+ */
+async function composerNodeTypes(roots: readonly vscode.Uri[], limit: number): Promise<{ path: string; content: string }[]> {
+  for (const root of roots) {
+    const files = await apiSourceFiles(root, limit, /\.d\.ts$/i);
+    const sources: { path: string; content: string }[] = [];
+    for (const uri of files) {
+      const path = relativePath(root.fsPath, uri.fsPath).replaceAll("\\", "/");
+      try {
+        sources.push({ path, content: new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)) });
+      } catch {
+        continue;
+      }
+    }
+    if (sources.length) return sources;
+  }
+  return [];
 }
 
 /** Registry diagnostics name the server they rejected. Keeping the reason lets
@@ -212,8 +242,16 @@ export class DextApplication {
    * A workspace larger than the budget keeps the modules that fit, newest path first,
    * rather than sending nothing: completion for the rest still comes from the
    * generated project in VS Code.
+   *
+   * `nodeTypes` is the same idea for the Node built-ins an API imports: `import fs from
+   * "node:fs/promises"` runs in the kernel, but the composer's worker has no
+   * filesystem and no `node_modules`, so without those declarations every `node:*`
+   * import was a `Cannot find module` that also disabled Run. They come from the
+   * project's own install — `.dext` first, because that is where an API file is told to
+   * install them, then the workspace root — so the composer types the Node its code
+   * actually runs on rather than one Dext would ship.
    */
-  async composerTypes(): Promise<{ declaration: string; apiPaths: string[]; modules: { path: string; specifier: string; content: string }[] }> {
+  async composerTypes(): Promise<{ declaration: string; apiPaths: string[]; modules: { path: string; specifier: string; content: string }[]; nodeTypes: { path: string; content: string }[] }> {
     const projectPaths = (JSON.parse(dextTsconfig(undefined, this.projectApiDirs())) as {
       compilerOptions: { paths: Record<string, string[]> };
     }).compilerOptions.paths["dext/api/*"] ?? [];
@@ -266,7 +304,16 @@ export class DextApplication {
       globalSources.push({ relative, content });
     }
     modules.push(...composerGlobalApiModules(modules, globalSources));
-    return { declaration: this.declarationText, apiPaths, modules };
+    const nodeTypes: { path: string; content: string }[] = [];
+    if (folder) {
+      const packageRoot = (prefix: string[]): vscode.Uri =>
+        vscode.Uri.joinPath(folder.uri, ...prefix, "node_modules", "@types", "node");
+      // Sent with every reload, though the files never change while the package stays
+      // installed, so the channel carries 2.5 MB of them each time. `shortcut:` give the
+      // package its own once-per-Webview message if a reload ever feels slow.
+      nodeTypes.push(...await composerNodeTypes([packageRoot([".dext"]), packageRoot([])], COMPOSER_NODE_TYPES_LIMIT));
+    }
+    return { declaration: this.declarationText, apiPaths, modules, nodeTypes };
   }
 
   /**

@@ -349,7 +349,7 @@ Dext 为工作区生成一套编辑器用的 `dext` 工程，这个工程由项�
 
 类型声明和 tsconfig 会在重新加载时生成；`package.json` 只在缺失时初始化。`npm run check` 里的 `--workspace . --check` 检查生成文件是否与 registry 一致，以及 package 文件是否存在，不比较或改写项目依赖。完全不写 API 模块的工作区一个文件都不会生成。Dext 全局存储里的 API 是本机相关的，因此不会写进生成的工程，因为提交的文件无法指向它们；输入区会把这些模块单独注册为虚拟 extra lib，所以 Code 模式仍能补全并类型检查全局 API 的 `dext/api/<id>`。全局 MCP 清单同样不会进入声明（见 [MCP 配置](mcp.zh-CN.md)）。
 
-Node 内置模块就是普通 import——自定义 API 读写文件用的 `import fs from "node:fs/promises"`——要让编辑器认它需要两步。先在 `.dext` 里执行一次 `npm install`，装上清单声明的类型定义。工程还设置了 `types: []`，以免工作区里无关的 `@types/*` 把全局量泄漏进这些文件；这也让 `@types/node` 的 ambient 模块在文件主动引用之前不进入程序，所以在 `api/` 下写一处 `/// <reference types="node" />` 就够了——它带进来的类型属于整个 program——完全不 import Node 内置模块的工程则既不需要这一行，也不需要那次安装。工作流自己的依赖直接声明在 `.dext/package.json`，在 `.dext` 中安装，并随工作流提交清单和锁文件。
+Node 内置模块就是普通 import——自定义 API 读写文件用的 `import fs from "node:fs/promises"`——要让编辑器认它需要两步。先在 `.dext` 里执行一次 `npm install`，装上清单声明的类型定义。工程还设置了 `types: []`，以免工作区里无关的 `@types/*` 把全局量泄漏进这些文件；这也让 `@types/node` 的 ambient 模块在文件主动引用之前不进入程序，所以在 `api/` 下写一处 `/// <reference types="node" />` 就够了——它带进来的类型属于整个 program——完全不 import Node 内置模块的工程则既不需要这一行，也不需要那次安装。Code 模式没有可写的引用行，因此它直接读取同一批声明文件：优先 `.dext/node_modules/@types/node`，工程没有时读工作区自己的 `node_modules/@types/node`，再交给 composer 的 TypeScript 服务——那次安装正是 Code 轮次里 `import fs from "node:fs/promises"` 能通过类型检查并补全的原因，没装时这条 import 就是 `Cannot find module`，同时会让 Run 不可用。工作流自己的依赖直接声明在 `.dext/package.json`，在 `.dext` 中安装，并随工作流提交清单和锁文件。
 
 构建时还会写出 `dist/dext.d.ts`——同一份声明，但不含任何项目的 MCP 工具。它**不在运行时读取**：`npm run check` 用它跑 `generate:dext-types --check`，证明内置 API 表面仍与 registry 一致，同时它随 VSIX 发布，便于直接从安装包里查看 API 表面。
 

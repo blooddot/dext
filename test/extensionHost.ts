@@ -319,6 +319,13 @@ async function verifyGeneratedDextProject(folder: vscode.WorkspaceFolder): Promi
   const commitSource = new TextDecoder().decode(await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder.uri, ".dext", ...hostTypesPath.split("/"))));
   assert.equal(apiModule.content, commitSource, "It travels as the source the worker types against, whatever it exports.");
   assert.equal(composer.modules.some((entry) => entry.path === "api/dext.d.ts"), false, "The generated declaration stays the ambient library.");
+  // The composer's worker has no `node_modules`, so the Node declarations a project
+  // installs for its own API files travel too: `import fs from "node:fs/promises"`
+  // runs in the kernel, and without these it was a `Cannot find module` that also
+  // disabled Run.
+  const nodeType = composer.nodeTypes.find((entry) => entry.path === "fs/promises.d.ts");
+  assert.ok(nodeType, "The workspace's @types/node reaches the composer.");
+  assert.ok(nodeType.content.includes('declare module "node:fs/promises"'), "It is the declaration that answers the import.");
 
   const config = JSON.parse(await read(tsconfig)) as {
     compilerOptions: { erasableSyntaxOnly?: boolean; paths?: Record<string, string[]> };
@@ -552,7 +559,7 @@ async function monacoWebviewHostTest(extensionUri: vscode.Uri, realTypes: unknow
         // The same payload the sidebar sends, decoded from base64 so nothing in the real
         // declaration or API sources can break this script.
         const realTypes=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(payloadBase64),character=>character.charCodeAt(0))));
-        window.postMessage({type:'dextTypes',declaration:realTypes.declaration,apiPaths:realTypes.apiPaths,modules:realTypes.modules},'*');
+        window.postMessage({type:'dextTypes',declaration:realTypes.declaration,apiPaths:realTypes.apiPaths,modules:realTypes.modules,nodeTypes:realTypes.nodeTypes},'*');
         await new Promise(r=>setTimeout(r,400));
         const realModel=editor.view.getModel();
         // An export the declaration really has is offered with the import that binds it:
@@ -580,6 +587,19 @@ async function monacoWebviewHostTest(extensionUri: vscode.Uri, realTypes: unknow
           const list=(Array.isArray(items)?items:items?.suggestions)??[];
           check(list.length===0,'only real exports are offered, not "'+typed+'": '+JSON.stringify(list.map(item=>item.label)));
         }
+        // A Node built-in is an ordinary import in the kernel, and the workspace's own
+        // @types/node travels with this payload: without it, node:fs/promises was the
+        // one 'Cannot find module' the composer could not resolve, and Run stayed off.
+        realModel.setValue('import { readFile } from "node:fs/promises";\\nvoid readFile;\\n');
+        const nodeWorker=await (await composerTypescript.getTypeScriptWorker())(realModel.uri.toString());
+        let nodeDiagnostics=[];
+        for(let i=0;i<25;i++){
+          nodeDiagnostics=await nodeWorker.getSemanticDiagnostics(realModel.uri.toString());
+          if(!nodeDiagnostics.some(diagnostic=>/Cannot find module/.test(String(diagnostic.messageText))))break;
+          await new Promise(r=>setTimeout(r,200));
+        }
+        check(!nodeDiagnostics.some(diagnostic=>/Cannot find module/.test(String(diagnostic.messageText))),
+          'composer resolves node: built-ins: '+JSON.stringify(nodeDiagnostics.map(diagnostic=>diagnostic.messageText)));
         // The composer resolves the workspace's own API modules: the host sends the
         // sources as virtual files plus the project's own 'dext/api/*' mapping, and the
         // completion for those modules is Monaco's own TypeScript service.
