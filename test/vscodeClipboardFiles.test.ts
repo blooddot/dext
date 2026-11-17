@@ -77,6 +77,16 @@ describe("clipboard file paths", () => {
     ]);
   });
 
+  it("pastes a reference Dext wrote back with its range", async () => {
+    // A copied chip used to keep its `#L..` in the URI, where `Uri.toString`
+    // encodes the comma and no chip parser accepts the token any more.
+    const token = "@file:///C:/outside/plan.md#L3,1-L8,4";
+    await expect(clipboardFileReferences(token)).resolves.toEqual([
+      { expression: token, payload: token.slice(1) }
+    ]);
+    expect(vscode.workspace.fs.stat).toHaveBeenCalledWith(expect.objectContaining({ path: "/C:/outside/plan.md" }));
+  });
+
   it("resolves remote Copy Path against the remote workspace", async () => {
     vscode.workspace.workspaceFolders = [{ uri: vscode.Uri.parse("vscode-remote://ssh-remote+dev/repo") }];
     await expect(clipboardFileReferences("/repo/index.html")).resolves.toEqual([

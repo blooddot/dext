@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import type { DextFileReference } from "../../shared/contracts/fileReference.js";
+import type { Range } from "../../shared/contracts/types.js";
+import { parseFileReference } from "../../features/workspace/domain/fileReference.js";
 import { directoryAttachment, fileAttachment } from "./attachments.js";
 
 /** Explorer Copy Path, kept compatible with VS Code's own file copy. Copy Path
@@ -34,33 +36,51 @@ export async function copyFilePathKeepingLine(): Promise<{ path: string; clipboa
   return { path, clipboardText: await vscode.env.clipboard.readText() };
 }
 
+/** One clipboard line as a target, or `undefined` when it is not a path.
+ * A reference Dext wrote can be pasted back: the leading `@`, the quotes and the
+ * `#L1,1-L2,5` range belong to the token, not to the path. */
+function referenceTarget(line: string): { uri: vscode.Uri; range?: Range } | undefined {
+  try {
+    const parsed = parseFileReference(line.replace(/^"(.*)"$/, "$1").replace(/^@/, ""));
+    const uriLike = /^(?:file|vscode-remote):\/\//i.test(parsed.path);
+    // `Uri.parse` keeps whatever follows `#` as a fragment, which `toString`
+    // percent-encodes into `%2C`, and a chip parser accepts no `%2C` range.
+    const path = uriLike ? parsed.path.replace(/#.*$/, "") : parsed.path;
+    const range = parsed.range;
+    if (uriLike) return { uri: vscode.Uri.parse(path, true), ...(range ? { range } : {}) };
+    if (!/^(?:[a-z]:[\\/]|\\\\[^\\]+\\[^\\]+|\/)/i.test(path)) return undefined;
+    // Copy Path in a remote workspace uses the remote filesystem's path.
+    const remote = vscode.workspace.workspaceFolders?.find((folder) => folder.uri.scheme === "vscode-remote");
+    const uri = remote && path.startsWith("/")
+      ? remote.uri.with({ path, query: "", fragment: "" })
+      : vscode.Uri.file(path);
+    return { uri, ...(range ? { range } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Only complete, existing absolute paths qualify. A sentence mentioning a
  * path, a relative code fragment, or an unavailable file stays ordinary text. */
 export async function clipboardFileReferences(text: string): Promise<DextFileReference[] | undefined> {
   const paths = text.trim().split(/\r\n|\r|\n/);
   if (!text.trim() || paths.length > 100) return undefined;
-  const uris: vscode.Uri[] = [];
+  const targets: Array<{ uri: vscode.Uri; range?: Range }> = [];
   for (const line of paths) {
-    const path = line.replace(/^"(.*)"$/, "$1");
-    if (/^file:\/\//i.test(path) || /^vscode-remote:\/\//i.test(path)) {
-      try { uris.push(vscode.Uri.parse(path, true)); } catch { return undefined; }
-    } else if (/^(?:[a-z]:[\\/]|\\\\[^\\]+\\[^\\]+|\/)/i.test(path)) {
-      // Copy Path in a remote workspace uses the remote filesystem's path.
-      const remote = vscode.workspace.workspaceFolders?.find((folder) => folder.uri.scheme === "vscode-remote");
-      uris.push(remote && path.startsWith("/")
-        ? remote.uri.with({ path, query: "", fragment: "" })
-        : vscode.Uri.file(path));
-    } else {
-      return undefined;
-    }
+    const target = referenceTarget(line);
+    if (!target) return undefined;
+    targets.push(target);
   }
   try {
-    return await Promise.all([...new Map(uris.map((uri) => [uri.toString(), uri])).values()].map(async (uri) => {
-      const stat = await vscode.workspace.fs.stat(uri);
-      return (stat.type & vscode.FileType.Directory) !== 0
-        ? directoryAttachment(uri)
-        : fileAttachment(uri);
-    }));
+    const references = await Promise.all([...new Map(targets.map((target) => [target.uri.toString(), target])).values()]
+      .map(async ({ uri, range }) => {
+        const stat = await vscode.workspace.fs.stat(uri);
+        return (stat.type & vscode.FileType.Directory) !== 0
+          ? directoryAttachment(uri)
+          : fileAttachment(uri, range);
+      }));
+    // A path that arrived as text always names a real file; a remote one may not.
+    return references.every((reference) => reference) ? references as DextFileReference[] : undefined;
   } catch {
     return undefined;
   }
