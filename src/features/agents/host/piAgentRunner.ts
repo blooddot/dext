@@ -184,7 +184,9 @@ export class PiAgentRunner implements AgentRunner {
       active.done = true;
       if (frame.aborted === true) active.reject(new ExecutionCancelledError());
       else if (active.events.error || active.retryError) active.reject(new Error(active.events.error ?? active.retryError));
-      else if (["toolUse", "pending"].includes(active.events.stopReason)) active.reject(new Error("Pi stopped before producing a final response."));
+      // An accepted submission already ended this turn on Pi's side, but Pi still
+      // reports the batch's last assistant message as a tool-use stop.
+      else if (!active.submitted && ["toolUse", "pending"].includes(active.events.stopReason)) active.reject(new Error("Pi stopped before producing a final response."));
       else active.resolve();
     }
   }

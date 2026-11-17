@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { PiBridge } from "../src/features/agents/host/piBridge.js";
-interface Tool { name: string; parameters: unknown; execute(id: string, args: unknown, signal?: AbortSignal): Promise<{ content: { text: string }[]; isError: boolean }> }
+interface Tool { name: string; parameters: unknown; constrainedSampling?: unknown; execute(id: string, args: unknown, signal?: AbortSignal): Promise<{ content: { text: string }[]; isError: boolean; terminate?: boolean }> }
 interface SettleEvent { outcome: string; context: { canContinue: boolean } }
 interface Boundary { continue?: boolean; entries?: { type: string; display: boolean }[] }
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 100));
@@ -34,8 +34,10 @@ describe("shipped Pi extension", () => {
     expect(tools.get("dext_submit_result")?.parameters).toEqual(schema);
     expect(guard?.({ toolName: "bash" })).toMatchObject({ block: true });
     expect(guard?.({ toolName: "read" })).toBeUndefined();
-    expect(await tools.get("dext_submit_result")!.execute("one", { value: "ok" })).toMatchObject({ isError: false });
-    expect(await tools.get("dext_submit_result")!.execute("two", {})).toMatchObject({ isError: true });
+    expect(await tools.get("dext_submit_result")!.execute("one", { value: "ok" })).toMatchObject({ isError: false, terminate: true });
+    const rejected = await tools.get("dext_submit_result")!.execute("two", {});
+    expect(rejected).toMatchObject({ isError: true });
+    expect(rejected.terminate).toBeUndefined();
     expect([...tools.keys()]).toContain("dext_fetch");
     expect(tools.get("dext_fetch")?.parameters).toEqual({ type: "object", properties: { url: { type: "string" } }, required: ["url"], additionalProperties: false });
     expect(guard?.({ toolName: "dext_fetch" })).toBeUndefined();
@@ -44,6 +46,12 @@ describe("shipped Pi extension", () => {
     expect(await tools.get("dext_update_todos")!.execute("five", { updates: [{ id: "plan-1", status: "completed" }] })).toMatchObject({ isError: false });
     expect(requests.at(-1)).toMatchObject({ kind: "plan_todo", report: { updates: [{ id: "plan-1", status: "completed" }] } });
     expect(guard?.({ toolName: "mcp__arbitrary_write" })).toMatchObject({ block: true });
+    expect(tools.get("dext_submit_result")?.constrainedSampling).toEqual({ type: "json_schema", strict: "prefer" });
+    expect((tools.get("dext_submit_result")?.constrainedSampling as { strict: string }).strict).not.toBe("require");
+    bridge.clearTurn(); await tick();
+    const unavailable = await tools.get("dext_submit_result")!.execute("six", { value: "ok" });
+    expect(unavailable).toMatchObject({ isError: true });
+    expect(unavailable.terminate).toBeUndefined();
   });
   it("nudges one result submission before a typed turn settles without one", async () => {
     const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"] };

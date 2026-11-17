@@ -88,6 +88,13 @@ async function receive(request) {
         else { send({ type: "auto_retry_end", success: true }); message("recovered"); send({ type: "agent_settled", aborted: false }); }
       }, 60); return;
     }
+    if (text === "fixture:tool-use") {
+      const toolUse = { role: "assistant", content: [{ type: "toolCall", id: "silent", name: "bash", arguments: {} }], stopReason: "toolUse", usage: { input: 2, output: 3, totalTokens: 5 } };
+      send({ type: "message_start", message: { role: "assistant", content: [] } });
+      send({ type: "message_end", message: toolUse });
+      send({ type: "agent_end", messages: [toolUse], willRetry: false });
+      send({ type: "agent_settled", aborted: false }); return;
+    }
     if (text === "fixture:compact") { send({ type: "compaction_start", reason: "threshold" }); input += 4; output += 1; send({ type: "compaction_end", reason: "threshold", result: { summary: "short" }, aborted: false }); }
     if (text === "fixture:wake") {
       // A plugin wakes Pi after its turn settled, exactly like a finished
@@ -106,6 +113,14 @@ async function receive(request) {
     } else if (text === "fixture:question") {
       const answer = await call("question", { questions: [{ id: "q", question: "Choose", options: [{ label: "A", description: "" }, { label: "B", description: "" }], multiSelect: true }] });
       message(JSON.stringify(answer));
+    } else if (text === "fixture:submit-tool-use") {
+      // An accepted submission makes the extension end the batch, but Pi still
+      // reports the batch's last assistant message as a tool-use stop.
+      const value = example(config.resultSchema), accepted = await call("submit_result", { args: value }); log({ accepted });
+      const toolUse = { role: "assistant", content: [{ type: "toolCall", id: "submit", name: "dext_submit_result", arguments: value }], stopReason: "toolUse", usage: { input: 2, output: 3, totalTokens: 5 } };
+      send({ type: "message_start", message: { role: "assistant", content: [] } });
+      send({ type: "message_end", message: toolUse }); input += 2; output += 3; contextTokens = input + output; persist();
+      send({ type: "agent_end", messages: [toolUse], willRetry: false });
     } else if (config?.resultSchema) {
       const rejected = await call("submit_result", { args: { unexpected: true } }); log({ rejected });
       const value = example(config.resultSchema); const accepted = await call("submit_result", { args: value }); log({ accepted }); message("prose after certified result");

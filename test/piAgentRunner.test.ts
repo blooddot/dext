@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
 import type { AgentStreamEvent, AgentWakeReport } from "../src/shared/contracts/types.js";
 import { PiAgentRunner, prunePiSessions, type PiRunnerOptions } from "../src/features/agents/host/piAgentRunner.js";
@@ -63,6 +64,15 @@ describe("Pi conversation runner", { timeout: 30000 }, () => {
     const commands = (await h.log()).map((entry) => entry.command);
     expect(commands.indexOf("clear_queue")).toBeLessThan(commands.indexOf("abort"));
     expect(await h.runner.runConversation(h.request("after stop"))).toBe("after stop");
+  });
+  it("accepts a submitted result even when Pi settles on a tool-use stop", async () => {
+    const h = await setup(), output = z.object({ value: z.string() });
+    const request = { ...h.request("fixture:submit-tool-use"), contract: { outputSchema: output, outputJsonSchema: z.toJSONSchema(output) } } as unknown as AgentConversationRequest;
+    await expect(h.runner.runConversation(request)).resolves.toBe(JSON.stringify({ value: "fixture answer" }));
+  });
+  it("still rejects a tool-use stop when nothing was submitted", async () => {
+    const h = await setup();
+    await expect(h.runner.runConversation(h.request("fixture:tool-use"))).rejects.toThrow("Pi stopped before producing a final response.");
   });
   it("rejects unsupported permissions before starting a process", async () => {
     const h = await setup();

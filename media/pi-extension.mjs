@@ -75,7 +75,9 @@ export default async function dextPiExtension(pi) {
     parameters: { type: "object", properties: { url: string }, required: ["url"], additionalProperties: false },
     async execute(_id, args, signal) { return result(await call("fetch", { url: args.url }, signal)); } });
   if (config.resultSchema) pi.registerTool({ name: "dext_submit_result", label: "Submit result", description: "Submit the complete final result object matching this schema. Fix any validation diagnostics and submit again. Do not wrap or escape the object.",
-    parameters: config.resultSchema, async execute(_id, args, signal) { const reply = await call("submit_result", { args }, signal); if (reply.status === "accepted") submitted = true; return result(reply); } });
+    parameters: config.resultSchema, constrainedSampling: { type: "json_schema", strict: "prefer" },
+    async execute(_id, args, signal) { const reply = await call("submit_result", { args }, signal); if (reply.status === "accepted") submitted = true;
+      const value = result(reply); return reply.status === "accepted" ? { ...value, terminate: true } : value; } });
   // Pi has no native output schema, so a turn that never submits is nudged once before it settles into prose.
   pi.on("agent_before_settle", (event) => {
     if (!active || !config.resultSchema || submitted || nudged || event.outcome !== "completed" || !event.context.canContinue) return undefined;
