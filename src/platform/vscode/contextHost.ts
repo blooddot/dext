@@ -136,6 +136,22 @@ async function validatedDocumentRange(
   return { document, ...(range ? { range } : {}) };
 }
 
+/** The tab VS Code already has open for this local file. Dext's plans and
+ * attachments open as `vscode-userdata:` while a chip names their `file:` path,
+ * so opening the chip's URI would put a second tab on one file. A diff or a
+ * local-history snapshot is a different view of the file and never matches. */
+function openTabUri(uri: vscode.Uri): vscode.Uri {
+  const local = (candidate: vscode.Uri): boolean => candidate.scheme === "file" || candidate.scheme === "vscode-userdata";
+  if (!local(uri)) return uri;
+  const key = (value: string): string => process.platform === "win32" ? value.toLowerCase() : value;
+  const open = vscode.window.tabGroups.all
+    .flatMap((group) => group.tabs)
+    .map((tab) => tab.input instanceof vscode.TabInputText ? tab.input.uri : undefined)
+    .filter((candidate): candidate is vscode.Uri =>
+      candidate !== undefined && local(candidate) && key(candidate.fsPath) === key(uri.fsPath));
+  return open.find((candidate) => candidate.scheme === uri.scheme) ?? open[0] ?? uri;
+}
+
 export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range, workspaceOnly = true): Promise<void> {
   // Absolute paths and file: links arrive here directly, bypassing the
   // relative-reference image check. Let VS Code select its image editor.
@@ -149,7 +165,7 @@ export async function openWorkspaceDocument(uri: vscode.Uri, range?: Range, work
   const vscodeRange = range
     ? new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character)
     : undefined;
-  const validated = await validatedDocumentRange(uri, vscodeRange, workspaceOnly);
+  const validated = await validatedDocumentRange(openTabUri(uri), vscodeRange, workspaceOnly);
   const editor = await vscode.window.showTextDocument(validated.document, {
     preview: false,
     viewColumn: vscode.ViewColumn.Active
@@ -197,10 +213,13 @@ export async function openDextFileReference(filePath: string, storage: DextStora
   const localLink = localFileLink(filePath);
   if (localLink) return openWorkspaceDocument(vscode.Uri.file(localLink.path), localLink.range, false);
   // Markdown output may use a standard file URL instead of a workspace-relative
-  // path. Keep that useful and open explicitly supplied local file references.
+  // path. Keep that useful and open explicitly supplied local file references,
+  // including the `#L1,1-L2,5` range a chip carries.
   try {
-    const uri = vscode.Uri.parse(filePath, true);
-    if (uri.scheme === "file") return openWorkspaceDocument(uri, undefined, false);
+    const parsed = parseFileReference(filePath);
+    if (/^file:\/\//i.test(parsed.path)) {
+      return openWorkspaceDocument(vscode.Uri.parse(parsed.path, true), parsed.range, false);
+    }
   } catch {
     // Fall through to the ordinary reference resolver, which will report an
     // invalid relative path with its usual error message.

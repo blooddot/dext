@@ -14,7 +14,9 @@ const mock = vi.hoisted(() => {
   }
   return { Uri, commands: { executeCommand: vi.fn() },
     workspace: { openTextDocument: vi.fn(), getWorkspaceFolder: vi.fn(), workspaceFolders: [{ uri: new Uri("C:/repo") }] },
-    window: { showTextDocument: vi.fn() }, ViewColumn: { Active: 1 }
+    window: { showTextDocument: vi.fn(), tabGroups: { all: [] as Array<{ tabs: Array<{ input: unknown }> }> } },
+    TabInputText: class { constructor(readonly uri: Uri) {} },
+    ViewColumn: { Active: 1 }
   };
 });
 vi.mock("vscode", () => mock);

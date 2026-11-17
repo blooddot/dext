@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { DextApplication } from "../src/app/application.js";
-import { openWorkspaceFileReference } from "../src/platform/vscode/contextHost.js";
+import { openDextFileReference, openWorkspaceFileReference } from "../src/platform/vscode/contextHost.js";
+import type { DextStorage } from "../src/platform/vscode/dextStorage.js";
 import { clipboardFileReferences } from "../src/platform/vscode/clipboardFiles.js";
-import { selectionAttachment, type SelectionTarget } from "../src/platform/vscode/attachments.js";
+import { attachmentFileReference, clipboardFileReference, fileAttachment, pastedSelection, rememberSelection, selectionAttachment, type SelectionTarget } from "../src/platform/vscode/attachments.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -142,6 +143,77 @@ async function runHostChecks(): Promise<void> {
       assert.notEqual(multiText, perSelection[0], "A multi-cursor copy is not reduced to the primary selection.");
     }
     editor.selections = [new vscode.Selection(0, 0, 0, 1)];
+    // A selection outside the workspace is a file chip too: only the encoded
+    // file URI can name it, and no relative path can. A CRLF file also proves
+    // the clipboard round trip keeps the text the reference was built from.
+    const crlf = String.fromCharCode(13, 10);
+    const outsideDirectory = await mkdtemp(join(tmpdir(), "dext-outside-"));
+    try {
+      const outsideUri = vscode.Uri.file(join(outsideDirectory, "outside.ts"));
+      await vscode.workspace.fs.writeFile(outsideUri, new TextEncoder().encode(`alpha${crlf}beta${crlf}`));
+      const outsideDocument = await vscode.workspace.openTextDocument(outsideUri);
+      const outsideEditor = await vscode.window.showTextDocument(outsideDocument);
+      outsideEditor.selection = new vscode.Selection(0, 0, 1, 4);
+      assert.equal(vscode.workspace.getWorkspaceFolder(outsideDocument.uri), undefined, "The external fixture is outside the workspace.");
+      assert.equal(
+        await vscode.commands.executeCommand<string>("dext.copySelectionWithContext"),
+        `alpha${crlf}beta`,
+        "An external copy submits the exact selection text."
+      );
+      const externalPayload = `${outsideDocument.uri.toString()}#L1,1-L2,5`;
+      const externalTarget: SelectionTarget = {
+        uri: outsideDocument.uri.toString(),
+        version: outsideDocument.version,
+        range: { start: { line: 0, character: 0 }, end: { line: 1, character: 4 } }
+      };
+      assert.deepEqual(
+        clipboardFileReference((await selectionAttachment()).reference),
+        { payload: externalPayload, expression: `@${externalPayload}` },
+        "An external selection becomes a file URI chip with its range."
+      );
+      assert.deepEqual(
+        attachmentFileReference(await selectionAttachment(externalTarget)),
+        { payload: externalPayload, expression: `@${externalPayload}` },
+        "Add to Dext builds the same file URI chip for an external selection."
+      );
+      await vscode.commands.executeCommand("dext.addSelectionToChat", externalTarget);
+      await vscode.commands.executeCommand("dext.addFileToChat", outsideUri);
+      // The Dext input owns the focus by the time the user pastes, so the
+      // reference comes from the selection Dext remembered, not from whichever
+      // editor happens to be active. `alpha<CRLF>beta` was copied above.
+      rememberSelection(outsideEditor);
+      await vscode.window.showTextDocument(document);
+      const remembered = await pastedSelection(`alpha${crlf}beta`);
+      assert.deepEqual(
+        remembered && { uri: remembered.uri, range: remembered.range },
+        { uri: outsideDocument.uri.toString(), range: externalTarget.range },
+        "A paste after the external editor lost focus keeps the file reference."
+      );
+      assert.equal(
+        await pastedSelection("alpha but not the selection"),
+        undefined,
+        "A paste of other text stays ordinary text."
+      );
+      // A diff, a local-history snapshot or an unsaved editor has no path an
+      // agent could open, so the caller keeps plain text instead of a copy.
+      const scratch = await vscode.workspace.openTextDocument({ language: "typescript", content: "const scratch = 1;\n" });
+      const scratchTarget: SelectionTarget = {
+        uri: scratch.uri.toString(),
+        version: scratch.version,
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }
+      };
+      assert.equal(
+        attachmentFileReference(await selectionAttachment(scratchTarget)),
+        undefined,
+        "A document with no file path of its own gets no chip."
+      );
+    } finally {
+      // Windows keeps a handle on the editor's file until VS Code lets it go;
+      // leaving a directory in the OS temp folder is harmless.
+      await rm(outsideDirectory, { recursive: true, force: true }).catch(() => undefined);
+      await vscode.window.showTextDocument(document);
+    }
+    await userDataPlanTest();
   } finally {
     await vscode.env.clipboard.writeText(originalClipboard);
   }
@@ -713,4 +785,66 @@ async function verifyEditorTabs(): Promise<void> {
     assert.ok(!bundle.includes(marker), `The packaged conversation bundle excludes '${marker}'.`);
   }
   console.log("Editor tabs: the Resources page with its Project, Global and Dext scopes opens, reuses, and closes in a live VS Code window.");
+}
+
+async function userDataPlanTest(): Promise<void> {
+  // Dext's plans live in the user data directory, which VS Code opens as
+  // `vscode-userdata:`. The chip must name the file, not a copy of its text.
+  const plans = join(process.env.APPDATA ?? "", "Code", "User", "globalStorage", "blooddot.dext", "plans", "20261111-174745-5.plan.md");
+  const fileUri = vscode.Uri.file(plans);
+  const planUri = vscode.Uri.parse(`vscode-userdata:${fileUri.path}`, true);
+  const document = await vscode.workspace.openTextDocument(planUri);
+  assert.equal(document.uri.scheme, "vscode-userdata", "A plan opens through the user data file system.");
+  const planEditor = await vscode.window.showTextDocument(document);
+  planEditor.selection = new vscode.Selection(0, 0, 0, 4);
+  const target: SelectionTarget = {
+    uri: document.uri.toString(),
+    version: document.version,
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }
+  };
+  const expectedRange = `${fileUri.toString()}#L1,1-L1,5`;
+  assert.deepEqual(
+    attachmentFileReference(await selectionAttachment(target)),
+    { payload: expectedRange, expression: `@${expectedRange}` },
+    "A user-data selection chips the file it names, with its range."
+  );
+  assert.deepEqual(
+    await fileAttachment(planUri),
+    { payload: fileUri.toString(), expression: `@${fileUri.toString()}` },
+    "A user-data file chips the file it names."
+  );
+  const attachments = vscode.Uri.joinPath(vscode.Uri.file(join(process.env.APPDATA ?? "", "Code", "User", "globalStorage", "blooddot.dext")), "attachments");
+  const list = async () => {
+    try { return (await vscode.workspace.fs.readDirectory(attachments)).map(([name]) => name); }
+    catch { return [] as string[]; }
+  };
+  const before = await list();
+  await vscode.commands.executeCommand("dext.addFileToChat", planUri);
+  await vscode.commands.executeCommand("dext.addSelectionToChat", target);
+  assert.deepEqual(
+    (await list()).filter((name) => !before.includes(name)),
+    [],
+    "Add to Dext stores no copy of a file that already has a path."
+  );
+
+  // A chip names the `file:` path while the plan tab is `vscode-userdata:`:
+  // clicking it must reveal that tab at the chip's range, not add a second tab.
+  const planTabs = () => vscode.window.tabGroups.all
+    .flatMap((group) => group.tabs)
+    .filter((tab) => tab.input instanceof vscode.TabInputText && tab.input.uri.fsPath === fileUri.fsPath).length;
+  planEditor.selection = new vscode.Selection(2, 0, 2, 0);
+  const tabsBefore = planTabs();
+  await openDextFileReference(expectedRange, { uriForReference: () => undefined } as unknown as DextStorage);
+  const active = vscode.window.activeTextEditor;
+  assert.equal(active?.document.uri.toString(), document.uri.toString(), "A chip reveals the tab the plan already has.");
+  assert.equal(planTabs(), tabsBefore, "A chip adds no second tab for one file.");
+  assert.deepEqual(
+    active && [active.selection.start.line, active.selection.start.character, active.selection.end.line, active.selection.end.character],
+    [0, 0, 0, 4],
+    "A chip selects the range it names."
+  );
+  // Pasting a copied chip must give that chip back, commas intact: `Uri.toString`
+  // percent-encodes a `#L..` fragment to `%2C`, which no chip parser accepts.
+  const pastedChip = await clipboardFileReferences(`@${expectedRange}`);
+  assert.deepEqual(pastedChip, [{ payload: expectedRange, expression: `@${expectedRange}` }], "A chip token pastes back as the same chip.");
 }
