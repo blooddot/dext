@@ -8,6 +8,20 @@ import { propose, apply, archive } from "dext/api/spec";
 
 每次调用都是一次独立的 agent 运行，返回 `{ kind: "skill", text }`——**不接续当前对话**。想和 agent 来回讨论，就在 Input 里直接选 skill。
 
+要写盘的那 5 个函数会在 `text` 末尾追加一段 git 观测结果：
+
+```
+Files changed:
+- openspec/changes/add-video-export/proposal.md
+- openspec/changes/add-video-export/tasks.md
+```
+
+一行都没有时写 `Files changed: none — no file entered or left git's dirty set during this run.`，
+这就是「产物到底落盘没有」的答案。依据是 `git status --porcelain -uall` 的前后差集，不是
+`AgentResult.files`：后者是模型自己在 JSON 信封里填的字段，`patch: false` 时宿主没有落盘观测，
+它写什么都是自称。运行前已经脏的路径会单独提一句数量，不列成「本次改动」——git 归因不了。
+工作区不是 git 仓库时这一段不出现，调用本身不受影响。
+
 ## 函数
 
 | 函数 | 做什么 | 写文件 |
@@ -18,6 +32,20 @@ import { propose, apply, archive } from "dext/api/spec";
 | `explore(问题)` | 读代码和 specs 回答问题 | 不写 |
 | `update(要改什么)` | 修订还在规划中的 change | 改 change 目录 |
 | `sync(范围)` | 让 `specs/` 追上代码现状 | 改 `openspec/specs/` |
+
+## 权限
+
+`skill()` 固定只读：`src/features/workflow/host/runtime.ts` 里只有 `method.id === "agent"`
+才打开 `allowWorkspaceWrite`，其余模型类调用一律 `permission: "read-only"`。所以走 `skill()`
+的调用没有写权限，`openspec new change` 跑不了，proposal / specs / design / tasks 只能写回回复
+正文——这就是 `propose` 曾经「执行完什么文件都没有」的原因。
+
+因此上表里要写盘的 5 个函数走 `agent({ skills: [id], apply: true, patch: false })`：加载同一个
+`SKILL.md`、用当前 Agent 的写入权限执行，工作区由 CLI 自己改，不再回传 patch 让宿主二次落盘。
+`explore` 保持 `skill()`，因为它本来就只读。
+
+写权限要求可信本地工作区；不受信任时 `agent(apply: true)` 会直接拒绝，而不是悄悄降级成只读。
+用于观测的 `terminal()` 同样要求可信工作区。
 
 ## 一轮
 
@@ -66,5 +94,8 @@ node .dext/skill-packs/openspec/install.mjs
 Resources → Skill → `openspec` 行右侧的 ▶ 按钮跑的是同一条命令（会先弹确认框显示具体命令行）。
 
 它把 `openspec init --tools codex` 的产物写进 `.dext/skills/openspec-*`，并重写同目录的 `pack.json`。刷新后需要 Reload Window。
+
+这 6 个 skill 默认在 `dext.hiddenSkills` 里：Input 菜单看不到它们，但 API 和已保存的选择照样能按 id
+加载，`spec.*` 就是靠这一点工作的。
 
 `openspec/config.yaml` 里的 `context:` 值得填几行——它是 proposal 理解这个仓库的唯一提示，现在空着，全靠 agent 现场读代码。

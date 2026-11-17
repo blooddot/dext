@@ -744,6 +744,43 @@ describe("Dext runtime", () => {
     ]))).rejects.toThrow("rules must stay below .dext/rules.");
   });
 
+  /** `.dext/api/spec` depends on this pair: `skill()` cannot write, while
+   * `agent({ skills })` loads the same SKILL.md with the selected write scope.
+   * If either half changes, the spec APIs silently stop producing files. */
+  it("keeps skill() read-only and lets agent({ skills }) write", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
+    runtime.setAgentSelection({ profileId: "codex", permission: "workspace-write" });
+    runtime.setSkillLoader(async (skill) => ({ sourcePath: `${skill}/SKILL.md`, instructions: `skill ${skill}` }));
+    const requests: { id: string; allowWorkspaceWrite?: boolean | undefined; permission?: string | undefined; instruction: string }[] = [];
+    runtime.setAgentRunner({
+      run: async (request) => {
+        requests.push({
+          id: request.method.id,
+          allowWorkspaceWrite: request.allowWorkspaceWrite,
+          permission: request.permission,
+          instruction: request.metadata.instruction ?? ""
+        });
+        return request.method.id === "skill" ? { kind: "skill", text: "read" } : { kind: "agent", text: "wrote" };
+      }
+    });
+
+    await runtime.execute(invoke("skill", [arg("skill", "openspec-propose"), arg("input", "plan it")]));
+    await runtime.execute(invoke("agent", [arg("input", "plan it"), arg("apply", true), arg("skills", ["openspec-propose"])]));
+
+    expect(requests).toEqual([
+      expect.objectContaining({ id: "skill", allowWorkspaceWrite: false, permission: "read-only" }),
+      expect.objectContaining({
+        id: "agent",
+        allowWorkspaceWrite: true,
+        permission: "workspace-write",
+        instruction: expect.stringContaining("Follow the skill 'openspec-propose'")
+      })
+    ]);
+  });
+
   it("runs Agent and Ask as ordinary provider conversations", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceTrusted(true);
