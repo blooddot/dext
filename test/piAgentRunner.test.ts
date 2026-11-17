@@ -104,6 +104,43 @@ describe("Pi conversation runner", { timeout: 30000 }, () => {
     expect(await resumed.runConversation(h.request("branch", { metadata: { agentSessionId: "fork", conversationForkFrom: stored, conversationContext: "selected visible history" } }))).toContain("selected visible history");
     expect((await h.log()).some((entry) => Array.isArray(entry.startup) && entry.startup.includes("--session"))).toBe(true);
   });
+  it("refuses a session whose recorded workspace moved, without starting Pi", async () => {
+    const h = await setup(); let stored = "";
+    await h.runner.runConversation(h.request("original", { metadata: { agentSessionId: "chat", onAgentSessionId: (_provider, value) => { stored = value; } } }));
+    const { binding } = decodePiSession(stored), directory = join(h.root, "sessions");
+    const moved = join(h.root, "renamed-away"), path = join(directory, "moved.jsonl");
+    await writeFile(path, `${JSON.stringify({ type: "session", version: 3, id: "moved", timestamp: "2026-01-01T00:00:00.000Z", cwd: moved })}\n`);
+    await h.runner.dispose();
+    const runner = h.create(), before = (await h.log()).length;
+    const failure = await runner.runConversation(h.request("next", { metadata: { agentSessionId: "moved", conversationProviderSessionId: encodePiSession({ binding, path }) } })).then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(`The workspace recorded by this Pi session no longer exists (${moved})`);
+    expect((failure as Error).message).toContain("It was moved or deleted.");
+    expect((failure as Error).message).toContain("Start a new conversation, or start again in the new location.");
+    expect(await h.log()).toHaveLength(before);
+  });
+  it("refuses a session whose recorded workspace is a file rather than a directory", async () => {
+    const h = await setup(); let stored = "";
+    await h.runner.runConversation(h.request("original", { metadata: { agentSessionId: "chat", onAgentSessionId: (_provider, value) => { stored = value; } } }));
+    const { binding } = decodePiSession(stored), file = join(h.root, "workspace.txt"), path = join(h.root, "sessions", "file.jsonl");
+    await writeFile(file, "not a directory");
+    await writeFile(path, JSON.stringify({ type: "session", cwd: file }));
+    await h.runner.dispose();
+    const runner = h.create(), before = (await h.log()).length;
+    await expect(runner.runConversation(h.request("next", { metadata: { agentSessionId: "file", conversationProviderSessionId: encodePiSession({ binding, path }) } }))).rejects.toThrow(/no longer exists/);
+    expect(await h.log()).toHaveLength(before);
+  });
+  it("resumes a session whose recorded workspace still exists", async () => {
+    const h = await setup(); let stored = "";
+    await h.runner.runConversation(h.request("original", { metadata: { agentSessionId: "chat", onAgentSessionId: (_provider, value) => { stored = value; } } }));
+    const { binding } = decodePiSession(stored), path = join(h.root, "sessions", "kept.jsonl");
+    await writeFile(path, JSON.stringify({ type: "session", version: 3, id: "kept", timestamp: "2026-01-01T00:00:00.000Z", cwd: h.root,
+      model: { provider: "test", id: "flash", reasoning: true, contextWindow: 1000 }, thinkingLevel: "high", input: 0, output: 0 }));
+    await h.runner.dispose();
+    const runner = h.create();
+    expect(await runner.runConversation(h.request("next", { metadata: { agentSessionId: "kept", conversationProviderSessionId: encodePiSession({ binding, path }) } }))).toBe("next");
+    expect((await h.log()).some((entry) => Array.isArray(entry.startup) && entry.startup.includes("--session"))).toBe(true);
+  });
   it("rejects a missing or external stored session rather than silently resuming latest", async () => {
     const h = await setup(); let stored = "";
     await h.runner.runConversation(h.request("original", { metadata: { agentSessionId: "chat", onAgentSessionId: (_provider, value) => { stored = value; } } }));
@@ -167,8 +204,13 @@ describe("Pi conversation runner", { timeout: 30000 }, () => {
     const h = await setup(); let stored = "";
     await h.runner.runConversation(h.request("first", { metadata: { agentSessionId: "chat", onAgentSessionId: (_provider, value) => { stored = value; } } }));
     await h.runner.dispose(); await writeFile(decodePiSession(stored).path, "broken");
-    const runner = h.create();
-    await expect(runner.runConversation(h.request("resume", { metadata: { agentSessionId: "resume", conversationProviderSessionId: stored } }))).rejects.toThrow(/exited|closed/);
+    const runner = h.create(), before = (await h.log()).length;
+    const failure = await runner.runConversation(h.request("resume", { metadata: { agentSessionId: "resume", conversationProviderSessionId: stored } })).then(() => undefined, (error: unknown) => error);
+    // No workspace can be read from a broken header, so Pi keeps deciding.
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/exited|closed/);
+    expect((failure as Error).message).not.toContain("workspace recorded by this Pi session");
+    expect((await h.log()).length).toBeGreaterThan(before);
     expect(await runner.runConversation(h.request("fresh", { metadata: { agentSessionId: "fresh" } }))).toBe("fresh");
   });
 });

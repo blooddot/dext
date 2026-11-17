@@ -19,6 +19,7 @@ import { piFetch } from "./piFetch.js";
 import { PiBridge } from "./piBridge.js";
 import { piQuestion, piUi } from "./piInteractions.js";
 import { PiRpcTransport } from "./piRpcTransport.js";
+import { piSessionCwd } from "./piSessionHeader.js";
 
 type TurnRequest = AgentConversationRequest & { contract?: AgentExecutionRequest["contract"] };
 export interface PiDiscovery { options: AgentModelOption[]; defaults: { model?: string; reasoningEffort?: string } }
@@ -121,6 +122,19 @@ export class PiAgentRunner implements AgentRunner {
     const canonical = await realpath(path).catch(() => { throw new Error("The stored Pi session is missing. Start a new conversation."); });
     if (!insideRoot(root, canonical, { allowRoot: false })) throw new Error("The stored Pi session is outside Dext's session directory.");
     return canonical;
+  }
+  /** Pi exits before answering when a session records a workspace that no longer
+   * exists, so report the cause before spending a process. Only a definite
+   * "missing or not a directory" rejects; any other `stat` failure stays Pi's
+   * call, because a permission or network-path problem is not a moved workspace. */
+  private async missingWorkspace(path: string): Promise<string | undefined> {
+    const cwd = await piSessionCwd(path);
+    if (!cwd) return undefined;
+    try { return (await stat(cwd)).isDirectory() ? undefined : cwd; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT" || code === "ENOTDIR" ? cwd : undefined;
+    }
   }
   private async open(request: TurnRequest, command: string, binding: string, signal: AbortSignal, resume?: string, ephemeral = false): Promise<Session> {
     const resources = this.resources(); await mkdir(resources.sessionDirectory, { recursive: true });
@@ -323,7 +337,11 @@ export class PiAgentRunner implements AgentRunner {
       let resume: string | undefined;
       if (!session && !request.metadata.conversationForkFrom && request.metadata.conversationProviderSessionId) {
         const stored = decodePiSession(request.metadata.conversationProviderSessionId);
-        if (stored.binding === binding) resume = await this.validateSession(stored.path);
+        if (stored.binding === binding) {
+          resume = await this.validateSession(stored.path);
+          const moved = await this.missingWorkspace(resume);
+          if (moved) throw new Error(`The workspace recorded by this Pi session no longer exists (${moved}), so the session cannot be resumed. It was moved or deleted. Start a new conversation, or start again in the new location.`);
+        }
       }
       if (resume && !this.defaults.has(binding)) {
         const clean = await this.open(request, command, binding, controller.signal, undefined, true);
