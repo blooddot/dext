@@ -1949,6 +1949,10 @@ body.image-page {
 
 .image-annotator-error[hidden] { display: none; }
 
+/* A failed load takes the notes pane's place: two blocks in one grid cell drew the
+   message on top of the rows. */
+.image-annotator-error:not([hidden]) ~ .image-annotator-list { display: none; }
+
 /* Video annotation page: the player is fitted to the stage and the marks sit over
    it, so one rectangle serves both the overlay and the hand-drawn boxes. The notes
    take the same right-hand column a screenshot's notes do. */
