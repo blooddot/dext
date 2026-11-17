@@ -62,62 +62,135 @@ export async function selectionAttachment(target?: SelectionTarget): Promise<Att
   };
 }
 
-/** Any workspace text document can supply a file reference, regardless of language.
- * External editors must remain ordinary clipboard text. */
-export function activeWorkspaceSelection(): vscode.TextEditor | undefined {
+/** Any active editor selection can supply a reference, inside or outside the
+ * workspace. A local external file is referenced by its file URI. */
+export function activeSelection(): vscode.TextEditor | undefined {
   const editor = vscode.window.activeTextEditor;
-  return editor
-    && !editor.selection.isEmpty
-    && vscode.workspace.getWorkspaceFolder(editor.document.uri)
-    ? editor
+  return editor && !editor.selection.isEmpty ? editor : undefined;
+}
+
+/** The local file a document names. Dext's own plans and attachments live in the
+ * user data directory, which VS Code opens as `vscode-userdata:`, so the scheme
+ * alone does not say whether there is a file an agent can read. `git:` and
+ * local-history documents hold content the file on disk does not have.
+ * `undefined` means no path exists and the caller keeps plain text. */
+function localFile(uri: vscode.Uri): vscode.Uri | undefined {
+  if (uri.scheme === "file") return uri;
+  return uri.scheme === "vscode-userdata" && /^(?:[a-z]:[\\/]|\/)/i.test(uri.fsPath)
+    ? vscode.Uri.file(uri.fsPath)
     : undefined;
 }
 
-/** A workspace file reference is only a path token. Do not read the file just
- * to create it: the agent can inspect a large file on demand, while pasted
- * content continues to be bounded before Dext stores it. */
-export async function fileAttachment(uri: vscode.Uri): Promise<DextFileReference> {
+/** Selections Dext saw recently, newest last. Pasting into the Dext input gives
+ * that Webview the focus, so `window.activeTextEditor` can be gone by then.
+ * More than one is kept because activating another editor reports its own
+ * selection, which must not evict the copy the user is about to paste. */
+const recentSelections: SelectionTarget[] = [];
+const MAX_RECENT_SELECTIONS = 8;
+
+function selectionTarget(editor: vscode.TextEditor): SelectionTarget {
+  return {
+    uri: editor.document.uri.toString(),
+    version: editor.document.version,
+    range: rangeValue(editor.selection)
+  };
+}
+
+export function rememberSelection(editor: vscode.TextEditor | undefined): void {
+  if (!editor?.selection || editor.selection.isEmpty) return;
+  recentSelections.push(selectionTarget(editor));
+  if (recentSelections.length > MAX_RECENT_SELECTIONS) recentSelections.shift();
+}
+
+/** The selection whose text is exactly what the clipboard holds: the active
+ * editor's when it still has one, otherwise the most recent one Dext saw.
+ * Anything else stays ordinary text. */
+export async function pastedSelection(text: string): Promise<SelectionTarget | undefined> {
+  const editor = activeSelection();
+  const candidates = [editor ? selectionTarget(editor) : undefined, ...recentSelections.slice().reverse()];
+  for (const target of candidates) {
+    if (!target) continue;
+    try {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(target.uri, true));
+      const range = new vscode.Range(
+        target.range.start.line, target.range.start.character, target.range.end.line, target.range.end.character
+      );
+      // A document edited since the copy still supplies the reference when the
+      // text matches; the snapshot only reports the range it was copied from.
+      if (document.getText(range) === text) return { ...target, version: document.version };
+    } catch {
+      // A document Dext cannot open cannot stand in for this copy.
+    }
+  }
+  return undefined;
+}
+
+/** A reference is only a path token. Do not read the file just to create it: the
+ * agent can inspect a large file on demand, while pasted content continues to be
+ * bounded before Dext stores it.
+ * `undefined` means the resource has no path an agent could open — a diff, a
+ * local-history snapshot, an unsaved editor. */
+function fileReference(path: string, range?: Range): DextFileReference {
+  return range ? formatDextFileReference(path, range) : formatDextFilePathReference(path);
+}
+
+/** `range` comes from a reference that already carried one, which is how a
+ * pasted `@file:///…#L1,1-L2,5` token keeps its lines. */
+export async function fileAttachment(uri: vscode.Uri, range?: Range): Promise<DextFileReference | undefined> {
   const stat = await vscode.workspace.fs.stat(uri);
   if ((stat.type & vscode.FileType.Directory) !== 0) throw new Error("Choose a file, not a directory.");
-  if (!vscode.workspace.getWorkspaceFolder(uri)) {
-    if (uri.scheme !== "file") throw new Error("Only local external files can be added to Dext.");
-    return formatDextFilePathReference(uri.toString());
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!folder) {
+    const file = localFile(uri);
+    return file ? fileReference(file.toString(), range) : undefined;
   }
   const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
-  const reference = formatDextFilePathReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder));
+  const reference = fileReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder), range);
   // Spaces and punctuation must not split a file chip into a partial path.
   // An encoded local URI still references the original file without a copy.
-  if (uri.scheme === "file" && atReferenceOccurrences(reference.expression)[0]?.expression !== reference.expression) {
-    return formatDextFilePathReference(uri.toString());
+  if (atReferenceOccurrences(reference.expression)[0]?.expression !== reference.expression) {
+    const file = localFile(uri);
+    if (file) return fileReference(file.toString(), range);
   }
   return reference;
 }
 
 export async function directoryAttachment(uri: vscode.Uri): Promise<DextFileReference> {
-  const folder = vscode.workspace.getWorkspaceFolder(uri);
-  if (!folder) throw new Error("Dext directories must stay inside the current workspace.");
   const stat = await vscode.workspace.fs.stat(uri);
   if ((stat.type & vscode.FileType.Directory) === 0) throw new Error("Choose a directory for ref.dir.");
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!folder) {
+    const directory = localFile(uri);
+    if (!directory) throw new Error("Only local directories can be added to Dext.");
+    return formatDextDirectoryReference(directory.toString());
+  }
   const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
   return formatDextDirectoryReference(vscode.workspace.asRelativePath(uri, includeWorkspaceFolder));
 }
 
 export function clipboardFileReference(reference: CodeRef): DextFileReference | undefined {
   if (!reference.range) return undefined;
-  const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(reference.uri, true));
-  if (!folder) return undefined;
+  const uri = vscode.Uri.parse(reference.uri, true);
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (!folder) {
+    const file = localFile(uri);
+    return file ? formatDextFileReference(file.toString(), reference.range) : undefined;
+  }
   const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
-  const relativePath = vscode.workspace.asRelativePath(
-    vscode.Uri.parse(reference.uri, true),
-    includeWorkspaceFolder
-  );
+  const relativePath = vscode.workspace.asRelativePath(uri, includeWorkspaceFolder);
   return formatDextFileReference(relativePath, reference.range);
 }
 
-export function attachmentFileReference(snapshot: AttachmentSnapshot): DextFileReference {
+export function attachmentFileReference(snapshot: AttachmentSnapshot): DextFileReference | undefined {
   const uri = vscode.Uri.parse(snapshot.reference.uri, true);
   const folder = vscode.workspace.getWorkspaceFolder(uri);
-  if (!folder) throw new Error("Dext references must stay inside the current workspace.");
+  if (!folder) {
+    const file = localFile(uri);
+    if (!file) return undefined;
+    return snapshot.reference.range
+      ? formatDextFileReference(file.toString(), snapshot.reference.range)
+      : formatDextFilePathReference(file.toString());
+  }
   const includeWorkspaceFolder = (vscode.workspace.workspaceFolders?.length ?? 0) > 1;
   const path = vscode.workspace.asRelativePath(uri, includeWorkspaceFolder);
   return snapshot.reference.range

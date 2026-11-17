@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { activeWorkspaceSelection, type SelectionTarget } from "./attachments.js";
+import { activeSelection, rememberSelection, type SelectionTarget } from "./attachments.js";
 
 /** Use the editor's overlay hover so selecting text never inserts a layout row.
  * Capture the source in the link so clicking cannot change the selected target. */
@@ -13,6 +13,7 @@ export class DextSelectionActions implements vscode.HoverProvider, vscode.Dispos
       vscode.languages.registerHoverProvider({ language: "*" }, this),
       vscode.window.onDidChangeTextEditorSelection((event) => {
         if (event.textEditor !== vscode.window.activeTextEditor) return;
+        rememberSelection(event.textEditor);
         this.refresh(event.kind !== vscode.TextEditorSelectionChangeKind.Command);
       }),
       vscode.window.onDidChangeActiveTextEditor(() => this.refresh(false)),
@@ -28,7 +29,7 @@ export class DextSelectionActions implements vscode.HoverProvider, vscode.Dispos
   }
 
   private selectedEditor(): vscode.TextEditor | undefined {
-    const editor = activeWorkspaceSelection();
+    const editor = activeSelection();
     if (!editor
       || !vscode.workspace.getConfiguration("dext", editor.document.uri).get<boolean>("selectionActions.enabled", true)) return;
     return editor;

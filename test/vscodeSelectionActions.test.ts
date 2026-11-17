@@ -84,7 +84,7 @@ vi.mock("vscode", () => {
 
 import * as vscode from "vscode";
 import { DextSelectionActions } from "../src/platform/vscode/selectionActions.js";
-import { selectionAttachment, type SelectionTarget } from "../src/platform/vscode/attachments.js";
+import { pastedSelection, selectionAttachment, type SelectionTarget } from "../src/platform/vscode/attachments.js";
 
 function document(languageId = "typescript", version = 3): VSCode.TextDocument {
   return {
@@ -184,10 +184,10 @@ describe("selection Add to Dext overlay", () => {
     expect(state.execute).toHaveBeenLastCalledWith("editor.action.hideHover");
   });
 
-  it("does not offer actions for other documents or files outside the workspace", () => {
+  it("does not offer actions for other documents and offers them for files outside the workspace", () => {
     expect(provider.provideHover(document(), state.editor!.selection.active)).toBeUndefined();
     state.workspace = false;
-    expect(hover()).toBeUndefined();
+    expect(hover()).toBeDefined();
   });
 
   it.each(["markdown", "plaintext", "log", "csv", "tsv", "git-commit", "custom-text"])(
@@ -224,6 +224,14 @@ describe("selection Add to Dext overlay", () => {
     select();
     await vi.runAllTimersAsync();
     expect(state.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the selection for a paste that happens after the input owns focus", async () => {
+    select();
+    state.editor = undefined;
+    expect(await pastedSelection("selected code")).toEqual({ uri: "file:///repo/src/app.ts", version: 3,
+      range: { start: { line: 2, character: 4 }, end: { line: 5, character: 8 } } });
+    expect(await pastedSelection("some other copy")).toBeUndefined();
   });
 
   it("keeps the captured file and range when clicking moves focus", async () => {

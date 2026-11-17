@@ -7,13 +7,25 @@ const state = vi.hoisted(() => ({
   workspace: true,
   clipboard: "",
   commands: [] as string[],
+  warnings: [] as string[],
   selection: { isEmpty: false, start: { line: 1, character: 0 }, end: { line: 4, character: 0 } },
   selections: [] as Array<{ isEmpty: boolean }>
 }));
 
 vi.mock("vscode", () => ({
-  window: { get activeTextEditor() { return state.editor; } },
-  Uri: { parse: (uri: string) => ({ toString: () => uri }) },
+  window: {
+    get activeTextEditor() { return state.editor; },
+    showWarningMessage: (message: string) => { state.warnings.push(message); }
+  },
+  Uri: { parse: (uri: string) => ({ scheme: uri.split(":")[0], toString: () => uri }) },
+  Range: class {
+    readonly start: { line: number; character: number };
+    readonly end: { line: number; character: number };
+    constructor(startLine: number, startCharacter: number, endLine: number, endCharacter: number) {
+      this.start = { line: startLine, character: startCharacter };
+      this.end = { line: endLine, character: endCharacter };
+    }
+  },
   commands: { executeCommand: async (command: string) => { state.commands.push(command); } },
   workspace: {
     getWorkspaceFolder: () => state.workspace ? {} : undefined,
@@ -28,11 +40,14 @@ vi.mock("vscode", () => ({
 }));
 
 import { AttachmentStore, MAX_ATTACHMENT_BYTES } from "../src/shared/lib/attachmentStore.js";
+import { rememberSelection } from "../src/platform/vscode/attachments.js";
 import { DextSidebarProvider } from "../src/app/sidebarProvider.js";
 
 const selectedText = "# 项目说明\n\n保留文本内容。\n";
 const payload = "README.md#L2,1-L5,1";
 const reference = { expression: `@${payload}`, payload };
+const externalPayload = "file:///repo/README.md#L2,1-L5,1";
+const externalReference = { expression: `@${externalPayload}`, payload: externalPayload };
 let sidebar: DextSidebarProvider;
 let post: ReturnType<typeof vi.fn>;
 let attachments: AttachmentStore;
@@ -41,6 +56,7 @@ beforeEach(() => {
   state.workspace = true;
   state.clipboard = selectedText;
   state.commands = [];
+  state.warnings = [];
   state.selections = [state.selection];
   state.document = {
     uri: { toString: () => "file:///repo/README.md" },
@@ -54,7 +70,12 @@ beforeEach(() => {
   sidebar = Object.create(DextSidebarProvider.prototype) as DextSidebarProvider;
   post = vi.fn().mockResolvedValue(undefined);
   attachments = new AttachmentStore();
-  Object.assign(sidebar, { attachments, post, application: { storage: { attachmentByteLimit: () => MAX_ATTACHMENT_BYTES } } });
+  Object.assign(sidebar, {
+    attachments,
+    post,
+    postWhenReady: vi.fn(),
+    application: { storage: { attachmentByteLimit: () => MAX_ATTACHMENT_BYTES } }
+  });
 });
 
 async function paste(purpose: "code" | "text" = "code") {
@@ -78,6 +99,28 @@ describe("workspace text selection clipboard references", () => {
     }
   );
 
+  it("recovers the reference for a native copy after the editor lost focus", async () => {
+    // Selecting and copying without Dext's binding stages nothing, and the
+    // Dext input owns focus by the time the user pastes.
+    rememberSelection(state.editor);
+    state.editor = undefined;
+    await paste();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 1, success: true,
+      text: reference.expression, contextAttached: false, codeReference: reference
+    });
+  });
+
+  it("keeps a different clipboard text as plain text", async () => {
+    rememberSelection(state.editor);
+    state.editor = undefined;
+    state.clipboard = "unrelated text";
+    await paste();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 1, success: true, text: "unrelated text", contextAttached: false
+    });
+  });
+
   it("recovers a Markdown range from a matching selection copied with native copy", async () => {
     await paste();
     expect(post).toHaveBeenCalledExactlyOnceWith({
@@ -94,26 +137,22 @@ describe("workspace text selection clipboard references", () => {
     });
   });
 
-  it("clears stale workspace references when the matching selection belongs to an external file", async () => {
+  it("pastes an external file URI reference for a matching selection outside the workspace", async () => {
     attachments.stageClipboard(selectedText, reference);
     state.workspace = false;
     await paste();
-    state.editor = undefined;
-    await paste();
-    expect(post).toHaveBeenCalledTimes(2);
-    for (const [message] of post.mock.calls) {
-      expect(message).toEqual({
-        type: "clipboardReadResult", requestId: 1, success: true, text: selectedText, contextAttached: false
-      });
-    }
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 1, success: true,
+      text: externalReference.expression, contextAttached: false, codeReference: externalReference
+    });
   });
 
-  it("does not stage a reference when copying an external text selection", async () => {
+  it("stages an external file URI reference when copying an external text selection", async () => {
     attachments.stageClipboard(selectedText, reference);
     state.workspace = false;
     await sidebar.copySelectionWithContext();
     expect(state.clipboard).toBe(selectedText);
-    expect(attachments.clipboardReference(selectedText)).toBeUndefined();
+    expect(attachments.clipboardReference(selectedText)).toEqual(externalReference);
   });
 
   it("leaves a multi-cursor copy entirely to VS Code", async () => {
@@ -123,5 +162,38 @@ describe("workspace text selection clipboard references", () => {
     // The primary selection alone is not what a multi-cursor copy means, so
     // nothing is staged for the next paste.
     expect(attachments.clipboardReference(selectedText)).toBeUndefined();
+  });
+});
+
+describe("selections a chip cannot name by path", () => {
+  const gitUri = "git:/repo/README.md?%7B%22path%22%3A%22README.md%22%7D";
+
+  beforeEach(() => {
+    state.workspace = false;
+    state.document = {
+      uri: { scheme: "git", toString: () => gitUri },
+      languageId: "markdown", version: 1, getText: () => selectedText
+    } as unknown as VSCode.TextDocument;
+    state.editor = {
+      document: state.document,
+      get selection() { return state.selection; },
+      get selections() { return state.selections; }
+    } as unknown as VSCode.TextEditor;
+  });
+
+  it("Add to Dext warns instead of copying the text into an attachment", async () => {
+    await sidebar.addSelectionToChat({
+      uri: gitUri, version: 1,
+      range: { start: { line: 1, character: 0 }, end: { line: 4, character: 0 } }
+    });
+    expect((sidebar as unknown as { postWhenReady: ReturnType<typeof vi.fn> }).postWhenReady).not.toHaveBeenCalled();
+    expect(state.warnings).toHaveLength(1);
+  });
+
+  it("a paste of that selection stays ordinary text", async () => {
+    await paste();
+    expect(post).toHaveBeenCalledExactlyOnceWith({
+      type: "clipboardReadResult", requestId: 1, success: true, text: selectedText, contextAttached: false
+    });
   });
 });

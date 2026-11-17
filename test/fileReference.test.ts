@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  atReferenceOccurrences,
   compactFileReferenceLabel,
   formatDextDirectoryReference,
   formatDextFileReference,
@@ -39,6 +40,19 @@ describe("Dext file references", () => {
     expect(() => parseFileReference("src/review.ts#L4,1-L3,1")).toThrow("range start");
     expect(parseFileReference("src/review.ts#L0,1-L1,1"))
       .toEqual({ path: "src/review.ts#L0,1-L1,1" });
+  });
+
+  it("chips an external file URI with its range and directory slash", () => {
+    const file = formatDextFileReference("file:///C:/outside/My%20File.ts", {
+      start: { line: 0, character: 0 },
+      end: { line: 2, character: 4 }
+    });
+    expect(atReferenceOccurrences(`see ${file.expression}`)).toEqual([{
+      kind: "file", start: 4, end: 4 + file.expression.length,
+      expression: file.expression, payload: file.payload
+    }]);
+    const directory = formatDextDirectoryReference("file:///C:/outside/src");
+    expect(atReferenceOccurrences(directory.expression)[0]).toMatchObject({ kind: "dir", payload: "file:///C:/outside/src" });
   });
 
   it("formats compact basename labels with optional line ranges", () => {

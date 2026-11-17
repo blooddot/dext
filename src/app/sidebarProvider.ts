@@ -28,11 +28,11 @@ import { referencedAttachmentNames } from "../platform/vscode/dextStorage.js";
 import { ReadyMessageQueue } from "../shared/lib/readyMessageQueue.js";
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import {
-activeWorkspaceSelection,
 attachmentFileReference,
 clipboardFileReference,
 directoryAttachment,
 fileAttachment,
+pastedSelection,
 selectionAttachment,
 type SelectionTarget
 } from "../platform/vscode/attachments.js";
@@ -627,10 +627,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   async addSelectionToChat(target?: SelectionTarget): Promise<void> {
     const attachment = await selectionAttachment(target);
-    this.postWhenReady({
-      type: "insertFileReferences",
-      expressions: [attachmentFileReference(attachment).expression]
-    });
+    const reference = attachmentFileReference(attachment);
+    // One line the "Dext Input" channel answers "Add to Dext did nothing" with.
+    this.logComposer(`selection: ${attachment.reference.uri} → ${reference ? "chip" : "no path"}`);
+    if (!reference) {
+      // A chip names a file; Dext never stores its own copy of the content.
+      void vscode.window.showWarningMessage("This editor has no file on disk Dext can reference. Save it first, or open the file.");
+      return;
+    }
+    this.postWhenReady({ type: "insertFileReferences", expressions: [reference.expression] });
   }
 
   async copySelectionWithContext(): Promise<string> {
@@ -682,7 +687,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   async addFileToChat(resources?: readonly vscode.Uri[]): Promise<void> {
     const active = vscode.window.activeTextEditor?.document.uri;
     const uris = resources?.length ? resources : active ? [active] : [];
-    if (!uris.length) throw new Error("Choose a workspace file or directory before adding it to Dext input.");
+    if (!uris.length) throw new Error("Choose a file or directory before adding it to Dext input.");
     await this.addFileUris(uris);
   }
 
@@ -1031,32 +1036,20 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           let fileReferences: Awaited<ReturnType<typeof clipboardFileReferences>>;
           try {
             if (request.purpose === "code") {
-              const editor = vscode.window.activeTextEditor;
-              const hasMatchingSelection = Boolean(
-                editor
-                && !editor.selection.isEmpty
-                && editor.document.getText(editor.selection) === text
-              );
-
-              // A selection copied from a VS Code editor does not pass through
-              // Dext's context-copy command. Recover its workspace reference
-              // when the clipboard text still matches the active selection.
-              // When that selection is outside the workspace,
-              // deliberately leave the text untouched. In particular, do not
-              // fall back to a stale staged reference from an earlier project
-              // selection with identical contents.
-              if (hasMatchingSelection) {
-                const current = activeWorkspaceSelection();
-                if (current) {
-                  const attachment = await selectionAttachment();
-                  codeReference = clipboardFileReference(attachment.reference);
-                } else {
-                  // The matching selection is known to be non-project.
-                  // Drop any older staged context as well, so a
-                  // second paste after focus changes cannot resurrect a ref
-                  // for this external content.
-                  this.attachments.clearClipboard();
-                }
+              // A selection copied from a VS Code editor does not always pass
+              // through Dext's context-copy command. Recover its file reference —
+              // inside or outside the workspace — when the clipboard text still
+              // matches a selection Dext saw. A document with no referenceable
+              // file drops older staged context, which cannot stand in for this
+              // copy.
+              const selection = await pastedSelection(text);
+              if (selection) {
+                const attachment = await selectionAttachment(selection);
+                codeReference = clipboardFileReference(attachment.reference);
+                // A diff, a local-history snapshot or an unsaved editor has no
+                // path to chip; it stays ordinary text rather than a copy Dext
+                // would store for it.
+                if (!codeReference) this.attachments.clearClipboard();
               } else {
                 // File Copy Path carries the original resources, including
                 // images. Resolve paths before falling back to staged context.
@@ -1078,6 +1071,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             });
             throw error;
           }
+          // One line the "Dext Input" channel answers "paste arrived as text"
+          // with: the host decided on a reference or it did not.
+          this.logComposer(`paste ${request.purpose}: ${codeReference?.payload ?? fileReferences?.[0]?.payload ?? "text only"}`);
           await this.post({
             type: "clipboardReadResult",
             requestId: request.requestId,
@@ -1351,13 +1347,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   private async addFileUris(uris: readonly vscode.Uri[]): Promise<void> {
     const references = await Promise.all(uris.map(async (uri) => {
       const stat = await vscode.workspace.fs.stat(uri);
-      if ((stat.type & vscode.FileType.Directory) !== 0) return directoryAttachment(uri);
-      return fileAttachment(uri);
+      return (stat.type & vscode.FileType.Directory) !== 0
+        ? await directoryAttachment(uri)
+        : await fileAttachment(uri);
     }));
-    this.postWhenReady({
-      type: "insertFileReferences",
-      expressions: references.map((reference) => reference.expression)
-    });
+    const expressions = references.flatMap((reference) => reference ? [reference.expression] : []);
+    if (expressions.length < uris.length) {
+      const missing = uris
+        .filter((_uri, index) => !references[index])
+        .map((uri) => uri.fsPath || uri.toString())
+        .join(", ");
+      void vscode.window.showWarningMessage(`Dext needs a file on disk to reference: ${missing}`);
+    }
+    if (expressions.length) this.postWhenReady({ type: "insertFileReferences", expressions });
   }
 
   /** Attachment files saved history still points at, so pruning never breaks an
