@@ -1287,15 +1287,19 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.openConversation(session);
   }
 
+  /** A hidden Dext view has no live Webview document, and `postMessage`
+   * resolves false for it. Keep that message for the next `ready` instead of
+   * losing it: Add to Dext runs before the view is revealed. */
   private async post(message: WebviewResponse): Promise<void> {
-    if (!this.messageQueue.isReady) {
-      return;
-    }
     const view = this.view;
-    if (!view) {
+    if (!this.messageQueue.isReady || !view) {
       return;
     }
-    await view.webview.postMessage(message);
+    if (await view.webview.postMessage(message) !== false) {
+      return;
+    }
+    this.messageQueue.markNotReady();
+    this.messageQueue.enqueue(message);
   }
 
   private postWhenReady(message: WebviewResponse): void {
@@ -1309,7 +1313,15 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async flushPendingMessages(messages: readonly WebviewResponse[]): Promise<void> {
-    for (const message of messages) await this.post(message);
+    for (const message of messages) {
+      // The document can still be gone; `post` re-queues its own failure, so
+      // the rest follows it instead of being dropped one by one.
+      if (!this.messageQueue.isReady) {
+        this.messageQueue.enqueue(message);
+        continue;
+      }
+      await this.post(message);
+    }
   }
 
   /** Typing coalesces into one write: each Memento update serializes the
