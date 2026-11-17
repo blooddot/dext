@@ -44,6 +44,12 @@ interface InvalidCommand {
 
 interface SkillVariant { agent: string; sourcePath: string; title: string; description: string; }
 
+/** Vendored libraries keep their own layout, so this root is searched instead
+ * of read one level deep: `.dext/third-party/<vendor>/<generator output>/`. */
+const THIRD_PARTY_DIRECTORY = "third-party";
+const SKIPPED_SKILL_DIRECTORIES = new Set([".git", "node_modules"]);
+const MAX_SKILL_SCAN_DEPTH = 6;
+
 function unique<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
 }
@@ -65,15 +71,19 @@ export class SkillCatalog {
     this.invalidCommands.clear();
     this.skillVariants.clear();
     this.notes.length = 0;
+    const projectRoots = [join(workspaceRoot, ".dext", "skills"), join(workspaceRoot, ".dext", THIRD_PARTY_DIRECTORY)];
     const roots = unique([
-      join(workspaceRoot, ".dext", "skills"),
+      ...projectRoots,
       ...skillDirs.map((directory) => resolve(workspaceRoot, directory)),
       ...(globalRoot ? [resolve(globalRoot)] : [])
     ]);
     const globalSkills = globalRoot ? resolve(globalRoot) : undefined;
     const priorityOf = (root: string): number =>
-      resolve(root) === resolve(workspaceRoot, ".dext", "skills") ? 0 : root === globalSkills ? 2 : 1;
-    for (const root of roots) await this.addSkillsRoot(root);
+      projectRoots.some((project) => resolve(project) === resolve(root)) ? 0 : root === globalSkills ? 2 : 1;
+    // Commands live beside the Skill they belong to, which a vendored layout
+    // puts below the root rather than directly in it.
+    const skillDirectories = new Map<string, string[]>();
+    for (const root of roots) skillDirectories.set(root, await this.addSkillsRoot(root));
     const packRoots = [
       { root: join(workspaceRoot, ".dext", SKILL_PACKS_DIRECTORY), base: join(workspaceRoot, ".dext"), priority: 0 },
       ...(globalRoot
@@ -85,7 +95,7 @@ export class SkillCatalog {
     // Loose commands come last so a pack's manifest (registered first at the
     // same priority) wins; the priority check still lets a local loose command
     // replace one from a global pack.
-    for (const root of roots) await this.addLooseCommands(root, priorityOf(root));
+    for (const root of roots) await this.addLooseCommands(skillDirectories.get(root) ?? [], priorityOf(root));
   }
 
   list(agent = "shared"): SkillDescriptor[] {
@@ -145,19 +155,40 @@ export class SkillCatalog {
     return resolvedCommand(entry.summary, entry.parsed.template, args);
   }
 
-  private async addSkillsRoot(root: string): Promise<void> {
-    let directories: Dirent<string>[];
-    try {
-      directories = await readdir(root, { withFileTypes: true, encoding: "utf8" });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    for (const entry of directories) {
-      if (!entry.isDirectory() || this.entries.has(entry.name)) continue;
-      const sourcePath = join(root, entry.name, "SKILL.md");
+  /** Every directory below the root that holds a SKILL.md, in the order the
+   * Skills were claimed. A directory without its own SKILL.md is searched
+   * rather than skipped, so a vendored generator output is found where it is. */
+  private async addSkillsRoot(root: string): Promise<string[]> {
+    const found: string[] = [];
+    const visit = async (directory: string, depth: number): Promise<void> => {
+      let directories: Dirent<string>[];
       try {
-        const source = await readFile(sourcePath, "utf8");
+        directories = await readdir(directory, { withFileTypes: true, encoding: "utf8" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      for (const entry of directories) {
+        if (!entry.isDirectory() || SKIPPED_SKILL_DIRECTORIES.has(entry.name)) continue;
+        const skillDirectory = join(directory, entry.name);
+        const sourcePath = join(skillDirectory, "SKILL.md");
+        let source: string | undefined;
+        try {
+          source = await readFile(sourcePath, "utf8");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        if (source === undefined) {
+          // shortcut: six directory levels, raise it if a vendor nests deeper.
+          if (depth < MAX_SKILL_SCAN_DEPTH) await visit(skillDirectory, depth + 1);
+          continue;
+        }
+        found.push(skillDirectory);
+        const existing = this.entries.get(entry.name);
+        if (existing) {
+          if (existing.sourcePath !== sourcePath) this.notes.push(`${entry.name}: also defined at ${sourcePath}; the earlier package wins.`);
+          continue;
+        }
         const metadata = parseSkillMetadata(source, entry.name);
         for (const diagnostic of metadata.diagnostics) this.notes.push(`${entry.name}: ${diagnostic}`);
         this.entries.set(entry.name, {
@@ -167,10 +198,10 @@ export class SkillCatalog {
           description: metadata.description,
           commandIds: []
         });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-    }
+    };
+    await visit(root, 0);
+    return found;
   }
 
   private commandFor(id: string, agent: string): CommandEntry | undefined {
@@ -291,16 +322,9 @@ export class SkillCatalog {
     }
   }
 
-  private async addLooseCommands(root: string, priority: number): Promise<void> {
-    let directories: Dirent<string>[];
-    try {
-      directories = await readdir(root, { withFileTypes: true, encoding: "utf8" });
-    } catch {
-      return;
-    }
-    for (const directory of directories) {
-      if (!directory.isDirectory()) continue;
-      const commandsRoot = join(root, directory.name, "commands");
+  private async addLooseCommands(skillDirectories: readonly string[], priority: number): Promise<void> {
+    for (const directory of skillDirectories) {
+      const commandsRoot = join(directory, "commands");
       let files: Dirent<string>[];
       try {
         files = await readdir(commandsRoot, { withFileTypes: true, encoding: "utf8" });

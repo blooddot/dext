@@ -371,7 +371,7 @@ History 子对话的悬浮操作栏和右键菜单依次提供重命名、分叉
 
 内置 API 从 `dext` 模块导入，始终可用；`import` 就是普通 ESM，因此也可以引入 Node 内置模块、工作区文件、以 `dext/api/<id>` 导入的自定义 API 和 npm 包。只有工作区被 VS Code 标记为受信任后，才会读取外部文件。
 
-Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、`dext.skillDirectories` 设置中的工作区相对目录、Dext 全局存储；同名时靠前的位置优先。`create` 可以在项目或全局范围创建 Skill。
+Skill 是显式的包。`skill({ skill: "name", input })` 加载指定的 `SKILL.md` 并注入当前 Agent 任务。查找顺序为 `<workspace>/.dext/skills`、`<workspace>/.dext/third-party`、`dext.skillDirectories` 设置中的工作区相对目录、Dext 全局存储；同名时靠前的位置优先。`.dext/third-party` 与配置的目录会被递归查找，因此自行生成 Skill 布局的库（`<vendor>/.agents/skills/<id>/SKILL.md`）写在哪个子目录都能被发现；包含 `SKILL.md` 的目录名就是它的 id。`create` 可以在项目或全局范围创建 Skill。
 
 ### 会话级 Skills 与命令
 

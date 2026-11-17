@@ -52,11 +52,12 @@ export interface ResourceEntry {
 }
 
 
-/** The Skill id a canonical `<id>/SKILL.md` entry owns. Other files below a
- * Skill directory are not the Skill itself. */
+/** The Skill id a canonical `<...>/<id>/SKILL.md` entry owns, which is the
+ * directory name the catalog registers. Other files below a Skill directory
+ * are not the Skill itself. */
 export function skillEntryId(entry: Pick<ResourceEntry, "kind" | "path">): string | undefined {
   if (entry.kind !== "skill") return undefined;
-  const match = /^([^/]+)\/SKILL\.md$/.exec(entry.path);
+  const match = /^(?:[^/]+\/)*([^/]+)\/SKILL\.md$/.exec(entry.path);
   return match && isSkillId(match[1]) ? match[1] : undefined;
 }
 

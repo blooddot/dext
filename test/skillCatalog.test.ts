@@ -110,6 +110,44 @@ describe("SkillCatalog", () => {
     expect(catalog.resolveCommand("missing", ["ponytail-review"])).toMatchObject({ status: "unknown" });
   });
 
+  it("finds a vendored library that writes its own nested layout", async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, ".dext", "third-party", "openspec", ".agents", "skills", "openspec-propose"), { recursive: true });
+    await writeFile(join(root, ".dext", "third-party", "openspec", ".agents", "skills", "openspec-propose", "SKILL.md"), "# Propose\nDraft a change proposal\n", "utf8");
+    await mkdir(join(root, ".dext", "third-party", "openspec", "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(root, ".dext", "third-party", "openspec", "node_modules", "pkg", "SKILL.md"), "# Dependency\nNot a vendor skill\n", "utf8");
+    const catalog = new SkillCatalog();
+    await catalog.reload(root);
+    expect(catalog.list()).toMatchObject([{ id: "openspec-propose", title: "Propose" }]);
+    await expect(catalog.load("openspec-propose", root)).resolves.toMatchObject({
+      sourcePath: join(root, ".dext", "third-party", "openspec", ".agents", "skills", "openspec-propose", "SKILL.md")
+    });
+  });
+
+  it("keeps .dext/skills over a vendored duplicate id and reports it", async () => {
+    const root = await tempRoot();
+    await mkdir(join(root, ".dext", "skills", "propose"), { recursive: true });
+    await mkdir(join(root, ".dext", "third-party", "lib", "skills", "propose"), { recursive: true });
+    await writeFile(join(root, ".dext", "skills", "propose", "SKILL.md"), "# Local\n", "utf8");
+    await writeFile(join(root, ".dext", "third-party", "lib", "skills", "propose", "SKILL.md"), "# Vendored\n", "utf8");
+    const catalog = new SkillCatalog();
+    await catalog.reload(root);
+    expect(catalog.list()).toMatchObject([{ id: "propose", title: "Local" }]);
+    expect(catalog.warnings().join(" ")).toMatch(/propose: also defined at/);
+  });
+
+  it("reads a nested skill's own commands directory", async () => {
+    const root = await tempRoot();
+    const skill = join(root, ".dext", "third-party", "lib", "skills", "shipper");
+    await mkdir(join(skill, "commands"), { recursive: true });
+    await writeFile(join(skill, "SKILL.md"), "# Shipper\n", "utf8");
+    await writeFile(join(skill, "commands", "ship.md"), "---\nskill: shipper\n---\n\n# Ship\n\nShip $ARGUMENTS.\n", "utf8");
+    const catalog = new SkillCatalog();
+    await catalog.reload(root);
+    expect(catalog.commands()).toMatchObject([{ id: "ship", skillId: "shipper" }]);
+    expect(catalog.resolveCommand("ship", ["shipper"], "now")).toMatchObject({ status: "ok" });
+  });
+
   it("reports unsupported and missing command files as invalid", async () => {
     const root = await tempRoot();
     await mkdir(join(root, ".dext", "skills", "review"), { recursive: true });

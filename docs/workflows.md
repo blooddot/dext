@@ -383,7 +383,7 @@ Deleting a turn removes Dext's saved input/output record only. It does not erase
 
 Built-in APIs are imported from the `dext` module and are always available; `import` is ordinary ESM, so it also brings in Node built-ins, workspace files, custom APIs as `dext/api/<id>`, and npm packages. External files are not read until VS Code marks the workspace as trusted.
 
-Skills are explicit packages. `skill({ skill: "name", input })` loads the named `SKILL.md` and injects it into the current Agent task. Discovery order is `<workspace>/.dext/skills`, then the workspace-relative directories in the `dext.skillDirectories` setting, then Dext global storage; earlier directories win duplicate names. `create` can place a skill in either scope.
+Skills are explicit packages. `skill({ skill: "name", input })` loads the named `SKILL.md` and injects it into the current Agent task. Discovery order is `<workspace>/.dext/skills`, then `<workspace>/.dext/third-party`, then the workspace-relative directories in the `dext.skillDirectories` setting, then Dext global storage; earlier directories win duplicate names. `.dext/third-party` and the configured directories are searched at any depth, so a library that generates its own Skill layout (`<vendor>/.agents/skills/<id>/SKILL.md`) is found where it writes; the directory name holding `SKILL.md` is the id. `create` can place a skill in either scope.
 
 ### Conversation Skills and commands
 

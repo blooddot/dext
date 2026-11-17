@@ -972,6 +972,7 @@ describe("resource documents", () => {
 describe("skillEntryId", () => {
   it("recognizes only a canonical <id>/SKILL.md entry", () => {
     expect(skillEntryId({ kind: "skill", path: "ponytail/SKILL.md" })).toBe("ponytail");
+    expect(skillEntryId({ kind: "skill", path: "vendor/lib/ponytail/SKILL.md" })).toBe("ponytail");
     expect(skillEntryId({ kind: "skill", path: "ponytail/commands/review.md" })).toBeUndefined();
     expect(skillEntryId({ kind: "skill", path: "bad id/SKILL.md" })).toBeUndefined();
     expect(skillEntryId({ kind: "rule", path: "ponytail/SKILL.md" })).toBeUndefined();
