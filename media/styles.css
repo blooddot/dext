@@ -7,7 +7,10 @@
   --dext-plan-fill: #d4b52c;
   --dext-plan-foreground: #202020;
   --dext-plan-label: #e0c34c;
-  /* Ink for a number chip filled with the warning colour. */
+  /* Annotation marks wear screenshot-tool red: fixed, not themed, so a box drawn
+     on any picture matches what the reader expects from a snip tool. */
+  --dext-mark: #ff3b30;
+  /* Ink for a number chip filled with the mark colour. */
   --dext-mark-foreground: #1e1e1e;
   /* Composer accent for Code mode: the ANSI cyan is too pale on a light theme. */
   --dext-code-accent: #4fc1ff;
@@ -1802,14 +1805,15 @@ body.image-page {
 }
 
 /* Marks are placed with inline left/top, so every kind (region and point) needs
-   the same box the hover and drawing previews use. */
+   the same box the hover and drawing previews use: one border, one weight, so a
+   box looks the same while it is dragged and after it is made. */
 .image-annotator-hover,
 .image-annotator-box,
 .image-annotator-mark {
   position: absolute;
   box-sizing: border-box;
   pointer-events: none;
-  border: 1px solid var(--vscode-focusBorder);
+  border: 2px solid var(--dext-mark);
 }
 
 /* A mark is something you can press to get back to its note, and the dark ring
@@ -1820,31 +1824,23 @@ body.image-page {
   box-shadow: 0 0 0 1px rgb(0 0 0 / 45%);
 }
 
+/* A block you are about to pick is a dashed, filled preview: same weight and
+   colour as a mark, but nobody should mistake it for one that was made. */
 .image-annotator-hover {
   border-style: dashed;
-  background: color-mix(in srgb, var(--vscode-focusBorder) 18%, transparent);
-}
-
-.image-annotator-region {
-  border-color: var(--vscode-editorWarning-foreground, #d7ba7d);
+  background: color-mix(in srgb, var(--dext-mark) 18%, transparent);
 }
 
 .image-annotator-active {
-  border-width: 2px;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-focusBorder) 55%, transparent);
-}
-
-.image-annotator-drawing {
-  border-style: dashed;
 }
 
 .image-annotator-point {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-color: var(--vscode-editorWarning-foreground, #d7ba7d);
   border-radius: 50%;
-  background: var(--vscode-editorWarning-foreground, #d7ba7d);
+  background: var(--dext-mark);
   color: var(--dext-mark-foreground);
   font-size: 12px;
   font-weight: 600;
@@ -1856,7 +1852,7 @@ body.image-page {
   min-width: 16px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--vscode-editorWarning-foreground, #d7ba7d);
+  background: var(--dext-mark);
   color: var(--dext-mark-foreground);
   font-size: 12px;
   font-weight: 600;
@@ -1880,7 +1876,7 @@ body.image-page {
   margin: 0;
 }
 
-/* A point mark is a yellow dot already: its number sits in it without a chip. */
+/* A point mark is a red dot already: its number sits in it without a chip. */
 .image-annotator-point .image-annotator-index {
   min-width: 0;
   padding: 0;

@@ -37,8 +37,8 @@ const CONTEXT_EDGE = 512;
 const CONTEXT_QUALITY = 0.6;
 /** Until a painted frame has been measured, a frame is assumed to be 1/30 s. */
 const DEFAULT_FRAME_MS = 1000 / 30;
-/** Same yellow as the overlay's marks, so a still reads like the paused page did. */
-const MARK_COLOR = "#ffcc00";
+/** Same red as the overlay's marks, so a still reads like the paused page did. */
+const MARK_COLOR = "#ff3b30";
 
 const place = (element: HTMLElement, left: number, top: number, width: number, height: number): void => {
   element.style.left = `${left}px`;
@@ -85,7 +85,7 @@ export class VideoAnnotator {
     this.video.preload = "auto";
     this.stage.className = "video-annotator-stage";
     this.layers.className = "image-annotator-layers";
-    this.preview.className = "image-annotator-box image-annotator-drawing";
+    this.preview.className = "image-annotator-box";
     this.preview.hidden = true;
     this.layers.append(this.preview);
     this.stage.append(this.video, this.layers);

@@ -69,7 +69,7 @@ export class ImageAnnotator {
     this.image.alt = "";
     this.stage.className = "image-annotator-stage";
     this.hover.className = "image-annotator-hover";
-    this.preview.className = "image-annotator-box image-annotator-drawing";
+    this.preview.className = "image-annotator-box";
     this.hover.hidden = true;
     this.preview.hidden = true;
     this.layers.className = "image-annotator-layers";
