@@ -1680,4 +1680,72 @@ describe("Dext result repair", () => {
     expect(response.result).toEqual({ kind: "agent", text: report });
     expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(true);
   });
+
+  it("wraps a narrated business JSON body as the whole message instead of failing", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    // The shape Pi actually returns in the logs: one Chinese sentence plus a
+    // business JSON object that is not a Dext result envelope.
+    const raw = [
+      "我已完成这次改写。",
+      "",
+      "```json",
+      JSON.stringify({ name: "rewrite-section", targetPath: "docs/guide.md", nodes: ["intro", "usage"] }, null, 2),
+      "```"
+    ].join("\n");
+    runtime.setAgentRunner({ run: async () => raw });
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async () => ({ diagnostics: "Result repair is not available for 'Pi'." })
+    });
+    const events: AgentStreamEvent[] = [];
+
+    const response = await runtime.execute(agentCall(false), [], { onAgentEvent: (event) => events.push(event) });
+
+    expect(response.result).toEqual({ kind: "agent", text: raw });
+    expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping")
+      && event.title.includes("does not match the result envelope"))).toBe(true);
+  });
+
+  it("still fails on a meaningless JSON object and keeps both diagnostics", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setAgentRunner({ run: async () => "{}" });
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async () => ({ diagnostics: "Result repair is not available for 'Pi'." })
+    });
+    const events: AgentStreamEvent[] = [];
+
+    await expect(runtime.execute(agentCall(false), [], { onAgentEvent: (event) => events.push(event) }))
+      .rejects.toThrow(/text/i);
+    await expect(runtime.execute(agentCall(false)))
+      .rejects.toThrow(/Raw output \(first 200 characters\):[\s\S]*\{\}/);
+    // Nothing but a JSON body is not an answer written as prose, so the text
+    // fallback must not rescue it.
+    expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(false);
+  });
+
+  it("prefers a repaired envelope over the plain-text fallback", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    const raw = [
+      "已完成。",
+      "```json",
+      JSON.stringify({ name: "rewrite-section", nodes: ["intro"] }),
+      "```"
+    ].join("\n");
+    runtime.setAgentRunner({ run: async () => raw });
+    runtime.setResultRepair({
+      parse: parseAgentResult,
+      repair: async () => ({ result: { kind: "agent", text: "repaired" } })
+    });
+    const events: AgentStreamEvent[] = [];
+
+    const response = await runtime.execute(agentCall(false), [], { onAgentEvent: (event) => events.push(event) });
+
+    expect(response.result).toEqual({ kind: "agent", text: "repaired" });
+    expect(response.result).not.toMatchObject({ text: raw });
+    expect(events.some((event) => event.title?.includes("fell back to plain-text wrapping"))).toBe(false);
+  });
 });

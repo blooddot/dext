@@ -96,6 +96,26 @@ function plainTextAgentResult(
 }
 
 /**
+ * Tells "a message that happens to contain JSON" from "a JSON payload with
+ * nothing else in it". The plain-text fallback exists because an `agent` answer
+ * may be prose; a body that is only a JSON object (optionally in a single fence)
+ * is a malformed envelope with no text answer to salvage, so wrapping it would
+ * turn `{}` into a successful result with the meaningless text `{}`.
+ */
+function jsonOnlyMessage(raw: string): boolean {
+  const trimmed = raw.trim();
+  const fenced = /^```[a-z]*\s*\n?([\s\S]*?)\n?```$/i.exec(trimmed);
+  const body = fenced ? fenced[1]!.trim() : trimmed;
+  if (!body) return false;
+  try {
+    const value: unknown = JSON.parse(body);
+    return typeof value === "object" && value !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A number of MCP servers publish an outputSchema but still serialize the
  * response as a JSON string in content (instead of returning
  * structuredContent). Accept that interoperable wire shape when the text is
@@ -818,10 +838,14 @@ export class DextRuntime implements WorkflowRuntime {
     const parse = this.resultRepair?.parse ?? parseAgentResult;
     const parsed = parse(context.kind, context.raw);
     let diagnostics: string;
+    // One turn gets at most one plain-text attempt: the missing-envelope branch
+    // already makes it, so the envelope-shaped branch must not repeat it.
+    let plainTextAttempted = false;
     if (parsed === undefined) {
       diagnostics = `No '${context.kind}' JSON object could be extracted from the Agent output.`;
       const wrapped = plainTextAgentResult(context.kind, context.raw, context.allowWorkspaceWrite, context.includePatch);
       if (wrapped) {
+        plainTextAttempted = true;
         // A missing envelope is common enough to be worth counting, and this
         // status event is the visible diagnostic that reports it. The fallback
         // is a real result, so it still has to pass the contract below.
@@ -855,28 +879,46 @@ export class DextRuntime implements WorkflowRuntime {
       }
     }
     const repair = this.resultRepair?.repair;
-    if (!repair || !this.canAttemptRepair(context, rawText)) {
-      return this.failAgentResult(context.kind, rawText, diagnostics);
+    if (repair && this.canAttemptRepair(context, rawText)) {
+      const repaired = await repair({
+        kind: context.kind,
+        raw: rawText,
+        diagnostics,
+        contract: context.contract,
+        profile: context.profile,
+        cwd: context.cwd,
+        allowWorkspaceWrite: false,
+        includePatch: context.includePatch,
+        ...(context.signal ? { signal: context.signal } : {}),
+        ...(context.model ? { model: context.model } : {}),
+        ...(context.onEvent ? { onEvent: this.repairEventSink(context.onEvent) } : {})
+      });
+      if (repaired.result) {
+        const inspected = this.ax.inspectOutput(context.contract, repaired.result);
+        if (inspected.success) return inspected.data;
+        diagnostics = `${diagnostics}\nRepair returned invalid output: ${inspected.diagnostics}`;
+      } else if (repaired.diagnostics) {
+        diagnostics = `${diagnostics}\nRepair failed: ${repaired.diagnostics}`;
+      }
     }
-    const repaired = await repair({
-      kind: context.kind,
-      raw: rawText,
-      diagnostics,
-      contract: context.contract,
-      profile: context.profile,
-      cwd: context.cwd,
-      allowWorkspaceWrite: false,
-      includePatch: context.includePatch,
-      ...(context.signal ? { signal: context.signal } : {}),
-      ...(context.model ? { model: context.model } : {}),
-      ...(context.onEvent ? { onEvent: this.repairEventSink(context.onEvent) } : {})
-    });
-    if (repaired.result) {
-      const inspected = this.ax.inspectOutput(context.contract, repaired.result);
-      if (inspected.success) return inspected.data;
-      diagnostics = `${diagnostics}\nRepair returned invalid output: ${inspected.diagnostics}`;
-    } else if (repaired.diagnostics) {
-      diagnostics = `${diagnostics}\nRepair failed: ${repaired.diagnostics}`;
+    // A JSON object that is not the result envelope is exactly as recoverable as
+    // no JSON at all: Pi answers "a sentence plus a business JSON body", and that
+    // whole message is a valid `agent.text`. This runs only after the structured
+    // repair channel had its chance, so codex/claude repairs still win.
+    if (!plainTextAttempted && !jsonOnlyMessage(rawText)) {
+      const wrapped = plainTextAgentResult(context.kind, context.raw, context.allowWorkspaceWrite, context.includePatch);
+      if (wrapped) {
+        const inspected = this.ax.inspectOutput(context.contract, wrapped);
+        if (inspected.success) {
+          context.onEvent?.({
+            phase: "status",
+            text: "",
+            title: "Agent result fell back to plain-text wrapping: the Agent's JSON object does not match the result envelope, so its full message became the result text."
+          });
+          return inspected.data;
+        }
+        diagnostics = `${diagnostics}\nPlain-text wrapping failed validation: ${inspected.diagnostics}`;
+      }
     }
     return this.failAgentResult(context.kind, rawText, diagnostics);
   }
