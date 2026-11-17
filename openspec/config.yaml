@@ -1,32 +1,65 @@
 schema: spec-driven
 
-# Project context (optional)
-# Add only constraints that should guide OpenSpec artifacts and workflows.
-# Include constraints an agent cannot infer by reading the code.
-# Keep general project documentation and discoverable codebase facts out.
-# Example:
-#   context: |
-#     Designs and tasks must cover Windows, macOS, and Linux
-#     Write all artifacts in Spanish
+# Project context — injected into every artifact instruction, and into apply/archive.
+context: |
+  语言（Language）
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always state what is out of scope
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  - 所有产出物的说明性文字使用简体中文：proposal.md、design.md、tasks.md、
+    specs/**/spec.md 的正文（Why / What Changes / Impact / Context / Goals /
+    Decisions / Risks / Migration / Open Questions 的叙述、任务描述、Requirement 与
+    Scenario 的自然语言内容）。
+  - 面向人阅读的叙述一律中文；面向工具解析的结构一律保持英文原文。
+  - 这是本仓库唯一的中文配置入口。Dext 的 `dext.outputLanguage` 只约束对话回复与
+    Plan 文档正文，不覆盖 openspec 产出物，所以语言设定必须落在本文件。
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+  必须逐字保留英文、不得翻译的部分（翻译会让 `openspec validate` 报错或解析错位）
+
+  - 章节标题：`## Why`、`## What Changes`、`## Capabilities`、`## Impact`、
+    `## ADDED Requirements`、`## MODIFIED Requirements`、
+    `## REMOVED Requirements`、`## RENAMED Requirements`
+  - 条目前缀：`### Requirement:`、`#### Scenario:`
+  - Scenario 关键字：`**WHEN**`、`**THEN**`、`**AND**`
+  - RFC 2119 关键字：`SHALL`、`MUST`、`SHOULD`、`MAY`
+  - 复选框与标记：`- [ ]`、`- [x]`、`verify:`
+  - 代码、命令、文件路径、符号名、标识符、枚举值、JSON 键名、capability 目录名
+  - 引用的用户原文与既有文件内容
+
+  Requirement 正文的推荐写法
+
+  中文句子内嵌英文 `SHALL` / `MUST` 大写关键字，例如：
+
+      系统 SHALL 在计划文档中保留两个独立的顶层章节。
+
+  只写“系统必须在计划文档中保留……”会让 `openspec validate --strict` 报
+  "should contain SHALL or MUST"。不要把关键字译成“必须”，也不要用括号补注。
+
+  明确禁止的改写
+
+  - 不要把 `### Requirement:` 写成 `### 需求：`，也不要把 `**WHEN**` / `**THEN**`
+    写成 `**当**` / `**则**`。这类改写会让条目被校验器忽略，最终报
+    "no requirement entries parsed" 与 "Change must have at least one delta"。
+  - 不要翻译 spec 增量里的 capability 目录名（保持 kebab-case 英文）。
+  - 不要在 `## ADDED Requirements` 之下写章节级前言，那段文字不会被 archive 带进主 spec。
+
+# Per-artifact rules
+rules:
+  proposal:
+    - 正文使用简体中文，`## Why`、`## What Changes`、`## Capabilities`、`## Impact` 标题保持英文
+    - Capabilities 中的 capability 名与目录路径保持 kebab-case 英文，其说明文字用中文
+  design:
+    - 正文使用简体中文，`## Context`、`## Goals / Non-Goals`、`## Decisions`、`## Risks / Trade-offs`、`## Migration Plan`、`## Open Questions` 等小节标题保持英文
+    - Mermaid 图的节点文案用中文，但代码块内的标识符、路径与命令保持原文
+    - 表格的表头可用中文，表内出现的类型名、字段名、文件路径保持原文
+  specs:
+    - Requirement 与 Scenario 的说明文字用简体中文，句中内嵌英文 `SHALL` / `MUST`
+    - "`### Requirement:`、`#### Scenario:`、`**WHEN**` / `**THEN**` / `**AND**`、`## ADDED/MODIFIED/REMOVED/RENAMED Requirements` 全部保持英文"
+    - 每个 Requirement 至少包含一个 Scenario，每个 Scenario 至少含一组 WHEN/THEN
+  tasks:
+    - 每条任务用简体中文说明“做什么”，保留 `- [ ]`、层级编号（1.1 / 1.2）与 `verify:` 标记原样
+    - "`verify:` 后只写可直接执行的命令，不写自然语言断言"
+
+# Per-operation guidance
+operations:
+  apply:
+    guidance:
+      - 汇报时区分“已由自动检查验证”与“仍需用户自行验收”，不要把后者写回开发任务清单
