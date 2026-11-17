@@ -249,6 +249,20 @@ describe("global resources panel", () => {
     expect(html).toContain('data-resource-id="skill:global:review/SKILL.md"');
   });
 
+  it("offers install and update buttons when the pack ships scripts, each with its own icon", () => {
+    const skillEntry: ResourceEntry = { ...entry("skill", "propose"), id: "skill:global:propose/SKILL.md", path: "propose/SKILL.md" };
+    const pack = { id: "openspec", name: "openspec", updatable: false, install: true, update: true };
+    const html = renderGlobalResources(buildResourceList({
+      kind: "skill", scope: "global", groupBy: "kind", entries: [{ ...skillEntry, pack }]
+    }));
+    expect(html).toContain('data-resource-command="dext.installSkillPack"');
+    expect(html).toContain('codicon-play');
+    expect(html).toContain('data-resource-command="dext.updateSkillPack"');
+    expect(html).toContain('codicon-refresh');
+    // No GitHub source, so the download action must not appear.
+    expect(html).not.toContain('dext.upgradeSkillPack');
+  });
+
   it("shows an always-visible visibility checkbox on Skill rows and on the pack row", () => {
     const skillEntry = (name: string, hidden = false): ResourceEntry => ({
       ...entry("skill", name),

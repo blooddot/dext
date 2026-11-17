@@ -22,6 +22,10 @@ export interface ResourcePackRef {
   commit?: string;
   /** An installed import with a GitHub source, so it can be updated. */
   updatable: boolean;
+  /** The pack directory ships `install.mjs`, so Dext offers to run it. */
+  install?: boolean;
+  /** The pack directory ships `update.mjs`. */
+  update?: boolean;
 }
 
 

@@ -1,6 +1,8 @@
 /** Skill pack manifests and the human-readable import report. A pack is a
- * plain directory under `.dext/skill-packs/<id>/`. Dext never executes a pack:
- * hook files are copied and recorded, never run. */
+ * plain directory under `.dext/skill-packs/<id>/`. Dext never executes a pack
+ * on its own: hook files are copied and recorded, never run. The single
+ * exception is an `install.mjs` / `update.mjs` beside the manifest, and only
+ * when the user clicks its button and confirms the command. */
 
 export const SKILL_PACKS_DIRECTORY = "skill-packs";
 export const SKILLS_DIRECTORY = "skills";

@@ -196,9 +196,14 @@ export function resourcePackVersion(pack: Pick<ResourcePackRef, "upstreamVersion
 function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[], collapsed: Set<string>, prefix: string): string {
   const node = `Skill/${pack.id}`;
   const version = resourcePackVersion(pack);
-  const action = pack.updatable
-    ? `<span class="resource-group-actions"><button type="button" class="resource-icon-button" data-resource-command="${prefix}.upgradeSkillPack" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Update ${escapeResourceHtml(pack.name)} to the latest GitHub version" aria-label="Update ${escapeResourceHtml(pack.name)}">${resourceIcon("cloud-download")}</button></span>`
-    : "";
+  const iconButton = (command: string, icon: string, title: string) =>
+    `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.${command}" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="${escapeResourceHtml(title)}" aria-label="${escapeResourceHtml(title)}">${resourceIcon(icon)}</button>`;
+  const buttons = [
+    ...(pack.updatable ? [iconButton("upgradeSkillPack", "cloud-download", `Update ${pack.name} to the latest GitHub version`)] : []),
+    ...(pack.install ? [iconButton("installSkillPack", "play", `Run install.mjs for ${pack.name}`)] : []),
+    ...(pack.update ? [iconButton("updateSkillPack", "refresh", `Run update.mjs for ${pack.name}`)] : [])
+  ].join("");
+  const action = buttons ? `<span class="resource-group-actions">${buttons}</span>` : "";
   const skills = entries.flatMap((entry) => (skillEntryId(entry) ? [entry] : []));
   const shown = skills.filter((entry) => !entry.hidden).length;
   const visibility = `<input type="checkbox" class="resource-pack-visibility" data-resource-command="${prefix}.toggleSkillPackVisibility" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Show this pack's Skills in the Input skills menu" aria-label="Show this pack's Skills in the Input skills menu"${shown === skills.length && skills.length ? " checked" : ""}${skills.length ? "" : " disabled"}${shown > 0 && shown < skills.length ? ' data-resource-indeterminate="1"' : ""}>`;

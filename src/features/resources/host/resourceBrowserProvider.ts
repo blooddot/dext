@@ -87,7 +87,7 @@ export class ResourceBrowserProvider extends ResourceEditorProvider {
       // These commands change what this list itself renders. A Skill's visibility
       // does too, but its checkbox already flipped in the page, so re-rendering
       // would only cost a file scan and a visible repaint.
-      const reRendersList = /\.(?:deleteResource|upgradeSkillPack)$/.test(payload.command);
+      const reRendersList = /\.(?:deleteResource|upgradeSkillPack|installSkillPack|updateSkillPack)$/.test(payload.command);
       try {
         const changed = await this.options.onCommand?.(payload.command, parameters);
         if (changed === true && reRendersList) {

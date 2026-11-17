@@ -34,7 +34,7 @@ import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "../runner/dextHost
 import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import { VsCodeContextHost } from "../platform/vscode/contextHost.js";
 import { applyPatchHandler } from "../platform/vscode/patchHost.js";
-import { terminalRunHandler } from "../platform/vscode/terminalHost.js";
+import { execute, terminalRunHandler } from "../platform/vscode/terminalHost.js";
 import { loadEditorTokenTheme } from "../platform/vscode/theme.js";
 import type { SidebarState } from "../platform/webviewProtocol.js";
 
@@ -1190,13 +1190,21 @@ export class DextApplication {
         manifest = normalizeSkillPackManifest(JSON.parse(source) as unknown, id);
       } catch { continue; }
       if (!manifest) continue;
+      const scripts = new Set<string>();
+      try {
+        for (const [name, kind] of await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(directory, id))) {
+          if (kind === vscode.FileType.File && (name === "install.mjs" || name === "update.mjs")) scripts.add(name);
+        }
+      } catch { /* An unreadable pack directory simply offers no button. */ }
       const ref: ResourcePackRef = {
         id,
         name: manifest.name,
         ...(manifest.upstreamVersion ? { upstreamVersion: manifest.upstreamVersion } : {}),
         ...(manifest.releaseTag ? { releaseTag: manifest.releaseTag } : {}),
         ...(manifest.commit ? { commit: manifest.commit } : {}),
-        updatable: Boolean(manifest.source)
+        updatable: Boolean(manifest.source),
+        ...(scripts.has("install.mjs") ? { install: true } : {}),
+        ...(scripts.has("update.mjs") ? { update: true } : {})
       };
       for (const skill of manifest.skills) {
         if (skill.file?.startsWith("skills/")) result.set(skill.file.slice("skills/".length), ref);
@@ -1221,6 +1229,24 @@ export class DextApplication {
       } catch { /* An unreadable pack cannot be updated, but it must not hide the others. */ }
     }
     return packs;
+  }
+
+  /**
+   * Runs a pack's own `install.mjs` or `update.mjs` once the user has seen the
+   * exact command. The click is the only trigger: nothing scans and runs a pack.
+   */
+  async runSkillPackScript(packId: string, script: "install.mjs" | "update.mjs", scope: ResourceScope, confirm: (command: string) => Promise<boolean>): Promise<void> {
+    if (!isSkillPackId(packId)) throw new Error(`Invalid Skill pack id '${String(packId)}'.`);
+    if (!this.workspaceTrusted) throw new Error("Running a Skill pack script requires a trusted local workspace.");
+    const file = vscode.Uri.joinPath(this.resourceBase(scope), "skill-packs", packId, script);
+    try { await vscode.workspace.fs.stat(file); } catch { throw new Error(`Skill pack '${packId}' has no ${script}.`); }
+    const command = `node "${file.fsPath}"`;
+    if (!await confirm(command)) return;
+    const result = await execute(command, this.workspaceRoot, 180_000, {});
+    if (result.kind !== "terminal" || result.status !== "succeeded") {
+      const tail = `${result.stdout}\n${result.stderr}`.trim().split(/\r?\n/).filter(Boolean).slice(-12).join("\n");
+      throw new Error(`${script} failed for '${packId}'${tail ? `:\n${tail}` : "."}`);
+    }
   }
 
   /**

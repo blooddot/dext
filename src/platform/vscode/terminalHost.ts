@@ -95,7 +95,7 @@ function appendLimited(current: string, chunk: Buffer, decoder: StringDecoder): 
   return chunk.length > remaining ? `${current}${value}\n[output truncated]` : current + value;
 }
 
-function execute(command: string, cwd: string, timeoutMs: number, environmentOverrides: Readonly<Record<string, string>>): Promise<TerminalResult> {
+export function execute(command: string, cwd: string, timeoutMs: number, environmentOverrides: Readonly<Record<string, string>>): Promise<TerminalResult> {
   return new Promise((complete, reject) => {
     const started = performance.now();
     const environment = {

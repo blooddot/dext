@@ -176,6 +176,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   const resourceCommandFor = (scope: ResourceScope, dataSource: ResourceEditorDataSource) =>
     async (command: string, payload: { id?: string; kind?: string; pack?: string; path?: string; scope?: ResourcePage }): Promise<void | boolean> => {
+      if (command.endsWith(".installSkillPack") || command.endsWith(".updateSkillPack")) {
+        if (!payload.pack) throw new Error("Select a Skill pack first.");
+        const script = command.endsWith(".installSkillPack") ? "install.mjs" : "update.mjs";
+        await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: `Running ${script} for '${payload.pack}'…`
+        }, async () => await application.runSkillPackScript(payload.pack!, script, scope, async (line) =>
+          await vscode.window.showWarningMessage(`Run ${script} for '${payload.pack}'?`, {
+            modal: true,
+            detail: line
+          }, "Run") === "Run"));
+        await application.reload();
+        return true;
+      }
       if (command.endsWith(".upgradeSkillPack")) {
         if (!payload.pack) throw new Error("Select a Skill pack to update.");
         const result = await vscode.window.withProgress({
