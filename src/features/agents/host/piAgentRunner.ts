@@ -136,6 +136,16 @@ export class PiAgentRunner implements AgentRunner {
       return code === "ENOENT" || code === "ENOTDIR" ? cwd : undefined;
     }
   }
+  /** Pi reports a catalog entry it no longer offers as a bare `set_model`
+   * failure, so point at the one place that fixes a stale model ID. */
+  private async setModel(session: Session, provider: string, id: string, signal: AbortSignal): Promise<unknown> {
+    try { return await session.transport.request("set_model", { provider, modelId: id }, 30000, signal); }
+    catch (error) {
+      if (signal.aborted) throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`${reason} The model may no longer be offered by Pi; refresh the model catalog in Dext: Configure Agent.`);
+    }
+  }
   private async open(request: TurnRequest, command: string, binding: string, signal: AbortSignal, resume?: string, ephemeral = false): Promise<Session> {
     const resources = this.resources(); await mkdir(resources.sessionDirectory, { recursive: true });
     const permission = piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted);
@@ -254,7 +264,7 @@ export class PiAgentRunner implements AgentRunner {
   private async select(session: Session, request: TurnRequest, defaults: PiState, signal: AbortSignal): Promise<void> {
     const model = request.model ? parsePiModelId(request.model) : defaults.model;
     if (!model) throw new Error("No Pi model is configured. Configure a model and authentication in Pi, then refresh Dext.");
-    const selected = stateFrom({ model: await session.transport.request("set_model", { provider: model.provider, modelId: model.id }, 30000, signal) }).model;
+    const selected = stateFrom({ model: await this.setModel(session, model.provider, model.id, signal) }).model;
     if (!selected || piModelId(selected) !== piModelId(model)) throw new Error("Pi did not select the requested model.");
     const levels = piThinkingLevels(piObject(await session.transport.request("get_available_thinking_levels", {}, 30000, signal)).levels);
     const modelKey = `${session.binding}:${piModelId(model)}`;
@@ -292,7 +302,7 @@ export class PiAgentRunner implements AgentRunner {
       const defaults = session.state; this.defaults.set(binding, defaults);
       const models = piModels(piObject(await session.transport.request("get_available_models", {}, 30000, controller.signal)).models);
       const levels = new Map<string, string[]>();
-      if (model) { const selected = parsePiModelId(model); await session.transport.request("set_model", { provider: selected.provider, modelId: selected.id }, 30000, controller.signal); }
+      if (model) { const selected = parsePiModelId(model); await this.setModel(session, selected.provider, selected.id, controller.signal); }
       const current = model || (defaults.model ? piModelId(defaults.model) : undefined);
       if (current) levels.set(current, piThinkingLevels(piObject(await session.transport.request("get_available_thinking_levels", {}, 30000, controller.signal)).levels));
       const result = { options: piModelOptions(models, defaults, levels), defaults: this.presentDefaults(defaults) };

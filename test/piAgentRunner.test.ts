@@ -45,7 +45,10 @@ describe("Pi conversation runner", { timeout: 30000 }, () => {
   });
   it("rejects exhausted retries and starts a healthy process for the next turn", async () => {
     const h = await setup();
-    await expect(h.runner.runConversation(h.request("fixture:retry-fail"))).rejects.toThrow(/503/);
+    const failure = await h.runner.runConversation(h.request("fixture:retry-fail")).then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/503/);
+    expect((failure as Error).message).not.toContain("refresh the model catalog");
     expect(await h.runner.runConversation(h.request("after failure"))).toBe("after failure");
     expect((await h.log()).filter((entry) => entry.startup)).toHaveLength(2);
   });
@@ -140,6 +143,17 @@ describe("Pi conversation runner", { timeout: 30000 }, () => {
     const runner = h.create();
     expect(await runner.runConversation(h.request("next", { metadata: { agentSessionId: "kept", conversationProviderSessionId: encodePiSession({ binding, path }) } }))).toBe("next");
     expect((await h.log()).some((entry) => Array.isArray(entry.startup) && entry.startup.includes("--session"))).toBe(true);
+  });
+  it("points at the model catalog when a stored model is no longer offered", async () => {
+    const h = await setup(), catalog = "refresh the model catalog in Dext: Configure Agent";
+    const turn = await h.runner.runConversation(h.request("hello", { model: "gone/model" })).then(() => undefined, (error: unknown) => error);
+    expect(turn).toBeInstanceOf(Error);
+    expect((turn as Error).message).toContain("Pi set_model failed: Model not found");
+    expect((turn as Error).message).toContain(catalog);
+    const discovery = await h.runner.discoverModels(h.request("").profile, h.root, [], "gone/model", true).then(() => undefined, (error: unknown) => error);
+    expect(discovery).toBeInstanceOf(Error);
+    expect((discovery as Error).message).toContain("Pi set_model failed: Model not found");
+    expect((discovery as Error).message).toContain(catalog);
   });
   it("rejects a missing or external stored session rather than silently resuming latest", async () => {
     const h = await setup(); let stored = "";
