@@ -1,5 +1,6 @@
-import type { AgentStreamEvent, AgentTodoItem } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentTodoItem, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
 import { agentTodoEvent } from "../../agents/domain/agentTodoTracking.js";
+import { identifyPlanAcceptance } from "./planAcceptance.js";
 
 const MARKER = "<!-- dext-todo:";
 
@@ -36,6 +37,35 @@ export function planTodoItems(document: string): AgentTodoItem[] {
   return items;
 }
 
+/** Read the document's `## Acceptance` section: the checks only the user can
+ * perform. It is scanned separately from `## Tasks`, so an acceptance item can
+ * never become a development task and never takes a `plan-*` ID. */
+export function planAcceptanceItems(document: string): PlanAcceptanceItem[] {
+  const entries: { text: string; checked: boolean }[] = [];
+  let sectionLevel = 0;
+  let fence: string | undefined;
+  for (const line of document.split(/\r?\n/)) {
+    const delimiter = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (delimiter) {
+      if (!fence) fence = delimiter;
+      else if (delimiter[0] === fence[0] && delimiter.length >= fence.length) fence = undefined;
+      continue;
+    }
+    if (fence) continue;
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      if (sectionLevel && heading[1]!.length <= sectionLevel) break;
+      if (/^(acceptance|user acceptance|验收|用户验收)$/i.test(heading[2]!)) sectionLevel = heading[1]!.length;
+      continue;
+    }
+    if (!sectionLevel) continue;
+    const item = /^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s+(\S.*)$/.exec(line);
+    if (!item) continue;
+    entries.push({ text: item[2]!, checked: item[1]!.toLowerCase() === "x" });
+  }
+  return identifyPlanAcceptance(entries);
+}
+
 export function planTodoInstruction(items: readonly AgentTodoItem[]): string {
   if (!items.length) return "Use your native plan or task-tracking tool, if available, to publish tasks and update their status as you work.";
   return [
@@ -47,6 +77,8 @@ export function planTodoInstruction(items: readonly AgentTodoItem[]): string {
     "When resuming, verify existing changes before reporting completion. Keep unfinished tasks unfinished if execution stops.",
     'Continue all actionable tasks. For an external blocker, add "blocked":[{"id":"plan-1","reason":"Specific external condition needed"}] to a dext-todo report; do not classify difficult or unfinished work as blocked. Other tasks must continue.',
     'When the host requests final verification, check the implementation and required checks before reporting "verification":"passed" in a dext-todo report. Reopen any tasks that are incomplete. Do not claim verification merely because all boxes are checked.',
+    "User acceptance: the `## Acceptance` checkboxes belong to the user, not to you. Never report an acceptance item through dext-todo, never turn one into a task, and never claim one is confirmed. A report that names an acceptance id is discarded whole, together with the task updates in it.",
+    "In your final response, first state what you implemented and which automated checks passed, then list the acceptance steps the user still has to perform in their own environment.",
     JSON.stringify(items.map(({ id, text, status }) => ({ id, text, status })))
   ].join("\n");
 }

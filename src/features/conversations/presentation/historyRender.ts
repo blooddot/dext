@@ -4,7 +4,7 @@ import { turnChanges, type TurnChange } from "../domain/turnDiff.js";
 import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
 import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
-import type { AgentStreamEvent, DextResult, InputExecutionResponse, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, DextResult, InputExecutionResponse, PlanAcceptanceItem, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession, type DextHistorySummary } from "../contracts/history.js";
 import {
   TURN_RENAME_ACTION, TURN_FORK_ACTION, TURN_COPY_ACTION, TURN_COPY_INPUT_ACTION, TURN_ADD_TO_INPUT_ACTION, TURN_DELETE_ACTION, presentTurn,
@@ -338,7 +338,11 @@ export function historyTurnTitle(record: DextHistoryRecord): string {
   return record.title || historyTurnLabel(record).split(/\r?\n/, 1)[0]!.slice(0, 140);
 }
 
-export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: string): string {
+export function renderHistoryRecord(
+  record: DextHistoryRecord,
+  sessionId?: string,
+  acceptance: readonly PlanAcceptanceItem[] = []
+): string {
   const response = parsedResponse(record);
   const planExecution = response?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
   const executePlan = record.executePlan || !!planExecution;
@@ -351,7 +355,9 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const duration = response?.executions.reduce((total, item) => total + item.durationMs, 0) ?? 0;
   const turn = presentTurn({ durationMs: duration, process: record.process });
   const processView = process(record.process);
-  const todoHtml = renderAgentTodos(latestAgentTodos(record.process)) + inputHistory(record.process);
+  // History is read-only: the same rows render disabled checkboxes, so a
+  // confirmed state stays visible without offering a control that cannot write.
+  const todoHtml = renderAgentTodos(latestAgentTodos(record.process), acceptance) + inputHistory(record.process);
   const outputHtml = record.error
     ? `<pre class="error">${escapeHtml(record.error)}</pre>`
     : response ? output(response) : (renderTurnJson(turnHtmlAdapter, record.output, { html: copyButton(record.output) })?.html
@@ -368,7 +374,7 @@ export function renderHistoryRecord(record: DextHistoryRecord, sessionId?: strin
   const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
-  const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome)}</span>` : "";
+  const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome, acceptance)}</span>` : "";
   const processSummary = historyTurnSection(turn.process, processView.html, {
     ...(processView.copyText ? { action: copyButton(processView.copyText) } : {})
   });
@@ -400,7 +406,22 @@ export interface HistorySessionView {
 }
 
 export function renderHistorySessionBody(session: DextHistorySession): string {
-  return session.turns.map((turn) => renderHistoryRecord(turn, session.id)).join("\n");
+  const progress = session.planProgress;
+  const acceptance = progress?.acceptance ?? [];
+  // Only the newest round of the plan owns the group, matching the live panel:
+  // the same requirement must not appear as two independent checkboxes.
+  const ownerIndex = acceptance.length && progress?.path ? lastPlanTurnIndex(session.turns, progress.path) : -1;
+  return session.turns
+    .map((turn, index) => renderHistoryRecord(turn, session.id, index === ownerIndex ? acceptance : []))
+    .join("\n");
+}
+
+function lastPlanTurnIndex(turns: readonly DextHistoryRecord[], planPath: string): number {
+  let owner = -1;
+  turns.forEach((turn, index) => {
+    if (turn.planPath === planPath) owner = index;
+  });
+  return owner;
 }
 
 export function renderHistorySession(session: DextHistorySession | DextHistorySummary, view: HistorySessionView = {}): string {

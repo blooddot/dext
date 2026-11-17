@@ -119,8 +119,9 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
     sessions: {
       active: () => controller.active(),
       savePlanContext: (sessionId, path, status) => controller.savePlanContext(sessionId, path, status),
-      savePlanProgress: (sessionId, path, todos) => controller.savePlanProgress(sessionId, path, todos),
-      postPlanContext: () => controller.postPlanContext()
+      savePlanProgress: (sessionId, path, todos, acceptance) => controller.savePlanProgress(sessionId, path, todos, acceptance),
+      postPlanContext: () => controller.postPlanContext(),
+      postPlanAcceptance: (sessionId, path, items) => controller.postPlanAcceptance(sessionId, path, items)
     },
     running: (sessionId) => executionRef.coordinator?.running(sessionId) ?? false,
     startTurn: (session, mode, source, planPath, executePlan) => executionRef.coordinator!.execute(session, mode, source, {

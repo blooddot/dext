@@ -449,7 +449,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
           answers.push(execution.result.text);
         }
         const round = planRun.finishRound();
-        if (executionPlanPath) await this.options.plans.saveProgress(session, executionPlanPath, todoProgress.snapshot());
+        if (executionPlanPath) await this.options.plans.saveProgress(session, executionPlanPath, todoProgress.snapshot(), plan.planAcceptance);
         if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");
         if (round) {
           planExecution.planOutcome = round;
@@ -480,7 +480,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       failed = true;
       cancelled = controller.signal.aborted;
       if (todoProgress && executionPlanPath) {
-        await this.options.plans.saveProgress(session, executionPlanPath, todoProgress.snapshot());
+        await this.options.plans.saveProgress(session, executionPlanPath, todoProgress.snapshot(), plan.planAcceptance);
       }
       if (planExecution && controller.signal.aborted) {
         planExecution.planOutcome = { status: "cancelled", reason: "Stopped by user. Plan progress is preserved.", rounds: planRun?.rounds ?? 0 };

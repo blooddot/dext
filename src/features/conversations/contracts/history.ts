@@ -1,5 +1,5 @@
 import type { ResourceDocument, ResourceSession, ResourceTarget } from "../../resources/contracts/resourceSession.js";
-import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 
 /** Persisted conversation shape. This contract is safe to import from the
  * browser bundle: it has no VS Code, filesystem or timer dependency. */
@@ -18,6 +18,14 @@ export interface DextHistoryLimits {
 export const DEFAULT_HISTORY_LIMITS: DextHistoryLimits = { maxTurns: 0, maxOutputLength: 64_000 };
 
 export type PlanStatus = "new" | "active" | "running" | "completed" | "failed";
+
+/** The one progress record per conversation: Agent-owned tasks drive completion,
+ * user-owned acceptance only records what the user has confirmed. */
+export interface PlanProgress {
+  path: string;
+  todos: AgentTodoItem[];
+  acceptance?: PlanAcceptanceItem[];
+}
 
 /** A `/command` invocation captured with the turn so retry and audit can show
  * what template ran without re-resolving it against a changed skill set. */
@@ -79,7 +87,7 @@ export interface DextHistorySession {
   resource?: ResourceSession;
   activePlanPath?: string;
   planStatus?: PlanStatus;
-  planProgress?: { path: string; todos: AgentTodoItem[] };
+  planProgress?: PlanProgress;
   /** Archived conversations remain available but are hidden from the default history view. */
   archivedAt?: number;
 }
@@ -106,7 +114,7 @@ export interface DextHistorySummary {
   resource?: ResourceSessionRef;
   activePlanPath?: string;
   planStatus?: PlanStatus;
-  planProgress?: { path: string; todos: AgentTodoItem[] };
+  planProgress?: PlanProgress;
   providerSessions?: Record<string, string>;
   forkProviderSessions?: Record<string, string>;
   /** Where each turn's truncated text was spilled, keyed by turn id. Kept in
@@ -195,7 +203,7 @@ export interface ConversationHistoryStore {
   renameTurn(sessionId: string, turnId: string, title: string): Promise<boolean>;
   updateResourceContext(sessionId: string, resource: ResourceSession): Promise<void>;
   updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void>;
-  updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void>;
+  updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], acceptance?: readonly PlanAcceptanceItem[]): Promise<void>;
   removeTurn(sessionId: string, turnId: string, providerSessions?: Readonly<Record<string, string>>): Promise<boolean>;
   fork(turns: readonly DextHistoryRecord[], providerSessions?: Readonly<Record<string, string>>): Promise<DextHistorySession>;
   setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void>;

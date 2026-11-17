@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { describe, expect, it, vi } from "vitest";
-import type { InputExecutionResponse } from "../src/shared/contracts/types.js";
+import type { InputExecutionResponse, PlanAcceptanceItem } from "../src/shared/contracts/types.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 import { planExecutionLabel } from "../src/features/conversations/presentation/agentTodoPresentation.js";
 import { readHistoryResponse } from "../src/features/conversations/domain/historyResponse.js";
@@ -14,17 +14,29 @@ const hydration = ts.transpileModule(main.slice(
   main.indexOf("function storedResponse("), main.indexOf("function hydrateOutputTurnOnOpen(")
 ), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
-function hydrate(record: DextHistoryRecord) {
+function hydrate(
+  record: DextHistoryRecord,
+  options: { sessionId?: string; planPath?: string; acceptance?: PlanAcceptanceItem[] } = {}
+) {
   const turn = {
     planExecutionStatus: { hidden: true, textContent: "" },
-    title: { setPlanPath: vi.fn() }, todos: { setRunning: vi.fn() },
+    title: { setPlanPath: vi.fn() }, todos: { setRunning: vi.fn(), setAcceptance: vi.fn() },
     processDisclosure: { open: true }, processMeta: { textContent: "" }, output: { append: vi.fn() }
   };
   const renderResult = vi.fn();
   const renderOutputError = vi.fn();
-  const transcript = { active: undefined };
-  runInNewContext(`${hydration}\nhydrateStoredTurn(record, turn);`, {
-    record, turn, transcript, planExecutionLabel, readHistoryResponse, presentTurn,
+  // The row the Webview created is the only turn of this conversation, so it owns
+  // the acceptance group exactly as it would in the panel.
+  const transcript = { active: undefined, values: () => new Map([["turn", turn]]).values() };
+  const acceptance = options.acceptance ?? [];
+  const sessionId = options.sessionId;
+  const planPath = options.planPath;
+  runInNewContext(`${hydration}\nhydrateStoredTurn(record, turn, sessionId);`, {
+    record, turn, transcript, sessionId, planExecutionLabel, readHistoryResponse, presentTurn,
+    // The Webview mirrors what the host stored; these are the pieces of that
+    // state renderStoredTurn reads.
+    planAcceptanceBySession: new Map(sessionId && planPath && acceptance.length ? [[sessionId, { path: planPath, items: acceptance }]] : []),
+    planLabelStates: new WeakMap(),
     agentStream: undefined, agentRunStartedAt: undefined,
     resetAgentTrace: vi.fn(), renderAgentEvent: vi.fn(),
     withIsolatedAgentTrace: (_turn: unknown, render: () => void) => render(),
@@ -77,5 +89,39 @@ describe("stored Plan turn hydration", () => {
     const view = hydrate({ ...base, input: "Write a plan", response: response(false) });
     expect(view.turn.title.setPlanPath).not.toHaveBeenCalled();
     expect(view.renderResult).toHaveBeenCalledWith(response(false));
+  });
+
+  it("reads the stored acceptance into a finished Plan turn instead of Blocked", () => {
+    const acceptance = [
+      { id: "accept-aaaa", text: "Open the panel", checked: false },
+      { id: "accept-bbbb", text: "Press Build", checked: true }
+    ];
+    const view = hydrate({
+      ...base, executePlan: true, planPath: "plans/build.plan.md",
+      planOutcome: { status: "completed", reason: "fixture", rounds: 2 }, response: response(true)
+    }, { sessionId: "session", planPath: "plans/build.plan.md", acceptance });
+    expect(view.turn.planExecutionStatus.textContent).toBe("Completed · awaiting acceptance");
+    expect(view.turn.planExecutionStatus.textContent).not.toContain("Blocked");
+    expect(view.turn.todos.setAcceptance).toHaveBeenCalledWith(acceptance);
+  });
+
+  it("shows acceptance complete once the user checks the last item", () => {
+    const view = hydrate({
+      ...base, executePlan: true, planPath: "plans/build.plan.md",
+      planOutcome: { status: "completed", reason: "fixture", rounds: 2 }, response: response(true)
+    }, {
+      sessionId: "session", planPath: "plans/build.plan.md",
+      acceptance: [{ id: "accept-aaaa", text: "Open the panel", checked: true }]
+    });
+    expect(view.turn.planExecutionStatus.textContent).toBe("Completed · acceptance complete");
+  });
+
+  it("keeps the original Completed label for a plan without an acceptance section", () => {
+    const view = hydrate({
+      ...base, executePlan: true, planPath: "plans/build.plan.md",
+      planOutcome: { status: "completed", reason: "fixture", rounds: 2 }, response: response(true)
+    }, { sessionId: "session", planPath: "plans/build.plan.md" });
+    expect(view.turn.planExecutionStatus.textContent).toBe("Completed");
+    expect(view.turn.todos.setAcceptance).toHaveBeenCalledWith([]);
   });
 });

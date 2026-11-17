@@ -33,6 +33,9 @@ export interface OutputTurnElements {
   /** The spinner that owns the leading slot while this turn runs. */
   runningIcon: HTMLElement;
   planExecutionStatus?: HTMLElement;
+  /** The plan this turn executed; the Webview only shows the acceptance group on
+   * the turn that owns the conversation's stored progress. */
+  planPath?: string;
   process: HTMLElement;
   processDisclosure: HTMLDetailsElement;
   processMeta?: HTMLElement;
@@ -298,6 +301,7 @@ export class TranscriptView {
       title: turnTitle,
       runningIcon,
       planExecutionStatus,
+      ...(options.planPath ? { planPath: options.planPath } : {}),
       process: process.body,
       processDisclosure: process.disclosure,
       processMeta: process.meta,

@@ -28,6 +28,7 @@ const PLAN_DOCUMENT_SKELETON = [
   "## Files",
   "## Tasks",
   "## Verification",
+  "## Acceptance",
   "## Risks",
   "## Out of scope            (optional)",
   "```",
@@ -42,7 +43,8 @@ export const PLAN_TASKS_RULES = [
   "- Every task is a top-level numbered checkbox such as `1. [ ] Do the thing.` One task per line, each small enough to verify on its own.",
   "- Do not use nested lists, tables, extra checklists, or `##` subheadings inside `## Tasks`. Group tasks under `###` phase headings: the task panel shows one row per phase with its step count, so each heading names the outcome its tasks deliver together. A short single-stage plan may stay flat.",
   "- Leave new tasks unchecked. When revising an existing plan, keep the order and wording of existing tasks and change only what the revision requires.",
-  "- Each task names the file or area it changes and ends with `verify: <command or check>`."
+  "- Each task names the file or area it changes and ends with `verify: <command or check>`.",
+  "- `## Tasks` and each task's `verify:` cover only what the Agent can complete itself: code, tests and executable checks. Anything the user has to confirm by hand belongs in `## Acceptance`, never in `## Tasks`."
 ].join("\n");
 
 /** Conservative Mermaid plus a prose fallback keeps a plan readable in editors
@@ -64,7 +66,7 @@ export const DEFAULT_PLAN_INSTRUCTION = [
   "",
   "How to fill each section:",
   "- `# <short title>` - one specific title for this change.",
-  "- `## Goal` - what is true once the work is done, not the steps to get there. Add testable acceptance criteria when the change has several observable results.",
+  "- `## Goal` - what is true once the work is done, not the steps to get there. Add testable success criteria when the change has several observable results; user-facing hand checks belong in `## Acceptance`.",
   "- `## Context` - the current behaviour, the constraints that shape the change, and the entry points a reader needs. Do not paste whole files.",
   "- `### Assumptions and open questions` - what you assumed, what you could not confirm, and the decision you would make if it stays open. Write `None.` when there is nothing to record.",
   "- `## Design` - the shape of the change. Keep the section and use only the subsections that carry information.",
@@ -72,7 +74,8 @@ export const DEFAULT_PLAN_INSTRUCTION = [
   "- `### Execution flow` - only when there are more than three tasks, or tasks have ordering or parallelism constraints. Show phases, hand-offs and gates; do not repeat the task checklist. Mark parallel branches and blocking gates.",
   "- `### Decisions` - only for consequential choices. Use a table: `Decision | Choice | Why`. Omit routine choices that the task list already makes obvious.",
   "- `## Files` - one line per file to create, modify or delete: path, change type, and why. Group related paths only when the reason is identical.",
-  "- `## Verification` - a table: `Check | Command | Expected`. Use only commands that really exist in this repository (inspect `package.json` and its scripts first). Include targeted checks, the full check, and manual checks when an automated check cannot prove the result.",
+  "- `## Verification` - a table: `Check | Command | Expected`. Use only commands that really exist in this repository (inspect `package.json` and its scripts first). Include targeted checks and the full check. Anything that is not an automated check the Agent can run itself belongs in `## Acceptance`.",
+  "- `## Acceptance` - the checks only the user can perform in their own environment, interface or business system. One unchecked checklist line per check, each starting with `- [ ]` (not numbered) and naming a concrete action plus the result you expect. Write it for the user, not for the Agent: no `verify:` clause, and never a vague line such as `check that it works`.",
   "- `## Risks` - a table: `Risk | Impact | Mitigation`, most important first. For a non-trivial change add a `Rollback:` sentence after the table describing how to undo it.",
   "- `## Out of scope` - optional. List only work a reader might reasonably expect but that this plan deliberately excludes.",
   "",

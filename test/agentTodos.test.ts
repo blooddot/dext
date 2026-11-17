@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { agentTodoEvent, ClaudeTodoTracker, normalizeAgentTodos } from "../src/features/agents/domain/agentTodoTracking.js";
 import { CliAgentRunner, parseClaudeStreamEvents } from "../src/features/agents/host/agentRunner.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
-import { agentTodoProgress, agentTodoRows, latestAgentTodos, renderAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
+import { agentTodoProgress, agentTodoRows, latestAgentTodos, planExecutionLabel, renderAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
+import { planAcceptanceItems, planTodoItems, PlanTodoProgress } from "../src/features/conversations/domain/planTodoProgress.js";
 import { DextHistoryStore } from "../src/features/conversations/host/historyStore.js";
 import { MemoryHistoryBackend } from "./historyBackend.js";
 import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
@@ -147,6 +148,63 @@ describe("agent task progress", () => {
     expect(html).not.toContain('href="javascript:');
     expect(html).toContain("&lt;img");
     expect(html).toContain("<strong>Safe bold</strong>");
+  });
+
+  it("drops a task report whole when it names an acceptance id", () => {
+    const source = "## Tasks\n1. [ ] Implement\n\n## Acceptance\n- [ ] Open the panel and press Build";
+    const tracker = new PlanTodoProgress(planTodoItems(source));
+    const acceptance = planAcceptanceItems(source);
+    const report = `<!-- dext-todo: ${JSON.stringify({ updates: [
+      { id: "plan-1", status: "completed" },
+      { id: acceptance[0]!.id, status: "completed" }
+    ] })} -->`;
+    // An unknown id already makes the report atomic: the same comment's task
+    // update is discarded with it, and the user's list keeps its own state.
+    expect(tracker.consume({ phase: "message", text: report }).some((event) => event.phase === "todo")).toBe(false);
+    expect(tracker.snapshot()[0]?.status).toBe("pending");
+    expect(acceptance[0]?.checked).toBe(false);
+  });
+
+  it("labels a finished plan by the user's acceptance and never as blocked", () => {
+    const acceptance = planAcceptanceItems("## Acceptance\n- [ ] Open the panel\n- [ ] Press Build");
+    const outcome = { status: "completed" as const, reason: "fixture", rounds: 2 };
+    expect(planExecutionLabel([], undefined, outcome, acceptance)).toBe("Completed · awaiting acceptance");
+    expect(planExecutionLabel([], undefined, outcome, acceptance.map((item) => ({ ...item, checked: true }))))
+      .toBe("Completed · acceptance complete");
+    // A plan without the section keeps its original wording.
+    expect(planExecutionLabel([], undefined, outcome)).toBe("Completed");
+    expect(planExecutionLabel([agentTodoEvent([{ id: "plan-1", text: "Inspect", status: "completed" }])], undefined, undefined, acceptance))
+      .toBe("Completed · awaiting acceptance");
+    // Failure wording is untouched by acceptance: nobody may read a failed run as
+    // "waiting for the user".
+    expect(planExecutionLabel([], undefined, { status: "blocked", reason: "auth", rounds: 2 }, acceptance)).toBe("Blocked");
+    expect(planExecutionLabel([], undefined, { status: "incomplete", reason: "stalled", rounds: 3 }, acceptance)).toBe("Incomplete");
+    expect(planExecutionLabel([], "Stopped", { status: "cancelled", reason: "user", rounds: 1 }, acceptance)).toBe("Stopped");
+    expect(planExecutionLabel([], "Failed", undefined, acceptance)).toBe("Failed");
+    expect(planExecutionLabel([], "Failed", undefined, acceptance)).not.toContain("awaiting");
+  });
+
+  it("renders the acceptance group under the tasks with its own count", () => {
+    const acceptance = planAcceptanceItems("## Acceptance\n- [x] Open the panel\n- [ ] Press Build");
+    const html = renderAgentTodos([{ id: "plan-1", status: "completed", text: "Implement" }], acceptance);
+    expect(html).toContain('class="agent-acceptance"');
+    expect(html).toContain("1/2 accepted");
+    expect(html.indexOf("agent-todo-list")).toBeLessThan(html.indexOf("agent-acceptance"));
+    // The development count still owns its own denominator.
+    expect(html).toContain("1/1 completed");
+    expect(html).not.toContain("2/3 completed");
+    expect(html).toContain('data-acceptance-id="' + acceptance[1]!.id + '"');
+    // Only the user's click may change a check, so the static render is read-only.
+    expect(html).toContain("disabled");
+    expect(html).toMatch(/<input class="agent-acceptance-check" type="checkbox" id="acceptance-[^"]+" data-acceptance-id="[^"]+" checked disabled>/);
+    for (const text of ["Open the panel", "Press Build"]) expect(html).toContain(text);
+  });
+
+  it("keeps a plan without acceptance rendering exactly as before", () => {
+    const html = renderAgentTodos([{ id: "plan-1", status: "completed", text: "Implement" }]);
+    expect(html).not.toContain("agent-acceptance");
+    expect(html).toContain("1/1 completed");
+    expect(renderAgentTodos([])).toBe("");
   });
 
   it("persists interrupted progress and renders the last snapshot above Process after reloading", async () => {

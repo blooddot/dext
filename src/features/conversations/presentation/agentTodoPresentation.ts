@@ -1,4 +1,4 @@
-import type { AgentStreamEvent, AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentTodoItem, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import { escapeHtml } from "../../../shared/lib/html.js";
 import { dextMarkdown } from "../../../shared/lib/markdown.js";
 
@@ -10,12 +10,27 @@ const todoMarkdown = dextMarkdown();
 // tasks carry a structured field.
 const TASK_VERIFY = /^(.*\S)\s*verify:\s*(\S.*)$/is;
 
-export function planExecutionLabel(events: readonly AgentStreamEvent[], error?: string, outcome?: PlanExecutionOutcome): string {
+export function planExecutionLabel(
+  events: readonly AgentStreamEvent[],
+  error?: string,
+  outcome?: PlanExecutionOutcome,
+  acceptance: readonly PlanAcceptanceItem[] = []
+): string {
   if (outcome?.status === "cancelled") return "Stopped";
   if (error) return "Failed";
-  if (outcome) return { completed: "Completed", incomplete: "Incomplete", blocked: "Blocked", cancelled: "Stopped" }[outcome.status];
+  // Acceptance qualifies a finished run, never a failed one: unfinished work and
+  // failed checks must not read as "waiting for the user".
+  if (outcome) return outcome.status === "completed"
+    ? acceptanceLabel(acceptance)
+    : { completed: "Completed", incomplete: "Incomplete", blocked: "Blocked", cancelled: "Stopped" }[outcome.status];
   const items = latestAgentTodos(events);
-  return items.length && items.every((item) => item.status === "completed") ? "Completed" : "Incomplete";
+  return items.length && items.every((item) => item.status === "completed") ? acceptanceLabel(acceptance) : "Incomplete";
+}
+
+/** The run itself is over either way; only the user's own confirmation differs. */
+function acceptanceLabel(acceptance: readonly PlanAcceptanceItem[]): string {
+  if (!acceptance.length) return "Completed";
+  return acceptance.every((item) => item.checked) ? "Completed · acceptance complete" : "Completed · awaiting acceptance";
 }
 
 export function latestAgentTodos(events: readonly AgentStreamEvent[]): readonly AgentTodoItem[] {
@@ -72,8 +87,34 @@ function todoRow(item: AgentTodoItem, running: boolean): string {
   return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(task)}${verify ? `<div class="agent-todo-verify">verify: ${escapeHtml(verify[2]!)}</div>` : ""}</div><span class="agent-todo-status">${label}</span></li>`;
 }
 
-export function renderAgentTodos(items: readonly AgentTodoItem[]): string {
-  if (!items.length) return "";
+export function renderAgentTodos(items: readonly AgentTodoItem[], acceptance: readonly PlanAcceptanceItem[] = []): string {
+  if (!items.length && !acceptance.length) return "";
   const progress = agentTodoProgress(items, false);
-  return `<details class="turn-section agent-todos"${progress.complete ? "" : " open"}><summary><i class="disclosure-chevron codicon codicon-chevron-right"></i><span>Todo</span><span class="turn-section-meta disclosure-meta">${progress.label}</span></summary><ul class="turn-section-body agent-todo-list">${agentTodoRows(items, false)}</ul></details>`;
+  // History is read-only, so its checkboxes are rendered disabled rather than
+  // dropped: the confirmed state stays visible without a control to click.
+  const acceptanceHtml = acceptance.length
+    ? `<section class="agent-acceptance" data-acceptance-progress="${escapeHtml(agentAcceptanceProgressLabel(acceptance))}"><div class="agent-acceptance-header"><i class="codicon codicon-checklist" aria-hidden="true"></i><span>Acceptance</span><span class="turn-section-meta">${escapeHtml(agentAcceptanceProgressLabel(acceptance))}</span></div><ul class="agent-acceptance-list">${agentAcceptanceRows(acceptance, { interactive: false })}</ul></section>`
+    : "";
+  return `<details class="turn-section agent-todos"${progress.complete && acceptance.every((item) => item.checked) ? "" : " open"}><summary><i class="disclosure-chevron codicon codicon-chevron-right"></i><span>Todo</span><span class="turn-section-meta disclosure-meta">${progress.label}</span></summary><ul class="turn-section-body agent-todo-list">${agentTodoRows(items, false)}</ul>${acceptanceHtml}</details>`;
+}
+
+/** Each acceptance row pairs a native checkbox with its own label; the `for`
+ * attribute and `data-acceptance-id` hook keep the row addressable after a
+ * re-render. */
+export function agentAcceptanceRows(
+  items: readonly PlanAcceptanceItem[],
+  options: { interactive: boolean }
+): string {
+  return items.map((item) => {
+    const elementId = `acceptance-${item.id}`;
+    const disabled = options.interactive ? "" : " disabled";
+    return `<li class="agent-acceptance-item" data-status="${item.checked ? "completed" : "pending"}"><input class="agent-acceptance-check" type="checkbox" id="${escapeHtml(elementId)}" data-acceptance-id="${escapeHtml(item.id)}"${item.checked ? " checked" : ""}${disabled}><label class="agent-acceptance-text markdown-body" for="${escapeHtml(elementId)}">${todoMarkdown.render(item.text)}</label></li>`;
+  }).join("");
+}
+
+/** The acceptance header count is its own denominator: it never moves the
+ * development task counts the completion decision reads. */
+export function agentAcceptanceProgressLabel(items: readonly PlanAcceptanceItem[]): string {
+  const checked = items.filter((item) => item.checked).length;
+  return `${checked}/${items.length} accepted`;
 }

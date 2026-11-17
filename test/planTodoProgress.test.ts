@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "../src/features/conversations/domain/planTodoProgress.js";
+import { planAcceptanceItems, planTodoItems, planTodoInstruction, PlanTodoProgress, stripPlanTodoProgress } from "../src/features/conversations/domain/planTodoProgress.js";
 import { latestAgentTodos } from "../src/features/conversations/presentation/agentTodoPresentation.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
@@ -60,6 +60,28 @@ describe("plan task progress without native task tools", () => {
       { id: "plan-2", text: "Run targeted tests", status: "pending", group: "Phase 1" },
       { id: "plan-3", text: "Confirm dependencies", status: "completed", group: "Phase 3" }
     ]);
+  });
+
+  it("keeps the development list free of a fenced acceptance section", () => {
+    const mixed = [
+      "## Tasks",
+      "1. [ ] Implement the parser",
+      "2. [ ] Run the checks",
+      "",
+      "## Acceptance",
+      "",
+      "```md",
+      "- [ ] Example the reader copies",
+      "```",
+      "",
+      "- [ ] Open the panel and see the group"
+    ].join("\n");
+    expect(planTodoItems(mixed)).toEqual([
+      { id: "plan-1", text: "Implement the parser", status: "pending" },
+      { id: "plan-2", text: "Run the checks", status: "pending" }
+    ]);
+    // The same document feeds both parsers, and neither sees the other's items.
+    expect(planAcceptanceItems(mixed).map((item) => item.text)).toEqual(["Open the panel and see the group"]);
   });
 
   it("updates explicit status from arbitrarily fragmented progress comments while keeping them out of Process", () => {

@@ -5,14 +5,24 @@ import { createConversationHarness } from "./conversationHarness.js";
 import { PlanController } from "../src/features/conversations/host/planController.js";
 
 const planSource = "## Tasks\n1. [ ] Implement and verify";
+/** The same plan with the user-owned half the panel shows separately. */
+const acceptedPlanSource = [
+  "## Tasks",
+  "1. [ ] Implement and verify",
+  "",
+  "## Acceptance",
+  "",
+  "- [ ] Open the Todo panel and see the acceptance group",
+  "- [ ] Press Build and watch the acceptance count stay at 0/2"
+].join("\n");
 
-async function harness(error?: string) {
+async function harness(error?: string, planText = planSource) {
   const session: DextHistorySession = {
     id: "session", createdAt: 1, updatedAt: 1, turns: [],
     planStatus: "active", activePlanPath: "old.plan.md"
   };
   const harness = createConversationHarness({
-    planText: planSource,
+    planText,
     profiles: [{ id: "codex", provider: "codex", command: "codex", label: "Codex", models: [] }],
     executeConversation: async (_mode: string, _source: string, metadata: ExecutionMetadata): Promise<InputExecutionResponse> => {
       if (error) throw new Error(error);
@@ -55,6 +65,36 @@ describe("Plan composer after execution", () => {
     expect(h.executeConversation).toHaveBeenCalledOnce();
     expect(h.executeConversation.mock.calls[0]?.[1]).toContain("FINAL VERIFICATION");
     expect(h.controller.session("session")?.turns[0]?.planOutcome?.status).toBe("completed");
+  });
+
+  it("accepts a user toggle after the plan completed, and rejects a request the stored plan cannot claim", async () => {
+    const h = await harness(undefined, acceptedPlanSource);
+    await h.run();
+    const session = h.controller.session("session")!;
+    // Completion clears the active target, which is why the check must use the
+    // saved progress path instead.
+    expect(session.activePlanPath).toBeUndefined();
+    expect(session.planStatus).toBe("new");
+    const seeded = (await h.history.sessions())[0]!.planProgress!.acceptance!;
+    expect(seeded.map((item) => [item.text, item.checked])).toEqual([
+      ["Open the Todo panel and see the acceptance group", false],
+      ["Press Build and watch the acceptance count stay at 0/2", false]
+    ]);
+    await h.plans.toggleAcceptance("old.plan.md", seeded[0]!.id, true);
+    expect(h.controller.session("session")?.planProgress).toMatchObject({
+      path: "old.plan.md", acceptance: [{ id: seeded[0]!.id, checked: true }, { id: seeded[1]!.id, checked: false }]
+    });
+    // The host answers a toggle with the state it just persisted.
+    expect(h.messages.filter((message) => message.type === "planAcceptance").at(-1)).toMatchObject({
+      sessionId: "session", planPath: "old.plan.md", items: [{ checked: true }, { checked: false }]
+    });
+    // A reload reads it back from history, not from the turn snapshot.
+    expect((await h.history.sessions())[0]?.planProgress?.acceptance?.map((item) => item.checked)).toEqual([true, false]);
+
+    const before = await h.history.sessions();
+    await expect(h.plans.toggleAcceptance("other.plan.md", seeded[1]!.id, true)).rejects.toThrow("no saved acceptance list");
+    await expect(h.plans.toggleAcceptance("old.plan.md", "accept-missing", true)).rejects.toThrow("not part of this plan");
+    expect(await h.history.sessions()).toEqual(before);
   });
 
   it("stops before another round when the user cancels, preserving partial progress", async () => {
@@ -144,7 +184,8 @@ describe("Plan composer after execution", () => {
         active: () => session,
         savePlanContext: async (_id, _path, status) => { statuses.push(status); },
         savePlanProgress: async () => undefined,
-        postPlanContext: async () => undefined
+        postPlanContext: async () => undefined,
+        postPlanAcceptance: async () => undefined
       },
       running: () => false,
       startTurn: async () => { throw new Error("Wait for this conversation's current Dext turn to finish."); }

@@ -12,7 +12,8 @@ describe("conversation protocol", () => {
     expect(types).toContain("agentSelection");
     expect(types).toContain("correctPlan");
     expect(types).toContain("composerDraft");
-    expect(types).toHaveLength(25);
+    expect(types).toContain("togglePlanAcceptance");
+    expect(types).toHaveLength(26);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 
@@ -26,6 +27,7 @@ describe("conversation protocol", () => {
       { type: "stopExecution", turnId: "turn" },
       { type: "buildPlan", planPath: ".dext/plans/a.plan.md" },
       { type: "correctPlan", planPath: ".dext/plans/a.plan.md" },
+      { type: "togglePlanAcceptance", planPath: ".dext/plans/a.plan.md", itemId: "accept-0123abcd", checked: true },
       { type: "selectConversation", sessionId: "session" },
       { type: "moveConversation", sessionId: "a", beforeSessionId: null },
       { type: "pinConversation", sessionId: "a", pinned: true },
@@ -44,6 +46,9 @@ describe("conversation protocol", () => {
     expect(webviewRequestSchema.safeParse({ type: "executeChat", message: "hello" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "executeInput", source: "hello" }).success).toBe(false);
     // Ownership and bounds are unchanged.
+    expect(webviewRequestSchema.safeParse({ type: "togglePlanAcceptance", planPath: "a.plan.md", itemId: "accept-1" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "togglePlanAcceptance", planPath: "", itemId: "accept-1", checked: true }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "togglePlanAcceptance", planPath: "a.plan.md", itemId: "x".repeat(129), checked: true }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "renameTurn", turnId: "turn" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "selectConversation", sessionId: "" }).success).toBe(false);
     expect(webviewRequestSchema.safeParse({ type: "resolvePatch", turnId: "turn", uris: [""], accept: true }).success).toBe(false);

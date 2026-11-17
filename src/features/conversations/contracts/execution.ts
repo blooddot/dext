@@ -8,6 +8,7 @@ import type {
   AgentTodoItem,
   ExecutionMetadata,
   InputExecutionResponse,
+  PlanAcceptanceItem,
   PlanExecutionOutcome,
   UiInteraction
 } from "../../../shared/contracts/types.js";
@@ -88,7 +89,7 @@ export interface ConversationSessionPort {
   session: (sessionId: string) => DextHistorySession | undefined;
   recordTurn: (sessionId: string, turn: DextHistoryRecord) => void;
   saveProviderSessions: (session: DextHistorySession) => Promise<void>;
-  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[]) => Promise<void>;
+  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[], acceptance?: readonly PlanAcceptanceItem[]) => Promise<void>;
   savePlanContext: (sessionId: string, path: string | undefined, status: NonNullable<DextHistorySession["planStatus"]>) => Promise<void>;
   saveResource: (session: DextHistorySession) => Promise<void>;
   postConversationState: () => Promise<void>;

@@ -734,6 +734,29 @@ describe("Dext history rendering", () => {
     expect(renderHistoryRecord(turns[0]!)).not.toContain("data-vscode-context");
   });
 
+  it("renders the stored acceptance read-only in the History page", () => {
+    const planTurn: DextHistoryRecord = {
+      id: "build", createdAt: 1, input: "INTERNAL_PLAN_PROMPT", process: [], output: "Finished",
+      mode: "plan", executePlan: true, planPath: "plans/build.plan.md",
+      planOutcome: { status: "completed", reason: "fixture", rounds: 2 }
+    };
+    const acceptance = [
+      { id: "accept-aaaa", text: "Open the panel", checked: true },
+      { id: "accept-bbbb", text: "Press Build", checked: false }
+    ];
+    const html = renderHistorySession({
+      id: "session", createdAt: 1, updatedAt: 2, turns: [planTurn],
+      planProgress: { path: "plans/build.plan.md", todos: [], acceptance }
+    });
+    expect(html).toContain("Open the panel");
+    expect(html).toContain("Press Build");
+    expect(html).toContain('data-acceptance-id="accept-aaaa"');
+    expect(html).toContain("1/2 accepted");
+    expect(html).toContain('<span class="plan-status">Completed · awaiting acceptance</span>');
+    // History never writes back, so its checkboxes are disabled, not interactive.
+    expect(html.match(/<input class="agent-acceptance-check"[^>]*disabled>/g)).toHaveLength(2);
+  });
+
   it("marks a favorite conversation for both the reader and the context menu", () => {
     const session = {
       id: "session-1",

@@ -78,15 +78,16 @@ function harness() {
   const turn = {
     disclosure: new Disclosure(),
     processDisclosure: { open: true }, processMeta: { textContent: "" },
-    todos: { setRunning: vi.fn() }, output: { append: vi.fn() }, hydrated: false
+    todos: { setRunning: vi.fn(), setAcceptance: vi.fn() }, output: { append: vi.fn() }, hydrated: false
   };
   const record = { input: "Historical input", output: "Historical answer", process: [{ phase: "message", id: "shared", text: "Historical trace" }] as AgentStreamEvent[] };
-  const liveTurn = { todos: { setRunning: vi.fn() } };
+  const liveTurn = { todos: { setRunning: vi.fn(), setAcceptance: vi.fn() } };
   const trace = new TraceStub();
   trace.queue.push(liveItem);
   const transcript = {
     active: liveTurn,
-    get: vi.fn((turnId: string) => turnId === "history" ? turn : undefined)
+    get: vi.fn((turnId: string) => turnId === "history" ? turn : undefined),
+    values: () => [liveTurn, turn].values()
   };
   const state = {
     agentStream: { live: true }, agentRunStartedAt: 100, agentRunTimer: 42,
@@ -96,6 +97,8 @@ function harness() {
   const context = {
     readHistoryResponse, presentTurn, renderTurnResult, turnDomAdapter, formatDuration, formatTurnTokenUsage,
     ...state, turn, record, executing: true, trace, transcript,
+    // The Webview's acceptance cache and plan-label state, mirroring the host.
+    planAcceptanceBySession: new Map(), planLabelStates: new WeakMap(),
     browser: { activeId: "session" },
     scroll: { consumeForcedInitialScroll: () => false, setFollowing: vi.fn(), pin: vi.fn() },
     elements: { result: { append: vi.fn() }, resultSection: { classList: { remove: vi.fn() } } },

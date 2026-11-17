@@ -77,6 +77,35 @@ describe("plan continuation decisions", () => {
     run.beginRound(); report(run, { updates: [{ id: "unknown", status: "completed" }], verification: "passed" });
     expect(run.progress.verified).toBe(false); expect(run.finishRound()).toBeUndefined();
   });
+  it("keeps acceptance independent of the completion decision", () => {
+    // Acceptance is not an input to PlanExecution at all: an unchecked user item
+    // must neither block the run nor start another round.
+    const run = new PlanExecution(tasks());
+    run.beginRound();
+    report(run, { updates: tasks().map((task) => ({ id: task.id, status: "completed" })) });
+    expect(run.finishRound()).toBeUndefined();
+    run.beginRound();
+    report(run, { verification: "passed" });
+    expect(run.finishRound()).toMatchObject({ status: "completed" });
+    expect(run.prompt("plan")).toContain("## Acceptance");
+  });
+
+  it("never completes a run whose verification failed or whose tasks remain", () => {
+    const run = new PlanExecution(tasks());
+    run.beginRound();
+    report(run, { updates: [{ id: "plan-1", status: "completed" }, { id: "plan-2", status: "completed" }] });
+    // Tasks are all checked but verification was never reported: the round asks
+    // for it rather than claiming completion.
+    expect(run.finishRound()).toBeUndefined();
+    run.beginRound();
+    report(run, { updates: [{ id: "plan-2", status: "in_progress" }], verification: "passed" });
+    expect(run.finishRound()?.status).not.toBe("completed");
+    const blocked = new PlanExecution(tasks());
+    blocked.beginRound();
+    report(blocked, { blocked: [{ id: "plan-1", reason: "Needs a signed-in browser" }, { id: "plan-2", reason: "Needs the same account" }] });
+    expect(blocked.finishRound()?.status).toBe("blocked");
+  });
+
   it("preserves progress by task id even when the wording changed", () => {
     const prior = tasks().map((task) => ({ ...task, status: "completed" as const }));
     expect(resumePlanTodos(tasks(), prior).every((task) => task.status === "completed")).toBe(true);

@@ -242,6 +242,58 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
 .agent-todo-group > details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
 .agent-todo-group > details > .agent-todo-list { padding-inline-start: 24px; }
 
+/* The acceptance group is its own block under the Agent's task list: a separate
+   header with its own count keeps "the Agent finished" and "the user confirmed"
+   from ever reading as one number. */
+.agent-acceptance {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-widget-border, color-mix(in srgb, var(--vscode-foreground) 14%, transparent));
+}
+.agent-acceptance[hidden] { display: none; }
+.agent-acceptance-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+.agent-acceptance-header > .codicon { flex: 0 0 16px; }
+.agent-acceptance-header > .turn-section-meta { margin-inline-start: auto; font-variant-numeric: tabular-nums; }
+.agent-acceptance-list { list-style: none; margin: 0; padding: 0; }
+.agent-acceptance-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 3px 0;
+  padding: 4px 0;
+}
+/* The checkbox owns the same 16px column the task glyphs use, so the two groups
+   read as one panel. */
+.agent-acceptance-check {
+  flex: 0 0 16px;
+  width: 14px;
+  height: 14px;
+  margin: 3px 0 0;
+  accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
+  cursor: pointer;
+}
+.agent-acceptance-check:disabled { cursor: default; }
+.agent-acceptance-text.markdown-body {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  cursor: pointer;
+}
+.agent-acceptance-item[data-status="completed"] .agent-acceptance-text { color: var(--vscode-descriptionForeground); }
+.agent-acceptance-check:disabled + .agent-acceptance-text { cursor: default; }
+.agent-acceptance-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
+.agent-acceptance-text.markdown-body code { font-size: 12px; }
+.agent-acceptance-check:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+
 /* Same shape as the workbench's connected tab strip: the whole bar is one band of
    `editorGroupHeader.connectedTabsBackground`, idle tabs are only their labels,
    and the open conversation is the one white chip with two rounded top corners. */

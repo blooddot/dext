@@ -396,6 +396,15 @@ export interface AgentTodoItem {
   group?: string;
 }
 
+/** One line of a Plan's `## Acceptance` section. These items belong to the user:
+ * the Agent never reports them, and they never enter the development task list
+ * that drives completion, so `checked` only changes from a user's click. */
+export interface PlanAcceptanceItem {
+  id: string;
+  text: string;
+  checked: boolean;
+}
+
 export type AgentToolKind = "command" | "file" | "image" | "step";
 
 /** Token counts reported by a provider for one completed agent turn. Cached

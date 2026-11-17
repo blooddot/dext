@@ -35,6 +35,27 @@ describe("DextHistoryStore", () => {
     });
     expect((await memoryStore(backend).sessions())[0]?.turns[0]?.planOutcome?.status).toBe("incomplete");
   });
+  it("persists user acceptance beside the tasks and keeps it across reloads", async () => {
+    const backend = new MemoryHistoryBackend();
+    const store = memoryStore(backend);
+    const todos = [{ id: "plan-1", text: "Implement", status: "completed" as const }];
+    const acceptance = [
+      { id: "accept-aaaaaaaa", text: "Open the panel", checked: true },
+      { id: "accept-bbbbbbbb", text: "Press Build", checked: false }
+    ];
+    await store.updatePlanProgress("s", "a.plan.md", todos, acceptance);
+    const restored = (await memoryStore(backend).sessions())[0]!;
+    expect(restored.planProgress?.acceptance).toEqual(acceptance);
+    expect(restored.planProgress?.acceptance?.filter((item) => item.checked)).toHaveLength(1);
+    // A round only writes tasks, so the user's checks must survive that write.
+    await store.updatePlanProgress("s", "a.plan.md", [...todos, { id: "plan-2", text: "Ship", status: "pending" }]);
+    expect((await store.sessions())[0]?.planProgress?.acceptance).toEqual(acceptance);
+    // Another conversation keeps its own list untouched.
+    await store.updatePlanProgress("other", "b.plan.md", []);
+    await store.updatePlanProgress("s", "a.plan.md", todos, [{ id: "accept-aaaaaaaa", text: "Open the panel", checked: true }, { id: "accept-bbbbbbbb", text: "Press Build", checked: true }]);
+    expect((await store.sessions()).find((session) => session.id === "other")?.planProgress?.acceptance).toBeUndefined();
+    expect((await store.sessions()).find((session) => session.id === "s")?.planProgress?.acceptance?.map((item) => item.checked)).toEqual([true, true]);
+  });
   it("retains Plan execution identity after success, cancellation and reload without changing the input", async () => {
     const backend = new MemoryHistoryBackend();
     const store = memoryStore(backend);

@@ -2,7 +2,7 @@ import type { ResourceSession } from "../../resources/contracts/resourceSession.
 import { publicInteractionState } from "../presentation/uiInteractionPresentation.js";
 import { normalizeHistoryResponse } from "../domain/historyResponse.js";
 import { compactAgentEvents } from "../domain/agentEventLog.js";
-import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
 import { normalizeInputReferenceSource } from "../../workspace/domain/fileReference.js";
 import {
   DEFAULT_HISTORY_LIMITS,
@@ -189,11 +189,17 @@ export class DextHistoryStore implements ConversationHistoryStore {
     });
   }
 
-  async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void> {
+  async updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], acceptance?: readonly PlanAcceptanceItem[]): Promise<void> {
     await this.mutate(async () => {
       const summary = this.summary(sessionId)
         ?? { id: sessionId, createdAt: Date.now(), updatedAt: Date.now(), turnCount: 0, activePlanPath: path, planStatus: "running" as const };
-      summary.planProgress = { path, todos: todos.map((item) => ({ ...item })) };
+      // A round only writes tasks. Keeping the stored acceptance unless this call
+      // carries one is what stops a running turn from erasing a user's clicks.
+      const kept = acceptance ?? summary.planProgress?.acceptance;
+      summary.planProgress = {
+        path, todos: todos.map((item) => ({ ...item })),
+        ...(kept ? { acceptance: kept.map((item) => ({ ...item })) } : {})
+      };
       await this.backend.writeMeta(summary);
     });
   }

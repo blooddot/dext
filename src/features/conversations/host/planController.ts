@@ -1,6 +1,7 @@
 import { PlanExecution, resumePlanTodos } from "../domain/planExecution.js";
-import { planTodoItems, planTodoInstruction, type PlanTodoProgress } from "../domain/planTodoProgress.js";
-import type { AgentTodoItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import { planAcceptanceItems, planTodoItems, planTodoInstruction, type PlanTodoProgress } from "../domain/planTodoProgress.js";
+import { mergePlanAcceptance, togglePlanAcceptance } from "../domain/planAcceptance.js";
+import type { AgentTodoItem, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import type { DextHistorySession, PlanStatus } from "../contracts/history.js";
 
 /** The host capabilities plan work needs. Reading the actual file is a port so
@@ -16,8 +17,11 @@ export interface PlanFileHost {
 export interface PlanSessionPort {
   active: () => DextHistorySession;
   savePlanContext: (sessionId: string, path: string | undefined, status: PlanStatus) => Promise<void>;
-  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[], documentHash?: string) => Promise<void>;
+  savePlanProgress: (sessionId: string, path: string, todos: readonly AgentTodoItem[], acceptance?: readonly PlanAcceptanceItem[]) => Promise<void>;
   postPlanContext: () => Promise<void>;
+  /** Answers a user toggle with the state the host just persisted, so the panel
+   * never keeps a checkbox the host rejected. */
+  postPlanAcceptance: (sessionId: string, path: string, items: readonly PlanAcceptanceItem[]) => Promise<void>;
 }
 
 export interface PlanControllerOptions {
@@ -36,12 +40,18 @@ export interface PlanRunContext {
   executionPlanPath?: string;
   planRun?: PlanExecution;
   todoProgress?: PlanTodoProgress;
+  /** The user's acceptance list for this run. It never feeds completion. */
+  planAcceptance?: PlanAcceptanceItem[];
   planExecution?: { executePlan: boolean; planPath?: string; planOutcome?: PlanExecutionOutcome };
 }
 
 /** Plan files, progress and status. The turn loop stays in the execution
  * coordinator; this controller decides what the plan round should see. */
 export class PlanController {
+  /** The last acceptance state published per conversation, so a round that
+   * writes tasks does not resend an unchanged list. */
+  private readonly publishedAcceptance = new Map<string, string>();
+
   constructor(private readonly options: PlanControllerOptions) {}
 
   startRun(session: DextHistorySession, source: string, executePlan: boolean, executionPlanPath: string | undefined): PlanRunContext {
@@ -51,10 +61,16 @@ export class PlanController {
       ? session.planProgress.todos
       : previousPlan ? [...previousPlan.process].reverse().find((event) => event.phase === "todo")?.todos ?? [] : [];
     const planRun = new PlanExecution(resumePlanTodos(planTodoItems(source), previousTodos));
+    // Acceptance identity is derived from the wording, so reordering the section
+    // keeps each check on its own requirement.
+    const storedAcceptance = session.planProgress && session.planProgress.path === executionPlanPath
+      ? session.planProgress.acceptance ?? []
+      : [];
     return {
       ...(executionPlanPath ? { executionPlanPath } : {}),
       planRun,
       todoProgress: planRun.progress,
+      planAcceptance: mergePlanAcceptance(planAcceptanceItems(source), storedAcceptance),
       planExecution: { executePlan: true, ...(executionPlanPath ? { planPath: executionPlanPath } : {}) }
     };
   }
@@ -125,9 +141,48 @@ export class PlanController {
     await this.options.sessions.postPlanContext();
   }
 
-  async saveProgress(session: DextHistorySession, executionPlanPath: string, todos: readonly AgentTodoItem[]): Promise<void> {
-    session.planProgress = { path: executionPlanPath, todos: [...todos] };
-    await this.options.sessions.savePlanProgress(session.id, executionPlanPath, todos);
+  async saveProgress(
+    session: DextHistorySession,
+    executionPlanPath: string,
+    todos: readonly AgentTodoItem[],
+    seeded?: readonly PlanAcceptanceItem[]
+  ): Promise<void> {
+    // A round only reports tasks; the same plan's acceptance keeps its state, so
+    // checks made while the turn runs survive each write. The first write of a
+    // run falls back to the list the document seeded.
+    const stored = session.planProgress?.path === executionPlanPath ? session.planProgress.acceptance : undefined;
+    const acceptance = stored ?? seeded;
+    session.planProgress = { path: executionPlanPath, todos: [...todos], ...(acceptance ? { acceptance: [...acceptance] } : {}) };
+    await this.options.sessions.savePlanProgress(session.id, executionPlanPath, todos, acceptance);
+    // The panel needs the seeded list before the run ends, so a user can start
+    // confirming while a long plan is still working through its tasks.
+    if (acceptance?.length) {
+      const signature = JSON.stringify([executionPlanPath, acceptance]);
+      if (this.publishedAcceptance.get(session.id) !== signature) {
+        this.publishedAcceptance.set(session.id, signature);
+        await this.options.sessions.postPlanAcceptance(session.id, executionPlanPath, acceptance);
+      }
+    }
+  }
+
+  /** Only the user can move acceptance, so this path validates the plan the
+   * stored progress belongs to. `activePlanPath` is deliberately not used: it is
+   * cleared when a plan completes, which is exactly when acceptance is checked. */
+  async toggleAcceptance(planPath: string, itemId: string, checked: boolean): Promise<void> {
+    const session = this.options.sessions.active();
+    const progress = session.planProgress;
+    if (!progress || progress.path !== planPath) {
+      throw new Error(`Plan '${planPath}' has no saved acceptance list.`);
+    }
+    const items = progress.acceptance ?? [];
+    if (!items.some((item) => item.id === itemId)) {
+      throw new Error(`Acceptance item '${itemId}' is not part of this plan.`);
+    }
+    const next = togglePlanAcceptance(items, itemId, checked);
+    session.planProgress = { path: progress.path, todos: progress.todos, acceptance: next };
+    await this.options.sessions.savePlanProgress(session.id, planPath, progress.todos, next);
+    this.publishedAcceptance.set(session.id, JSON.stringify([planPath, next]));
+    await this.options.sessions.postPlanAcceptance(session.id, planPath, next);
   }
 
   /** A stopped plan keeps its progress; a completed one clears the target. */

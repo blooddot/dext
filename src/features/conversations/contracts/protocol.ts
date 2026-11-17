@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AgentStreamEvent, InputExecutionResponse, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, InputExecutionResponse, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import { UI_LIMITS, uiFormResultSchema } from "../../../shared/contracts/uiForm.js";
 import type { AgentSelection } from "../../agents/contracts/agent.js";
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
@@ -49,6 +49,12 @@ const conversationSchemaList = [
     type: z.literal("openTurnDiff"), sessionId: z.string().min(1), turnId: z.string().min(1), path: z.string().min(1).optional()
   }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
+  z.object({
+    type: z.literal("togglePlanAcceptance"),
+    planPath: z.string().min(1).max(512),
+    itemId: z.string().min(1).max(128),
+    checked: z.boolean()
+  }),
   z.object({ type: z.literal("correctPlan"), planPath: z.string().min(1).max(512) }),
   z.object({ type: z.literal("choosePlan") }),
   z.object({ type: z.literal("newConversation") }),
@@ -122,6 +128,9 @@ export type ConversationWebviewResponse =
     hostInitiated?: true;
   }
   | { type: "planContext"; path?: string; status: PlanStatus }
+  /** The host's acceptance state after a user toggle, keyed by the plan it
+   * belongs to so every visible matching turn can re-render. */
+  | { type: "planAcceptance"; sessionId: string; planPath: string; items: PlanAcceptanceItem[] }
   | {
     type: "composerDrafts";
     /** Drafts kept for a hidden, reloaded or restarted Webview. The attachment

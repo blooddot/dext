@@ -70,6 +70,8 @@ function harness(stored: DextHistorySession, visibleIds: string[]) {
     outputTurns, agentRunTimer: undefined, clearInterval: vi.fn(),
     elements: { result: { replaceChildren: vi.fn(), append: vi.fn() }, resultSection: { classList: { remove: vi.fn() } }, resultBody: { dataset: {} } },
     cacheRenderedConversation: vi.fn(), restoreCachedAgentRenders: vi.fn(), clearInputError: vi.fn(),
+    // The Webview's mirror of the host's acceptance state; not part of this test.
+    storePlanAcceptance: vi.fn(), setPlanLabel: vi.fn(),
     finishConversationLoading: vi.fn(), syncJumpToLatest: vi.fn(), scrollResultToBottom: vi.fn(),
     requestAnimationFrame: (callback: () => void) => callback(), setTimeout: (callback: () => void) => callback(),
     hydrateStoredTurn: vi.fn()

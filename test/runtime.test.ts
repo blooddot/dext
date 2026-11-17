@@ -1029,6 +1029,7 @@ describe("Dext runtime", () => {
       "## Files",
       "## Tasks",
       "## Verification",
+      "## Acceptance",
       "## Risks",
       "## Out of scope"
     ]) {
@@ -1036,6 +1037,15 @@ describe("Dext runtime", () => {
     }
     expect(request.input).toContain("`mermaid`");
     expect(request.input).toContain("top-level numbered checkbox");
+    // User acceptance is its own section right after Verification, so a hand
+    // check never looks like an Agent task or an automated check.
+    expect(request.input.indexOf("## Verification")).toBeLessThan(request.input.indexOf("## Acceptance"));
+    expect(request.input.indexOf("## Acceptance")).toBeLessThan(request.input.indexOf("## Risks"));
+    expect(request.input).toContain("naming a concrete action");
+    expect(request.input).toContain("the result you expect");
+    expect(request.input).toContain("belongs in `## Acceptance`");
+    expect(request.input).not.toContain("manual checks when an automated check cannot prove the result");
+    expect(request.input).not.toContain("testable acceptance criteria");
     expect(request.input).toContain("Do not use nested lists");
     // The document body follows the setting; when none is configured the model
     // follows the user's own language. Headings keep their protocol language.

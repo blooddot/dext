@@ -20,6 +20,8 @@ import type {
   AgentStreamEvent,
   AgentTokenUsage,
   InputExecutionResponse,
+  PlanAcceptanceItem,
+  PlanExecutionOutcome,
   RuntimeResponse,
   WorkflowStepResponse
 } from "../shared/contracts/types.js";
@@ -174,6 +176,18 @@ const elements = {
 const browser = new ConversationBrowser();
 const drafts = new ComposerDraftStore();
 const queuedTurns = new QueuedTurns();
+/** The user-owned acceptance list each conversation has stored. The host owns it:
+ * this cache only mirrors `planProgress`, so a toggle the host rejects cannot stay
+ * visible in the panel. */
+const planAcceptanceBySession = new Map<string, { path: string; items: PlanAcceptanceItem[] }>();
+/** What produced a visible turn's plan label, kept so an acceptance toggle can
+ * recompute the label without re-parsing the stored turn. */
+const planLabelStates = new WeakMap<OutputTurnElements, {
+  sessionId: string | undefined;
+  events: readonly AgentStreamEvent[];
+  error?: string;
+  outcome?: PlanExecutionOutcome;
+}>();
 /** The turn the turn-stepping controls treat as current. It follows explicit
  * navigation or an expansion the reader performs, and falls back to the active
  * turn after a conversation is rebuilt. */
@@ -393,7 +407,14 @@ const transcript = new TranscriptView({
   openSpill: (sessionId, turnId) => vscode.postMessage({ type: "openSpillFile", sessionId, turnId }),
   openTurnDiff: (sessionId, turnId, path) =>
     vscode.postMessage({ type: "openTurnDiff", sessionId, turnId, ...(path ? { path } : {}) }),
-  createTodos: () => new AgentTodoView(),
+  createTodos: () => new AgentTodoView((itemId, checked) => {
+    // Only one plan's acceptance is cached per conversation, and only its owner
+    // row renders checkboxes, so this path is what the click belongs to.
+    const sessionId = browser.activeId;
+    const planPath = sessionId ? planAcceptanceBySession.get(sessionId)?.path : undefined;
+    if (!sessionId || !planPath) return;
+    vscode.postMessage({ type: "togglePlanAcceptance", planPath, itemId, checked });
+  }),
   createQuestions: (turnId, sessionId) => createTurnQuestions(turnId, sessionId),
   openReference: (reference) => openInputReference(reference),
   colorizeSource: (pre) => colorizeSource(pre)
@@ -2077,6 +2098,63 @@ function storedResponse(record: DextHistoryRecord): InputExecutionResponse | und
   return readHistoryResponse(record);
 }
 
+/** Mirror the host's stored acceptance. An empty or absent list clears it, so a
+ * plan that no longer carries acceptance stops offering a stale group. */
+function storePlanAcceptance(sessionId: string, path: string | undefined, items: readonly PlanAcceptanceItem[] | undefined): void {
+  if (!path || !items?.length) planAcceptanceBySession.delete(sessionId);
+  else planAcceptanceBySession.set(sessionId, { path, items: items.map((item) => ({ ...item })) });
+}
+
+/** Several rounds of one plan each carry a Todo panel; only the newest may show
+ * the acceptance group, or one requirement would have competing checkboxes. */
+function ownsPlanAcceptance(turn: OutputTurnElements): boolean {
+  const path = turn.planPath;
+  if (!path) return false;
+  let owner: OutputTurnElements | undefined;
+  for (const candidate of transcript.values()) if (candidate.planPath === path) owner = candidate;
+  return owner === turn;
+}
+
+function acceptanceForTurn(sessionId: string | undefined, turn: OutputTurnElements): PlanAcceptanceItem[] {
+  if (!sessionId || !turn.planPath) return [];
+  const stored = planAcceptanceBySession.get(sessionId);
+  if (!stored || stored.path !== turn.planPath || !ownsPlanAcceptance(turn)) return [];
+  return stored.items;
+}
+
+/** One place computes the plan label, so the live row, a restored row and an
+ * acceptance toggle cannot disagree about wording. */
+function setPlanLabel(
+  turn: OutputTurnElements,
+  sessionId: string | undefined,
+  events: readonly AgentStreamEvent[],
+  error?: string,
+  outcome?: PlanExecutionOutcome
+): void {
+  planLabelStates.set(turn, {
+    sessionId, events,
+    ...(error === undefined ? {} : { error }),
+    ...(outcome === undefined ? {} : { outcome })
+  });
+  refreshPlanLabel(turn);
+}
+
+function refreshPlanLabel(turn: OutputTurnElements): void {
+  const state = planLabelStates.get(turn);
+  if (!state || !turn.planExecutionStatus) return;
+  turn.planExecutionStatus.textContent = planExecutionLabel(state.events, state.error, state.outcome, acceptanceForTurn(state.sessionId, turn));
+}
+
+/** A toggle answered by the host refreshes every visible round of that plan:
+ * only the owner shows the group, but every round shows the same label. */
+function refreshVisiblePlanAcceptance(sessionId: string, planPath: string): void {
+  for (const turn of transcript.values()) {
+    if (turn.planPath !== planPath) continue;
+    turn.todos.setAcceptance(acceptanceForTurn(sessionId, turn));
+    refreshPlanLabel(turn);
+  }
+}
+
 /** Populate a history turn only when its disclosure is opened.  The shell
  * still exposes the input title and turn actions, while expensive Markdown,
  * syntax highlighting, diffs, and streamed process events stay out of the
@@ -2098,12 +2176,16 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, s
   const planExecution = response?.executions.find((item) => item.result.kind === "plan" && item.result.executePlan);
   const planResult = planExecution?.result.kind === "plan" ? planExecution.result : undefined;
   if (record.executePlan || planResult?.executePlan) {
+    const planPath = record.planPath ?? planResult?.planPath;
+    // The acceptance group is addressed by path, so the row keeps it too.
+    if (planPath) {
+      turn.title.setPlanPath(planPath);
+      turn.planPath = planPath;
+    }
     if (turn.planExecutionStatus) {
       turn.planExecutionStatus.hidden = false;
-      turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome ?? planResult?.planOutcome);
+      setPlanLabel(turn, sessionId, record.process, record.error, record.planOutcome ?? planResult?.planOutcome);
     }
-    const planPath = record.planPath ?? planResult?.planPath;
-    if (planPath) turn.title.setPlanPath(planPath);
   }
 
   agentRunStartedAt = Date.now();
@@ -2117,6 +2199,9 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, s
     durationMs: duration, process: record.process
   }).process.detail ?? "";
   turn.todos.setRunning(false);
+  // Only the newest round of this plan gets the user's checkboxes; the others
+  // pass an empty list so the same requirement is not offered twice.
+  turn.todos.setAcceptance(acceptanceForTurn(sessionId, turn));
   turn.processDisclosure.open = false;
   if (record.error) renderOutputError(record.error);
   else if (response) renderResult(response);
@@ -2156,6 +2241,9 @@ function hydrateOutputTurnOnOpen(event: Event): void {
 
 function renderOutputSession(session: DextHistorySession): void {
   const signature = conversationSignature(session);
+  // The session payload is the authority for acceptance; the toggles below only
+  // ever mirror what it said.
+  storePlanAcceptance(session.id, session.planProgress?.path, session.planProgress?.acceptance);
   const sessionTurnIds = new Set(session.turns.map((turn) => turn.id));
   // A newly streamed row is newer than the last historical signature. Deleting
   // that row can return to the same signature while the DOM still contains it.
@@ -2230,7 +2318,7 @@ function renderOutputSession(session: DextHistorySession): void {
       ...(record.changedFiles !== undefined ? { diff: true } : {})
     });
     // Closed history rows need their final status before deferred hydration.
-    if (turn.planExecutionStatus) turn.planExecutionStatus.textContent = planExecutionLabel(record.process, record.error, record.planOutcome);
+    if (turn.planExecutionStatus) setPlanLabel(turn, session.id, record.process, record.error, record.planOutcome);
     turn.hydrate = () => hydrateStoredTurn(record, turn, session.id);
     turn.hydrateProcess = () => hydrateStoredProcess(record, turn);
     if (latest) latestTurn = turn;
@@ -2733,6 +2821,12 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     planStatus = message.status;
     renderPlanToolbar();
   }
+  if (message.type === "planAcceptance") {
+    // The host persisted the new state; re-render from it rather than from the
+    // click, so a rejected toggle cannot stay checked.
+    storePlanAcceptance(message.sessionId, message.planPath, message.items);
+    if (message.sessionId === browser.activeId) refreshVisiblePlanAcceptance(message.sessionId, message.planPath);
+  }
   if (message.type === "resourceContext") {
     resourceSessions.set(message.sessionId, message.resource);
     if (message.busy) resourcePending.add(message.sessionId);
@@ -2754,7 +2848,11 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   if (message.type === "execution" && message.sessionId === browser.activeId) {
     transcript.select(message.turnId);
     const planResult = message.response.executions.find((execution) => execution.result.kind === "plan" && execution.result.executePlan)?.result;
-    if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) transcript.active.planExecutionStatus.textContent = planExecutionLabel([], undefined, planResult?.kind === "plan" ? planResult.planOutcome : undefined);
+    // Acceptance is part of the label, so the live row must read the same list a
+    // reload would; otherwise it says Completed and then becomes "awaiting".
+    if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) {
+      setPlanLabel(transcript.active, message.sessionId, [], undefined, planResult?.kind === "plan" ? planResult.planOutcome : undefined);
+    }
     renderResult(message.response);
   }
   if (message.type === "executionFailed") {
@@ -2763,7 +2861,9 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
   }
   if (message.type === "executionFailed" && message.sessionId === browser.activeId) {
     transcript.select(message.turnId);
-    if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) transcript.active.planExecutionStatus.textContent = planExecutionLabel([], message.message, message.planOutcome);
+    if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) {
+      setPlanLabel(transcript.active, message.sessionId, [], message.message, message.planOutcome);
+    }
     renderOutputError(message.message);
   }
   if (message.type === "agentEvent" && message.sessionId === browser.activeId) {

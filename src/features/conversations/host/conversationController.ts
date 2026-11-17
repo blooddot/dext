@@ -11,7 +11,7 @@ import { orderedConversationIds } from "../domain/conversationOrder.js";
 import { conversationTitle, historyTurnTitle } from "../presentation/historyRender.js";
 import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
 import { withoutSkills } from "../domain/agentSelection.js";
-import type { AgentTodoItem } from "../../../shared/contracts/types.js";
+import type { AgentTodoItem, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
 
 /** Everything the controller publishes. The sidebar implements it with the
  * Webview's IPC channel; the controller never touches `vscode` itself. */
@@ -567,10 +567,24 @@ export class ConversationController {
     }
   }
 
-  async savePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[]): Promise<void> {
+  async savePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], acceptance?: readonly PlanAcceptanceItem[]): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (session) session.planProgress = { path, todos: todos.map((item) => ({ ...item })) };
-    await this.history.updatePlanProgress(sessionId, path, todos);
+    if (session) {
+      // Without a provided list the same plan's stored acceptance survives, so a
+      // task-only write during a run cannot drop the user's checks.
+      const kept = acceptance ?? (session.planProgress?.path === path ? session.planProgress.acceptance : undefined);
+      session.planProgress = {
+        path, todos: todos.map((item) => ({ ...item })),
+        ...(kept ? { acceptance: kept.map((item) => ({ ...item })) } : {})
+      };
+    }
+    await this.history.updatePlanProgress(sessionId, path, todos, acceptance);
+  }
+
+  /** The acceptance group only ever changes from a user's click, so the host
+   * answers every accepted toggle with the state it just persisted. */
+  async postPlanAcceptance(sessionId: string, path: string, items: readonly PlanAcceptanceItem[]): Promise<void> {
+    await this.options.publisher.post({ type: "planAcceptance", sessionId, planPath: path, items: items.map((item) => ({ ...item })) });
   }
 
   async savePlanContext(sessionId: string, path: string | undefined, status: NonNullable<DextHistorySession["planStatus"]>): Promise<void> {
