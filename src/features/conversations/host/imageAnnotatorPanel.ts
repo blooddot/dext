@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import * as vscode from "vscode";
 import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
 import { attachmentImageDataUrl, isVideoAttachment } from "./attachmentImage.js";
+import { playableVideo, videoCache } from "./videoPlayback.js";
 import { escapeHtml as escapeAttribute } from "../../../shared/lib/html.js";
 
 export interface ImageAnnotatorPanelOptions {
@@ -84,6 +85,8 @@ export class ImageAnnotatorPanel {
    * file from there, and the Webview refuses anything outside these roots. */
   private resourceRoots(): vscode.Uri[] {
     const roots = ["dist/webview", "media"].map((part) => vscode.Uri.joinPath(this.options.extensionUri, part));
+    // Converted video copies live here, and the page fetches them like an attachment.
+    roots.push(videoCache(this.options.storage));
     try {
       roots.push(this.options.storage.directory("attachments"));
     } catch {
@@ -122,6 +125,26 @@ export class ImageAnnotatorPanel {
       // shortcut: every keystroke rewrites the map, which is small enough for a
       // handful of screenshot marks; debounce it if a picture ever carries hundreds.
       await this.store(relativePath, { marks: request.marks });
+      return;
+    }
+    if (request.type === "videoTranscode") {
+      const requestId = typeof request.requestId === "number" ? request.requestId : 0;
+      const source = this.attachmentUri(relativePath);
+      try {
+        if (!source) throw new Error("This attachment file is missing.");
+        const copy = await playableVideo(this.options.storage, source);
+        await panel.webview.postMessage({
+          type: "videoTranscodeResult",
+          requestId,
+          source: panel.webview.asWebviewUri(copy).toString()
+        });
+      } catch (failure) {
+        await panel.webview.postMessage({
+          type: "videoTranscodeResult",
+          requestId,
+          error: failure instanceof Error ? failure.message : String(failure)
+        });
+      }
       return;
     }
     if (request.type === "saveVideoFrames" && Array.isArray(request.frames)) {
@@ -204,8 +227,12 @@ export class ImageAnnotatorPanel {
   /** The attachment's own Webview URL: the page fetches it and plays the bytes as
    * a `blob:`, which is what keeps its canvas untainted. */
   private videoSource(webview: vscode.Webview, relativePath: string): string {
-    const uri = this.options.storage.uriForReference("attachments", relativePath);
+    const uri = this.attachmentUri(relativePath);
     return uri ? webview.asWebviewUri(uri).toString() : "";
+  }
+
+  private attachmentUri(relativePath: string): vscode.Uri | undefined {
+    return this.options.storage.uriForReference("attachments", relativePath);
   }
 
   private savedFrames(relativePath: string): string {

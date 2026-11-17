@@ -55,9 +55,12 @@ async function capture(): Promise<void> {
     const blob = URL.createObjectURL(await response.blob());
     await new Promise<void>((resolve, reject) => {
       video.onloadedmetadata = () => resolve();
-      video.onerror = () => reject(new Error(
-        "This video's codec cannot be decoded in the editor. Convert it to MP4/H.264 and try again."
-      ));
+      // The demuxer's own words, so an unsupported codec reads differently from
+      // a file the page could not fetch.
+      video.onerror = () => {
+        const detail = video.error?.message;
+        reject(new Error(`This video's codec cannot be decoded in the editor${detail ? ` (${detail})` : ""}. Convert it to MP4/H.264 and try again.`));
+      };
       video.src = blob;
     });
     const captured: VideoFrameCapture = {

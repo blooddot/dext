@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
 import { escapeHtml as escapeAttribute } from "../../../shared/lib/html.js";
 import { isVideoAttachment } from "./attachmentImage.js";
+import { cachedVideo, videoCache } from "./videoPlayback.js";
 import type { VideoFrameCapture } from "../contracts/videoFrames.js";
 
 /** A page that never answers would hold an editor tab open forever. */
@@ -24,6 +25,9 @@ export class VideoFrames {
    * any file the workspace can reach. */
   async capture(path: string, timesSeconds: readonly number[]): Promise<VideoFrameCapture> {
     const uri = this.resolve(path);
+    // Chromium cannot decode every codec; a copy an earlier visit converted is
+    // what it can play. Capturing must not spend a conversion of its own.
+    const playable = await cachedVideo(this.options.storage, uri) ?? uri;
     const panel = vscode.window.createWebviewPanel("dext.videoFrames", "Video frames", {
       // Focus stays where the reader left it; only the tab appears, and it closes
       // as soon as the stills are in.
@@ -32,7 +36,11 @@ export class VideoFrames {
     }, {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.options.extensionUri, "dist", "webview"), sibling(uri)]
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.options.extensionUri, "dist", "webview"),
+        sibling(uri),
+        videoCache(this.options.storage)
+      ]
     });
     try {
       const capture = new Promise<VideoFrameCapture>((resolve, reject) => {
@@ -46,7 +54,7 @@ export class VideoFrames {
           else resolve(captureFrom(answer.capture));
         });
       });
-      panel.webview.html = this.html(panel.webview, uri, timesSeconds);
+      panel.webview.html = this.html(panel.webview, playable, timesSeconds);
       return await capture;
     } finally {
       panel.dispose();

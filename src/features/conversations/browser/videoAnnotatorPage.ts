@@ -13,6 +13,13 @@ interface FrameImageResult {
   error?: string;
 }
 
+interface TranscodeResult {
+  type?: string;
+  requestId?: number;
+  source?: string;
+  error?: string;
+}
+
 /** One still at a time: the page waits for the host to store it before it seeks
  * to the next frame, so a slow disk never piles up exports. */
 const pendingFrames = new Map<number, { resolve: (relativePath: string) => void; reject: (error: Error) => void }>();
@@ -34,11 +41,32 @@ const storeFrame = (data: string, mimeType: string): Promise<string> => new Prom
   vscode.postMessage({ type: "frameImage", requestId, data, mimeType });
 });
 
+const pendingTranscodes = new Map<number, { resolve: (source: string) => void; reject: (error: Error) => void }>();
+let nextTranscodeRequest = 0;
+
+window.addEventListener("message", (event: MessageEvent<TranscodeResult>) => {
+  const message = event.data;
+  if (message?.type !== "videoTranscodeResult" || typeof message.requestId !== "number") return;
+  const pending = pendingTranscodes.get(message.requestId);
+  if (!pending) return;
+  pendingTranscodes.delete(message.requestId);
+  if (message.source) pending.resolve(message.source);
+  else pending.reject(new Error(message.error ?? "This video could not be converted."));
+});
+
+/** The host runs FFmpeg: only it can reach the file and the program. */
+const transcode = (): Promise<string> => new Promise((resolve, reject) => {
+  const requestId = ++nextTranscodeRequest;
+  pendingTranscodes.set(requestId, { resolve, reject });
+  vscode.postMessage({ type: "videoTranscode", requestId });
+});
+
 const annotator = new VideoAnnotator({
   path: meta("dext-video-path"),
   source: meta("dext-video-src"),
   frames: parseFrameMarks(meta("dext-video-marks")),
   storeFrame,
+  transcode,
   onFrames: (frames) => vscode.postMessage({ type: "saveVideoFrames", frames }),
   onInsert: (text) => vscode.postMessage({ type: "insertAnnotations", text })
 });

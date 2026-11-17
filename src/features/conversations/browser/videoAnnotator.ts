@@ -18,7 +18,12 @@ export interface VideoAnnotatorOptions {
   onInsert(text: string): void;
   /** Stores one exported still and resolves its attachment reference. */
   storeFrame(data: string, mimeType: string): Promise<string>;
+  /** Converts a video this editor cannot decode and answers with a URL it can. */
+  transcode?(): Promise<string>;
 }
+
+/** The player refused the video itself, as opposed to the page failing to read it. */
+class CodecError extends Error {}
 
 /** Below this pointer travel a press is a click, not a hand-drawn box. */
 const DRAG_THRESHOLD = 4;
@@ -68,6 +73,8 @@ export class VideoAnnotator {
   private frameMs = DEFAULT_FRAME_MS;
   private lastPaintedMs: number | undefined;
   private busy = false;
+  /** One conversion per tab: a second failure is the converted copy's own. */
+  private converted = false;
 
   constructor(private readonly options: VideoAnnotatorOptions) {
     this.element = document.createElement("div");
@@ -108,30 +115,50 @@ export class VideoAnnotator {
     void this.load();
   }
 
-  private async load(): Promise<void> {
+  private async load(source = this.options.source): Promise<void> {
     try {
-      if (!this.options.source) throw new Error("This attachment file is missing.");
+      if (!source) throw new Error("This attachment file is missing.");
       // Playing the bytes from a `blob:` keeps the canvas same-origin: a
       // `vscode-webview:` source would taint it and `toDataURL` would throw.
       // shortcut: the whole file lands in webview memory before playback, so a
       // 100 MB video costs that much; stream it and capture on Insert if that hurts.
-      const response = await fetch(this.options.source);
+      const response = await fetch(source);
       if (!response.ok) throw new Error(`The video could not be read (${response.status}).`);
       const url = URL.createObjectURL(await response.blob());
       await new Promise<void>((resolve, reject) => {
         this.video.onloadedmetadata = () => resolve();
-        this.video.onerror = () => reject(new Error(
-          "This video's codec cannot be decoded in the editor. Convert it to MP4/H.264 and open it again."
-        ));
+        // Chromium names the stream it refused; without it a missing file, a
+        // corrupt file and a codec the build lacks all read the same.
+        this.video.onerror = () => {
+          const detail = this.video.error?.message;
+          reject(new CodecError(`This video's codec cannot be decoded in the editor${detail ? ` (${detail})` : ""}.`));
+        };
         this.video.src = url;
       });
       this.natural = { width: this.video.videoWidth, height: this.video.videoHeight };
       this.timeline.max = String(Math.max(1, Math.round(this.durationMs())));
       this.done.disabled = false;
+      this.play.disabled = false;
+      this.timeline.disabled = false;
+      this.error.hidden = true;
       this.syncFrame(true);
       this.renderTransport();
     } catch (failure) {
-      this.showError(failure);
+      if (!(failure instanceof CodecError) || !this.options.transcode || this.converted) {
+        this.showError(failure);
+        return;
+      }
+      // A codec Chromium lacks is worth one conversion; a file it cannot read is not.
+      this.converted = true;
+      this.error.textContent = `${failure.message} Converting it for playback\u2026`;
+      this.error.hidden = false;
+      this.play.disabled = true;
+      this.timeline.disabled = true;
+      try {
+        await this.load(await this.options.transcode());
+      } catch (conversion) {
+        this.showError(conversion);
+      }
     }
   }
 
@@ -546,5 +573,9 @@ export class VideoAnnotator {
   private showError(failure: unknown): void {
     this.error.textContent = failure instanceof Error ? failure.message : String(failure);
     this.error.hidden = false;
+    // Nothing plays or exports without a decodable picture, and a play press on
+    // an errored element rejects unhandled.
+    this.play.disabled = true;
+    this.timeline.disabled = true;
   }
 }

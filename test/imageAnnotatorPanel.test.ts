@@ -31,6 +31,14 @@ vi.mock("vscode", () => ({
     })
   }
 }));
+const playback = vi.hoisted(() => ({
+  playableVideo: vi.fn(async () => ({ fsPath: "copy.mp4", toString: (): string => "copy.mp4" })),
+  videoCache: () => ({ fsPath: "cache" })
+}));
+vi.mock("../src/features/conversations/host/videoPlayback.js", () => ({
+  playableVideo: playback.playableVideo,
+  videoCache: playback.videoCache
+}));
 vi.mock("../src/features/conversations/host/attachmentImage.js", () => ({
   attachmentImageDataUrl: async (storage: { uriForReference(): unknown }, path: string) =>
     storage.uriForReference() ? `data:image/png;base64,${path}` : Promise.reject(new Error("That attachment is not a Dext image.")),
@@ -120,6 +128,31 @@ describe("video annotator tab", () => {
       relativePath: ".dext-global/attachments/frame.jpg"
     }));
     expect(storeFrame).toHaveBeenCalledWith("data:image/jpeg;base64,AA", "image/jpeg");
+  });
+
+  it("answers a codec the player refused with a converted copy", async () => {
+    const videoStorage = { uriForReference: () => ({ fsPath: "/in.mp4" }) } as unknown as DextStorage;
+    const panel = new ImageAnnotatorPanel({ extensionUri: {} as never, storage: videoStorage, onInsert });
+    panel.open(".dext-global/attachments/hevc.mp4");
+    state.receive?.({ type: "videoTranscode", requestId: 5 });
+    await vi.waitFor(() => expect(state.post).toHaveBeenCalledWith({
+      type: "videoTranscodeResult",
+      requestId: 5,
+      source: "copy.mp4"
+    }));
+    expect(playback.playableVideo).toHaveBeenCalledWith(videoStorage, { fsPath: "/in.mp4" });
+  });
+
+  it("reports a conversion it could not run instead of leaving the page waiting", async () => {
+    playback.playableVideo.mockRejectedValueOnce(new Error("Run `winget install Gyan.FFmpeg`, restart VS Code"));
+    const panel = new ImageAnnotatorPanel({ extensionUri: {} as never, storage, onInsert });
+    panel.open(".dext-global/attachments/hevc2.mp4");
+    state.receive?.({ type: "videoTranscode", requestId: 6 });
+    await vi.waitFor(() => expect(state.post).toHaveBeenCalledWith({
+      type: "videoTranscodeResult",
+      requestId: 6,
+      error: "Run `winget install Gyan.FFmpeg`, restart VS Code"
+    }));
   });
 
   it("reports a frame it could not store instead of leaving the page waiting", async () => {
