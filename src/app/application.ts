@@ -7,7 +7,7 @@ import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssert
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
 import { FramesBridge } from "../features/agents/host/framesBridge.js";
 import { VideoFrames } from "../features/conversations/host/videoFrames.js";
-import { piDiscoveryIdentity } from "../features/agents/host/piAgentRunner.js";
+import { piDiscoveryIdentity, prunePiSessions } from "../features/agents/host/piAgentRunner.js";
 import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
@@ -470,7 +470,9 @@ export class DextApplication {
       toUrl: (filePath) => this.mcpImageWebview?.asWebviewUri(vscode.Uri.file(filePath)).toString()
     }));
     this.agentRunner = new DefaultAgentRunner();
-    this.agentRunner.pi.configure({ sessionDirectory: join(this.storage.globalStorageUri.fsPath, "pi-sessions") });
+    const piSessions = join(this.storage.globalStorageUri.fsPath, "pi-sessions");
+    this.agentRunner.pi.configure({ sessionDirectory: piSessions });
+    void prunePiSessions(piSessions);
     // Load once during extension startup. Later launches reuse this snapshot;
     // Configure Agent and a fresh Harness selection explicitly refresh it.
     void this.agentRunner.harness.preloadSettings();

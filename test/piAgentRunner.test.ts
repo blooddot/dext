@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
 import type { AgentStreamEvent, AgentWakeReport } from "../src/shared/contracts/types.js";
-import { PiAgentRunner, type PiRunnerOptions } from "../src/features/agents/host/piAgentRunner.js";
+import { PiAgentRunner, prunePiSessions, type PiRunnerOptions } from "../src/features/agents/host/piAgentRunner.js";
 import { PiRpcTransport } from "../src/features/agents/host/piRpcTransport.js";
 import { decodePiSession, encodePiSession } from "../src/features/agents/domain/piModels.js";
 
@@ -101,6 +101,30 @@ describe("Pi conversation runner", { timeout: 30000 }, () => {
     await expect(h.runner.runConversation(h.request("missing", { metadata: { agentSessionId: "missing", conversationProviderSessionId: encodePiSession({ binding, path: join(h.root, "missing.jsonl") }) } }))).rejects.toThrow("missing");
     const outside = join(h.root, "external.jsonl"); await writeFile(outside, "{}");
     await expect(h.runner.runConversation(h.request("outside", { metadata: { agentSessionId: "outside", conversationProviderSessionId: encodePiSession({ binding, path: outside }) } }))).rejects.toThrow("outside Dext");
+  });
+  it("closes an idle process and resumes its session file on the next turn", async () => {
+    const h = await setup(); let stored = "";
+    h.runner.setSessionRecycleMs(50);
+    await h.runner.runConversation(h.request("first", { metadata: { agentSessionId: "chat", onAgentSessionId: (_provider, value) => { stored = value; } } }));
+    const pid = (await h.log()).find((entry) => entry.pid)?.pid as number;
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 10000 });
+    expect(await h.runner.runConversation(h.request("second", { metadata: { agentSessionId: "chat", conversationProviderSessionId: stored } }))).toBe("second");
+    const log = await h.log();
+    expect(log.filter((entry) => entry.startup)).toHaveLength(2);
+    expect(log.some((entry) => Array.isArray(entry.startup) && entry.startup.includes("--session"))).toBe(true);
+  });
+  it("drops only the oldest session files beyond the size cap", async () => {
+    const h = await setup(), directory = join(h.root, "sessions");
+    await mkdir(directory, { recursive: true });
+    const create = async (name: string, seconds: number) => {
+      const path = join(directory, name); await writeFile(path, "0123456789"); await utimes(path, seconds, seconds); return path;
+    };
+    const oldest = await create("oldest.jsonl", 1000), middle = await create("middle.jsonl", 2000), newest = await create("newest.jsonl", 3000);
+    await mkdir(join(directory, "subagent-artifacts"));
+    await prunePiSessions(directory, 25);
+    await expect(readFile(oldest)).rejects.toThrow();
+    expect(await readFile(middle, "utf8")).toHaveLength(10);
+    expect(await readFile(newest, "utf8")).toHaveLength(10);
   });
   it("cancels active and queued operations together on endSession", async () => {
     const h = await setup();

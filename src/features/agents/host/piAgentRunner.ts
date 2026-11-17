@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { AgentModelOption, AgentProfile } from "../contracts/agent.js";
@@ -39,6 +39,29 @@ interface Session { binding: string; transport: PiRpcTransport; bridge: PiBridge
    * those runs so the host records them instead of dropping their output. */
   wake?: ((report: AgentWakeReport) => void) | undefined; wakeRun?: { events: PiEvents } | undefined }
 interface Queued { key: string; controller: AbortController }
+/** A finished turn keeps its Pi process warm for the next turn. An idle process
+ * only holds memory, and Pi has already written the conversation to its session
+ * file, which the next turn resumes from. */
+const SESSION_RECYCLE_MS = 10 * 60_000;
+const PI_SESSION_KEEP_BYTES = 512 * 1024 * 1024;
+/** Pi appends to one session file per conversation and never removes them, so
+ * Dext bounds the directory it owns, oldest first. A conversation whose file
+ * was pruned says so instead of resuming someone else's session. */
+export async function prunePiSessions(directory: string, keepBytes = PI_SESSION_KEEP_BYTES): Promise<void> {
+  const files: { path: string; size: number; mtimeMs: number }[] = [];
+  for (const name of await readdir(directory).catch(() => [] as string[])) {
+    if (!name.endsWith(".jsonl")) continue;
+    const path = join(directory, name), info = await stat(path).catch(() => undefined);
+    if (info?.isFile()) files.push({ path, size: info.size, mtimeMs: info.mtimeMs });
+  }
+  files.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  let total = 0;
+  for (const file of files) {
+    total += file.size;
+    // A running Pi process holds its own file open, so a failed unlink stays put.
+    if (total > keepBytes) await rm(file.path, { force: true }).catch(() => {});
+  }
+}
 const stateFrom = (value: unknown): PiState => {
   const raw = piObject(value);
   return { ...(raw.model ? { model: piModels([raw.model])[0]! } : {}),
@@ -51,8 +74,10 @@ export class PiAgentRunner implements AgentRunner {
   private options: PiRunnerOptions;
   private timeoutMs = DEFAULT_AGENT_TIMEOUT_MS;
   private idleTimeoutMs = DEFAULT_AGENT_IDLE_TIMEOUT_MS;
+  private recycleMs = SESSION_RECYCLE_MS;
   private disposed = false;
   private readonly sessions = new Map<string, Session>();
+  private readonly recycles = new Map<string, NodeJS.Timeout>();
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly controllers = new Set<Queued>();
   private readonly defaults = new Map<string, PiState>();
@@ -64,6 +89,7 @@ export class PiAgentRunner implements AgentRunner {
   configure(options: PiRunnerOptions): void { this.options = { ...this.options, ...options }; }
   setTimeoutMs(value: number): void { this.timeoutMs = value; }
   setIdleTimeoutMs(value: number): void { this.idleTimeoutMs = value; }
+  setSessionRecycleMs(value: number): void { this.recycleMs = value; }
   private resources(): { extensionPath: string; sessionDirectory: string } {
     const { extensionPath, sessionDirectory } = this.options;
     if (!extensionPath || !sessionDirectory) throw new Error("Pi runtime resources are not configured by the Dext host.");
@@ -187,6 +213,28 @@ export class PiAgentRunner implements AgentRunner {
     await this.close(session);
   }
   private async close(session: Session): Promise<void> { session.bridge.dispose(); await session.transport.close(); }
+  private release(key: string, session: Session): void {
+    this.forgetRecycle(key); this.sessions.delete(key);
+    const cleanup = this.stop(session); this.cleanups.add(cleanup);
+    void cleanup.finally(() => this.cleanups.delete(cleanup)).catch(() => {});
+  }
+  private forgetRecycle(key: string): void {
+    const timer = this.recycles.get(key);
+    if (timer) { clearTimeout(timer); this.recycles.delete(key); }
+  }
+  private recycle(key: string, session: Session): void {
+    this.forgetRecycle(key);
+    // Without a session file the next turn could not resume this conversation.
+    if (!session.state.sessionFile) return;
+    const timer = setTimeout(() => {
+      this.recycles.delete(key);
+      if (this.sessions.get(key) !== session) return;
+      // A settled turn can still leave Pi running for a plugin's own work.
+      if (session.active || session.wakeRun) { this.recycle(key, session); return; }
+      this.release(key, session);
+    }, this.recycleMs);
+    timer.unref(); this.recycles.set(key, timer);
+  }
   private async select(session: Session, request: TurnRequest, defaults: PiState, signal: AbortSignal): Promise<void> {
     const model = request.model ? parsePiModelId(request.model) : defaults.model;
     if (!model) throw new Error("No Pi model is configured. Configure a model and authentication in Pi, then refresh Dext.");
@@ -268,6 +316,7 @@ export class PiAgentRunner implements AgentRunner {
       const command = piCommand(request.profile); await (this.options.versionProbe ?? checkPiVersion)(command, request.cwd, controller.signal);
       const binding = await this.binding(request, command);
       session = this.sessions.get(key);
+      if (session) this.forgetRecycle(key);
       if (session && (session.binding !== binding || !session.transport.alive)) { await this.close(session); this.sessions.delete(key); session = undefined; }
       let resume: string | undefined;
       if (!session && !request.metadata.conversationForkFrom && request.metadata.conversationProviderSessionId) {
@@ -313,19 +362,18 @@ export class PiAgentRunner implements AgentRunner {
       timeout.dispose(); controller.signal.removeEventListener("abort", onAbort); controller.abort(new ExecutionCancelledError());
       if (session) { session.active = undefined; session.transport.onActivity = undefined; session.bridge.clearTurn(); }
       if (session && !request.metadata.agentSessionId) { this.sessions.delete(key); await this.close(session); }
+      else if (session && this.sessions.get(key) === session) this.recycle(key, session);
     }
   }
   endSession(key: string): void {
     for (const queued of this.controllers) if (queued.key === key) queued.controller.abort(new ExecutionCancelledError());
+    this.forgetRecycle(key);
     const session = this.sessions.get(key);
-    if (session) {
-      this.sessions.delete(key);
-      const cleanup = this.stop(session); this.cleanups.add(cleanup);
-      void cleanup.finally(() => this.cleanups.delete(cleanup)).catch(() => {});
-    }
+    if (session) this.release(key, session);
   }
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const key of [...this.recycles.keys()]) this.forgetRecycle(key);
     for (const queued of this.controllers) queued.controller.abort(new ExecutionCancelledError());
     await Promise.allSettled([...this.queues.values(), ...this.discoveries.values()]);
     await Promise.allSettled([...this.sessions.values()].map((session) => this.close(session))); this.sessions.clear();
