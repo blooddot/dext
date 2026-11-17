@@ -53,6 +53,35 @@ describe("shipped Pi extension", () => {
     expect(unavailable).toMatchObject({ isError: true });
     expect(unavailable.terminate).toBeUndefined();
   });
+  it("forwards the argument shape Pi's schema coercion produces unchanged", async () => {
+    // Pi validates and coerces tool arguments before a tool runs: an optional
+    // property submitted as null is dropped, and a single value for an array
+    // parameter arrives already wrapped. Dext must forward that shape as is.
+    const schema = { type: "object", properties: { value: { type: "string" }, note: { type: ["string", "null"] } }, required: ["value"], additionalProperties: false };
+    const requests: { kind: string; args?: unknown; questions?: unknown }[] = [];
+    const bridge = new PiBridge({ permission: "read-only", tools: ["read", "dext_submit_result", "dext_request_user_input"], mcpServers: [], resultSchema: schema },
+      async (request) => { requests.push(request as { kind: string }); return { status: "accepted" }; });
+    bridges.push(bridge); process.env.DEXT_PI_BRIDGE = bridge.endpoint; process.env.DEXT_PI_BRIDGE_TOKEN = bridge.token;
+    const tools = new Map<string, Tool>();
+    const module = await import(pathToFileURL(resolve("media/pi-extension.mjs")).href) as { default(api: object): Promise<void> };
+    await module.default({ registerTool: (tool: Tool) => tools.set(tool.name, tool), on: (event: string, listener: (payload: unknown) => unknown) => {
+      if (event === "session_shutdown") shutdowns.push(() => { listener({}); });
+    }, getActiveTools: () => [...tools.keys()], setActiveTools: () => {}, registerMcpServer: () => {} });
+    await bridge.ready();
+    expect(tools.get("dext_submit_result")?.parameters).toEqual(schema);
+    expect(tools.get("dext_request_user_input")?.parameters).toMatchObject({ properties: { questions: { type: "array" } } });
+    expect(await tools.get("dext_submit_result")!.execute("one", { value: "ok" })).toMatchObject({ isError: false, terminate: true });
+    const submitted = requests.at(-1) as { kind: string; args?: Record<string, unknown> };
+    expect(submitted.kind).toBe("submit_result");
+    expect(submitted.args).toEqual({ value: "ok" });
+    expect(submitted.args && "note" in submitted.args).toBe(false);
+    const question = { id: "q1", question: "Choose" };
+    expect(await tools.get("dext_request_user_input")!.execute("two", { questions: [question] })).toMatchObject({ isError: false });
+    const asked = requests.at(-1) as { kind: string; questions?: unknown };
+    expect(asked.kind).toBe("question");
+    expect(asked.questions).toMatchObject([{ id: "q1", question: "Choose" }]);
+    expect(Array.isArray(asked.questions) && (asked.questions as unknown[]).length).toBe(1);
+  });
   it("nudges one result submission before a typed turn settles without one", async () => {
     const schema = { type: "object", properties: { value: { type: "string" } }, required: ["value"] };
     const bridge = new PiBridge({ permission: "read-only", tools: ["read", "dext_submit_result"], mcpServers: [], resultSchema: schema }, async () => ({ status: "accepted" }));
