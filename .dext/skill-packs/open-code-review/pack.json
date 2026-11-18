@@ -1,0 +1,97 @@
+{
+  "name": "open-code-review",
+  "version": 2,
+  "source": "https://github.com/alibaba/open-code-review",
+  "upstreamVersion": "0.0.0",
+  "releaseTag": "v1.13.12",
+  "notes": [
+    "plugins/open-code-review/.codex-plugin/plugin.json: native plugin configuration and hooks are not installed.",
+    "plugins/open-code-review/claude-code/.claude-plugin/plugin.json: native plugin configuration and hooks are not installed."
+  ],
+  "commit": "f921d6a0de3b71befce15d8edf589cd3609968fa",
+  "license": "LICENSE",
+  "importedAt": "2026-11-18T08:07:30.454Z",
+  "skills": [
+    {
+      "id": "open-code-review",
+      "name": "open-code-review",
+      "description": "Review workspace changes, PRs, commits, or branch comparisons with OCR's native review pipeline and independently configured model provider. Produces line-level findings; fixes code only when requested. Use when the user wants native mode or has an OCR provider configured. To use the host agent's model without separate OCR credentials, choose open-code-review-delegate instead.",
+      "directory": "plugins/open-code-review/skills/open-code-review",
+      "agent": "codex",
+      "file": "skill-packs/open-code-review/variants/codex/skills/open-code-review/SKILL.md",
+      "commands": [],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "open-code-review-delegate",
+      "name": "open-code-review-delegate",
+      "description": "Review workspace changes, PRs, commits, or branch comparisons with the host agent's model. OCR's CLI handles file selection and rule resolution; this skill defines the review workflow, coverage requirements, and output format. Use when the user has no separate API key for OCR or wants to reuse their coding-agent subscription or model setup. For OCR's full native pipeline with its own model provider, choose open-code-review instead.",
+      "directory": "plugins/open-code-review/skills/open-code-review-delegate",
+      "agent": "codex",
+      "file": "skill-packs/open-code-review/variants/codex/skills/open-code-review-delegate/SKILL.md",
+      "commands": [],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "open-code-review",
+      "name": "open-code-review",
+      "description": "Review workspace changes, PRs, commits, or branch comparisons with OCR's native review pipeline and independently configured model provider. Produces line-level findings; fixes code only when requested. Use when the user wants native mode or has an OCR provider configured. To use the host agent's model without separate OCR credentials, choose open-code-review-delegate instead.",
+      "directory": "skills/open-code-review",
+      "agent": "shared",
+      "file": "skills/open-code-review/SKILL.md",
+      "commands": [],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    },
+    {
+      "id": "open-code-review-delegate",
+      "name": "open-code-review-delegate",
+      "description": "Review workspace changes, PRs, commits, or branch comparisons with the host agent's model. OCR's CLI handles file selection and rule resolution; this skill defines the review workflow, coverage requirements, and output format. Use when the user has no separate API key for OCR or wants to reuse their coding-agent subscription or model setup. For OCR's full native pipeline with its own model provider, choose open-code-review instead.",
+      "directory": "skills/open-code-review-delegate",
+      "agent": "shared",
+      "file": "skills/open-code-review-delegate/SKILL.md",
+      "commands": [],
+      "warnings": [
+        "No LICENSE file was found beside SKILL.md."
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "commit",
+      "title": "/commit",
+      "description": "Please summarize your current changes, generate a commit message in English, then add and commit.",
+      "skillId": "",
+      "source": ".claude/commands/commit.md",
+      "status": "unavailable",
+      "reason": "Command does not map to a selected skill."
+    },
+    {
+      "id": "tag",
+      "title": "/tag",
+      "description": "Create an annotated git tag with an auto-generated summary of changes since the last tag.",
+      "skillId": "",
+      "source": ".claude/commands/tag.md",
+      "status": "unavailable",
+      "reason": "Command does not map to a selected skill."
+    }
+  ],
+  "analysis": {
+    "mode": "ai",
+    "summary": "Import the two independent canonical review skills covering native OCR review and host-agent delegated review.",
+    "confidence": "high",
+    "selected": [
+      "plugins/open-code-review/skills/open-code-review",
+      "plugins/open-code-review/skills/open-code-review-delegate",
+      "skills/open-code-review",
+      "skills/open-code-review-delegate"
+    ],
+    "excluded": [],
+    "skipped": []
+  }
+}
