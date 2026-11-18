@@ -90,8 +90,8 @@ function historyTurnActions(sessionId: string, turnId: string, spill: boolean, f
   ].join("")}</span>`;
 }
 
-function diffTarget(sessionId: string, turnId: string, path: string): string {
-  return `data-history-command="dext.history.openTurnDiff" data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(turnId)}" data-turn-path="${escapeHtml(path)}"`;
+function turnChangeTarget(command: string, sessionId: string, turnId: string, path: string): string {
+  return `data-history-command="${command}" data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(turnId)}" data-turn-path="${escapeHtml(path)}"`;
 }
 
 /** One row per changed file, with the turn's own reason. Rendered from the record
@@ -99,7 +99,7 @@ function diffTarget(sessionId: string, turnId: string, path: string): string {
  * The live Conversation builds the same table from the same class names. */
 function changedFiles(changes: readonly TurnChange[], sessionId: string | undefined, turnId: string): string {
   if (!sessionId || !changes.length) return "";
-  const rows = changes.map((change) => `<tr class="output-turn-change" tabindex="0" title="${escapeHtml(`${change.path} — ${change.reason}`)}" ${diffTarget(sessionId, turnId, change.path)}><td class="output-turn-change-path"><i class="codicon codicon-diff"></i><code>${escapeHtml(change.path)}</code></td><td class="output-turn-change-reason">${escapeHtml(change.reason)}</td></tr>`).join("");
+  const rows = changes.map((change) => `<tr class="output-turn-change" tabindex="0" title="${escapeHtml(`${change.path} — ${change.reason}`)}" ${turnChangeTarget("dext.history.openTurnDiff", sessionId, turnId, change.path)}><td class="output-turn-change-path"><i class="codicon codicon-diff"></i><code>${escapeHtml(change.path)}</code></td><td class="output-turn-change-reason">${escapeHtml(change.reason)}</td><td class="output-turn-change-actions"><button class="output-turn-change-add icon-button compact" type="button" title="Add this file's lines to Input" aria-label="Add this file's lines to Input" ${turnChangeTarget("dext.history.addTurnChangeToDext", sessionId, turnId, change.path)}><i class="codicon codicon-comment-add"></i></button></td></tr>`).join("");
   // Wrapped in .markdown-body so the box, borders and type come from the same
   // table style the answer's own tables use.
   return `<div class="markdown-body"><table class="output-turn-changes"><thead><tr><th>File</th><th>Change</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -116,7 +116,7 @@ function linkChangedPaths(html: string, changes: readonly TurnChange[], sessionI
     const hits = changes.filter((change) => change.path === text || change.path.endsWith(`/${text}`));
     if (hits.length !== 1) return span;
     const [{ path, reason }] = hits as [TurnChange];
-    return `<a class="output-turn-change-link" href="#" ${diffTarget(sessionId, turnId, path)} title="${escapeHtml(`${path} — ${reason}`)}">${span}</a>`;
+    return `<a class="output-turn-change-link" href="#" ${turnChangeTarget("dext.history.openTurnDiff", sessionId, turnId, path)} title="${escapeHtml(`${path} — ${reason}`)}">${span}</a>`;
   });
 }
 

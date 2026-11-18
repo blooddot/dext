@@ -1053,9 +1053,30 @@ main {
   outline-offset: -1px;
 }
 
+/* The row's second action, kept out of the way until the row is under the
+   pointer: the path stays the one thing to click. */
+.output-turn-change-actions {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.output-turn-change-add {
+  opacity: 0;
+}
+
+.output-turn-change:hover .output-turn-change-add,
+.output-turn-change-add:focus-visible {
+  opacity: 1;
+}
+
 .output-turn-change .codicon {
   margin-right: 6px;
   font-size: 12px;
+}
+
+.output-turn-change-add .codicon {
+  margin-right: 0;
 }
 
 /* The path is the link: it opens that file's diff, so it reads as one. It wraps
