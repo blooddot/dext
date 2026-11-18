@@ -14,7 +14,7 @@ import { managedResourcePath, removeManagedResource } from "./features/resources
 import { renderResourceError } from "./features/resources/presentation/resourceDocuments.js";
 import { DextHistoryPanel } from "./features/conversations/host/historyEditorProvider.js";
 import { conversationMarkdown, conversationTitle, historyTranscript, historyTurnMarkdown, historyTurnTitle } from "./features/conversations/presentation/historyRender.js";
-import { turnChanges } from "./features/conversations/domain/turnDiff.js";
+import { turnChanges, changedSpan } from "./features/conversations/domain/turnDiff.js";
 import { workspaceFileUri } from "./platform/vscode/contextHost.js";
 import { gitHeadUri } from "./platform/vscode/gitChanges.js";
 import { TurnSnapshots } from "./platform/vscode/turnSnapshots.js";
@@ -32,7 +32,7 @@ import { DextAppearanceController } from "./platform/vscode/appearance.js";
 import { appearanceColorStyle } from "./platform/vscode/appearanceColors.js";
 import { parseDextAppearanceRequest } from "./platform/webviewProtocol.js";
 import { DELETE_CONFIRMATION_DETAIL, TURN_DELETE_CONFIRMATION, TURN_RETRY_CONFIRMATION } from "./features/conversations/presentation/turnPresentation.js";
-import type { SelectionTarget } from "./platform/vscode/attachments.js";
+import { fileAttachment, type SelectionTarget } from "./platform/vscode/attachments.js";
 import { DextSelectionActions } from "./platform/vscode/selectionActions.js";
 let activeApplication: DextApplication | undefined;
 
@@ -420,6 +420,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!session) throw new Error("Conversation not found in Dext history.");
     return session;
   };
+  /** The turn's own starting point for one file: the closest earlier turn that
+   * saved it; only a file no turn touched before falls back to HEAD. */
+  const turnStartUri = async (session: DextHistorySession, index: number, path: string): Promise<vscode.Uri | undefined> => {
+    for (const earlierTurn of session.turns.slice(0, index).reverse()) {
+      const saved = await snapshots.find(session.id, earlierTurn.id, path);
+      if (saved) return saved;
+    }
+    const workspace = workspaceFileUri(path)?.uri;
+    return workspace ? await gitHeadUri(workspace) : undefined;
+  };
+  /** A snapshot copy and a `git:` HEAD copy are both only readable this way. */
+  const fileText = async (uri: vscode.Uri): Promise<string | undefined> => {
+    try {
+      return Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
+    } catch {
+      return undefined;
+    }
+  };
   const forkConversation = async (source: DextHistorySession, turns: readonly DextHistoryRecord[]): Promise<void> => {
     const forked = await history.fork(turns, source.providerSessions);
     // A fork of a conversation the user took the trouble to name would be hard
@@ -672,16 +690,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // separately; this is only the list of comparable files.
         const files: { path: string; reason: string; before: vscode.Uri; after: vscode.Uri }[] = [];
         for (const change of changes) {
-          const workspace = workspaceFileUri(change.path)?.uri;
           const after = await snapshots.end(session.id, turn.id, change.path);
-          // The turn's own starting point is the closest earlier turn that saved
-          // this file; only a file no turn touched before falls back to HEAD.
-          let before: vscode.Uri | undefined;
-          for (const earlierTurn of session.turns.slice(0, index).reverse()) {
-            before = await snapshots.find(session.id, earlierTurn.id, change.path);
-            if (before) break;
-          }
-          before ??= workspace ? await gitHeadUri(workspace) : undefined;
+          const before = await turnStartUri(session, index, change.path);
           if (before && after) files.push({ path: change.path, reason: change.reason, before, after });
         }
         if (!files.length) {
@@ -725,6 +735,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             files.map((file): [vscode.Uri, vscode.Uri, vscode.Uri] => [file.after, file.before, file.after])
           );
         }
+      })
+    ),
+    // The changed-file row's own action: a chip naming the lines the turn
+    // changed, so the next request can point at the part of the diff it is about.
+    vscode.commands.registerCommand("dext.history.addTurnChangeToDext", (context?: ConversationContext) =>
+      reportCommandError(async () => {
+        const session = await historySession(context);
+        const index = session.turns.findIndex((item) => item.id === context?.turnId);
+        const turn = session.turns[index];
+        const path = context?.path;
+        if (!turn || !path || !turnChanges(turn).some((change) => change.path === path)) {
+          throw new Error("Conversation turn file not found.");
+        }
+        const file = workspaceFileUri(path)?.uri;
+        if (!file) throw new Error("This changed file is outside the workspace.");
+        // The chip must name the file the Agent will open, so its lines come from
+        // that file as it is now, not from the turn's own copy.
+        const now = await fileText(file);
+        const start = await turnStartUri(session, index, path);
+        const before = start ? await fileText(start) : undefined;
+        const range = now !== undefined && before !== undefined ? changedSpan(before, now) : undefined;
+        const reference = await fileAttachment(file, range);
+        if (!reference) throw new Error("This changed file has no path the Agent can read.");
+        sidebar.insertReferences([reference.expression]);
+        await focusSidebar();
       })
     ),
     vscode.commands.registerCommand("dext.history.retryTurn", (context?: ConversationContext) =>

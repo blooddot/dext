@@ -407,6 +407,8 @@ const transcript = new TranscriptView({
   openSpill: (sessionId, turnId) => vscode.postMessage({ type: "openSpillFile", sessionId, turnId }),
   openTurnDiff: (sessionId, turnId, path) =>
     vscode.postMessage({ type: "openTurnDiff", sessionId, turnId, ...(path ? { path } : {}) }),
+  addTurnChangeToInput: (sessionId, turnId, path) =>
+    vscode.postMessage({ type: "addTurnChangeToInput", sessionId, turnId, path }),
   createTodos: () => new AgentTodoView((itemId, checked) => {
     // Only one plan's acceptance is cached per conversation, and only its owner
     // row renders checkboxes, so this path is what the click belongs to.

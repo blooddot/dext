@@ -858,6 +858,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             sessionId: request.sessionId, turnId: request.turnId, ...(request.path ? { path: request.path } : {})
           });
           break;
+        case "addTurnChangeToInput":
+          await vscode.commands.executeCommand("dext.history.addTurnChangeToDext", {
+            sessionId: request.sessionId, turnId: request.turnId, path: request.path
+          });
+          break;
         case "buildPlan":
           await this.conversation.plans.build(request.planPath);
           break;

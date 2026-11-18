@@ -94,6 +94,8 @@ export interface TranscriptHost {
   copyTurn(sessionId: string, turnId: string): void;
   openSpill(sessionId: string, turnId: string): void;
   openTurnDiff(sessionId: string, turnId: string, path?: string): void;
+  /** The changed-file row's second action: its lines as an @ reference. */
+  addTurnChangeToInput(sessionId: string, turnId: string, path: string): void;
   deleteTurn(sessionId: string, turnId: string): void;
   createTodos(): AgentTodoView;
   createQuestions(turnId: string, sessionId: string | undefined): AgentInputView;
@@ -404,7 +406,14 @@ export class TranscriptView {
       const text = document.createElement("td");
       text.className = "output-turn-change-reason";
       text.textContent = file.reason;
-      item.append(path, text);
+      const actions = document.createElement("td");
+      actions.className = "output-turn-change-actions";
+      const add = this.actionButton(TURN_ADD_TO_INPUT_ACTION.icon, "Add this file's lines to Input", () => {
+        if (sessionId) this.host.addTurnChangeToInput(sessionId, turnId, file.path);
+      }, true);
+      add.classList.add("output-turn-change-add");
+      actions.append(add);
+      item.append(path, text, actions);
       return item;
     });
     turn.changes.querySelector("tbody")?.replaceChildren(...rows);

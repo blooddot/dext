@@ -83,6 +83,7 @@ export class DextHistoryPanel implements vscode.Disposable {
         && message.sessionId.length > 0) {
         const turnCommands = [
           "dext.history.openTurnDiff",
+          "dext.history.addTurnChangeToDext",
           "dext.history.renameTurn",
           "dext.history.forkFromTurn",
           "dext.history.copyTurn",
