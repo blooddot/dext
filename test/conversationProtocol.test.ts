@@ -13,7 +13,7 @@ describe("conversation protocol", () => {
     expect(types).toContain("correctPlan");
     expect(types).toContain("composerDraft");
     expect(types).toContain("togglePlanAcceptance");
-    expect(types).toHaveLength(26);
+    expect(types).toHaveLength(27);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 
@@ -34,6 +34,8 @@ describe("conversation protocol", () => {
       { type: "agentSelection", selection },
       { type: "agentSelection", selection: { ...selection, skills: ["ponytail", "ponytail-review"] } },
       { type: "harnessPresetAction", action: "refresh" },
+      { type: "openTurnDiff", sessionId: "session", turnId: "turn", path: "src/a.ts" },
+      { type: "addTurnChangeToInput", sessionId: "session", turnId: "turn", path: "src/a.ts" },
       { type: "composerDraft", sessionId: "session", source: "half a thought", attachments: [{ relativePath: ".dext-global/attachments/a.png", name: "a.png" }] }
     ];
     for (const request of accepted) expect(webviewRequestSchema.safeParse(request).success, JSON.stringify(request)).toBe(true);

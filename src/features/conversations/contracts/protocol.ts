@@ -48,6 +48,9 @@ const conversationSchemaList = [
   z.object({
     type: z.literal("openTurnDiff"), sessionId: z.string().min(1), turnId: z.string().min(1), path: z.string().min(1).optional()
   }),
+  z.object({
+    type: z.literal("addTurnChangeToInput"), sessionId: z.string().min(1), turnId: z.string().min(1), path: z.string().min(1)
+  }),
   z.object({ type: z.literal("buildPlan"), planPath: z.string().min(1).max(512) }),
   z.object({
     type: z.literal("togglePlanAcceptance"),
