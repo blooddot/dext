@@ -742,9 +742,11 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/copyInput: \(source\) => \{ void clipboard\.write\(source\); \}/);
     expect(transcript).toContain("summary.append(runningIcon, chevron, title,");
     const actionOrder = [...transcript.matchAll(/this\.actionButton\((TURN_\w+_ACTION)\.icon/g)].map((match) => match[1]);
-    expect(actionOrder).toEqual([
+    expect(actionOrder.slice(0, 8)).toEqual([
       "TURN_EDIT_ACTION", "TURN_RETRY_ACTION", "TURN_RENAME_ACTION", "TURN_FORK_ACTION", "TURN_COPY_INPUT_ACTION", "TURN_COPY_ACTION", "TURN_ADD_TO_INPUT_ACTION", "TURN_DELETE_ACTION"
     ]);
+    // A changed-file row carries the same action outside that toolbar, one per file.
+    expect(actionOrder.slice(8)).toEqual(["TURN_ADD_TO_INPUT_ACTION"]);
     // A turn that recorded its changed files opens the same diff from the live
     // toolbar, ahead of edit and retry.
     expect(transcript.indexOf("diffAction.hidden = !options.diff")).toBeLessThan(transcript.indexOf("TURN_EDIT_ACTION.icon"));
@@ -752,6 +754,10 @@ describe("sidebar panel layout", () => {
     expect(main).toContain("...(record.changedFiles !== undefined ? { diff: true } : {})");
     expect(main).toMatch(/openTurnDiff: \(sessionId, turnId, path\) =>[\s\S]*?type: "openTurnDiff", sessionId, turnId/);
     expect(sidebar).toMatch(/case "openTurnDiff":[\s\S]*?dext\.history\.openTurnDiff[\s\S]*?sessionId: request\.sessionId, turnId: request\.turnId, \.\.\.\(request\.path/);
+    // The row's second action puts that file's changed lines in the Input instead.
+    expect(main).toMatch(/addTurnChangeToInput: \(sessionId, turnId, path\) =>[\s\S]*?type: "addTurnChangeToInput"/);
+    expect(sidebar).toMatch(/case "addTurnChangeToInput":[\s\S]*?dext\.history\.addTurnChangeToDext[\s\S]*?path: request\.path/);
+    expect(await source("src/features/conversations/presentation/historyRender.ts")).toContain("dext.history.addTurnChangeToDext");
     // The reasons close the turn body too: one row per file, clickable, path as a link.
     expect(transcript).toMatch(/setChanges\(turn: OutputTurnElements[\s\S]*?openTurnDiff\(sessionId, turnId, path\)[\s\S]*?open\(file\.path\)/);
     expect(transcript).toMatch(/body\.append\(todos\.element, questions\.element, process\.disclosure, output\.section, changes\)/);
@@ -763,6 +769,7 @@ describe("sidebar panel layout", () => {
     // VS Code matches multi-diff editors on the source URI, one per turn.
     const extension = await source("src/extension.ts");
     expect(extension).toContain("multiDiffSourceUri: snapshots.turnDirectory(session.id, turn.id)");
+    expect(extension).toContain("changedSpan(before, now)");
     expect(extension).toContain('"_workbench.openMultiDiffEditor"');
     expect(extension).toContain("reveal: { modifiedUri: reveal.after }");
     // Reasons stay in the turn body; the diff opens no second editor beside it.

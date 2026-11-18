@@ -211,6 +211,9 @@ describe("Dext history rendering", () => {
     ]);
     // The table closes the body, after the turn's timeline and output.
     expect(html).toContain('<table class="output-turn-changes"><thead><tr><th>File</th><th>Change</th></tr></thead><tbody>');
+    // Each row's second action offers its changed lines as an Input reference.
+    expect(html).toContain('<td class="output-turn-change-actions"><button class="output-turn-change-add icon-button compact" type="button" title="Add this file\'s lines to Input"');
+    expect(html).toContain('data-history-command="dext.history.addTurnChangeToDext"');
     expect(html.indexOf('class="output-turn-changes"')).toBeGreaterThan(html.indexOf('data-turn-section="process"'));
     // No table for a turn without changed files, and no reason leaks into the copied text.
     const withoutFiles: DextHistoryRecord = { id: turn.id, createdAt: turn.createdAt, input: turn.input, output: turn.output, process: turn.process };
