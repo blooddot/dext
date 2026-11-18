@@ -1,5 +1,5 @@
 import type { DextHistoryRecord } from "../contracts/history.js";
-import type { DextResult } from "../../../shared/contracts/types.js";
+import type { DextResult, Range } from "../../../shared/contracts/types.js";
 import { readHistoryResponse } from "./historyResponse.js";
 /** Written for a file the turn changed but never explained. */
 export const NO_STATED_REASON = "no stated reason";
@@ -112,4 +112,23 @@ export function turnChanges(record: DextHistoryRecord): TurnChange[] {
     if (!line) return { path, reason: NO_STATED_REASON };
     return { path, reason: clip(describeLine(line, path, name), MAX_REASON_LENGTH) };
   });
+}
+
+/** The lines a turn changed in one file, as one range of the file as it reads
+ * now — the part an @ reference has to point the Agent at.
+ * shortcut: compared by line, so an edit that only moves whitespace inside a
+ * line is invisible; upgrade if that matters. */
+export function changedSpan(before: string, after: string): Range | undefined {
+  const beforeLines = before.split(/\r?\n/);
+  const afterLines = after.split(/\r?\n/);
+  let head = 0;
+  while (head < beforeLines.length && beforeLines[head] === afterLines[head]) head += 1;
+  let tail = 0;
+  while (tail < afterLines.length - head && tail < beforeLines.length - head
+    && afterLines[afterLines.length - 1 - tail] === beforeLines[beforeLines.length - 1 - tail]) tail += 1;
+  // Two edits far apart in one file are reported as the span between them: one
+  // reference the user can send beats several they would have to pick from.
+  const lastLine = afterLines.length - 1 - tail;
+  if (lastLine < head) return undefined;
+  return { start: { line: head, character: 0 }, end: { line: lastLine, character: (afterLines[lastLine] ?? "").length } };
 }

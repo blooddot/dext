@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_STATED_REASON, turnChanges } from "../src/features/conversations/domain/turnDiff.js";
+import { NO_STATED_REASON, changedSpan, turnChanges } from "../src/features/conversations/domain/turnDiff.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
 import type { InputExecutionResponse } from "../src/shared/contracts/types.js";
 
@@ -112,3 +112,30 @@ describe("turnChanges", () => {
   });
 });
 
+
+describe("changedSpan", () => {
+  it("points at the lines that differ, surrounded by the unchanged ones", () => {
+    const before = ["one", "two", "three", "four"].join("\n");
+    const after = ["one", "two", "THREE", "four"].join("\n");
+    // Zero-based, characters counted from the line start, as a file reference stores it.
+    expect(changedSpan(before, after)).toEqual({ start: { line: 2, character: 0 }, end: { line: 2, character: 5 } });
+  });
+
+  it("spans both edits when a file changed in two places", () => {
+    const before = ["a", "b", "c", "d", "e"].join("\n");
+    const after = ["A", "b", "c", "d", "E"].join("\n");
+    expect(changedSpan(before, after)).toEqual({ start: { line: 0, character: 0 }, end: { line: 4, character: 1 } });
+  });
+
+  it("has no span when nothing changed", () => {
+    expect(changedSpan("same\nfile", "same\nfile")).toBeUndefined();
+  });
+
+  it("has no span when the turn only removed lines", () => {
+    expect(changedSpan("a\nb\nc", "a\nc")).toBeUndefined();
+  });
+
+  it("covers a new file entirely", () => {
+    expect(changedSpan("", "new\nfile")).toEqual({ start: { line: 0, character: 0 }, end: { line: 1, character: 4 } });
+  });
+});
