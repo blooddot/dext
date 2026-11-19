@@ -60,6 +60,14 @@ function runReading(id: string, input: string): Promise<SkillResult> {
   return skill({ skill: id, input });
 }
 
+/** `change` is the name the skill's commands take as `--change "<name>"`. It
+ * travels as its own line so the model never has to pick a name out of prose. */
+function describeChange(change: string, input = ""): string {
+  return [change === "" ? "" : `Change: ${change}`, input]
+    .filter((part) => part !== "")
+    .join("\n\n");
+}
+
 /**
  * Plan a change: proposal, spec delta, design and tasks. Writes only
  * `openspec/changes/<name>/`, never code.
@@ -71,18 +79,18 @@ function propose(input = ""): Promise<SkillResult> {
 
 /**
  * Implement an existing change by working through its tasks.
- * @param input The change to apply, plus any constraint for this run.
+ * @param change The change to apply, e.g. "add-video-export".
  */
-function apply(input = ""): Promise<SkillResult> {
-  return runWriting("openspec-apply-change", input);
+function apply(change: string): Promise<SkillResult> {
+  return runWriting("openspec-apply-change", describeChange(change));
 }
 
 /**
  * Merge a finished change's delta into `openspec/specs` and archive it.
- * @param input The change to archive.
+ * @param change The change to archive.
  */
-function archive(input = ""): Promise<SkillResult> {
-  return runWriting("openspec-archive-change", input);
+function archive(change: string): Promise<SkillResult> {
+  return runWriting("openspec-archive-change", describeChange(change));
 }
 
 /**
@@ -95,18 +103,19 @@ function explore(input = ""): Promise<SkillResult> {
 
 /**
  * Revise a change that is still being planned.
+ * @param change The change to revise.
  * @param input What to change about the plan.
  */
-function update(input = ""): Promise<SkillResult> {
-  return runWriting("openspec-update-change", input);
+function update(change: string, input = ""): Promise<SkillResult> {
+  return runWriting("openspec-update-change", describeChange(change, input));
 }
 
 /**
  * Realign `openspec/specs` with what the code now does.
- * @param input The scope to sync, or nothing for all of it.
+ * @param change The change whose delta to sync, or nothing for every active change.
  */
-function sync(input = ""): Promise<SkillResult> {
-  return runWriting("openspec-sync-specs", input);
+function sync(change = ""): Promise<SkillResult> {
+  return runWriting("openspec-sync-specs", describeChange(change));
 }
 
 export const spec = { propose, apply, archive, explore, update, sync };
