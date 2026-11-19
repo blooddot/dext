@@ -26,12 +26,17 @@ Files changed:
 
 | 函数 | 做什么 | 写文件 |
 |---|---|---|
-| `propose(需求)` | 生成 proposal / spec delta / design / tasks | 只写 `openspec/changes/<name>/` |
-| `apply(change名)` | 按 `tasks.md` 逐条实现，边做边勾 | 改代码 + `tasks.md` |
-| `archive(change名)` | 合并 delta 进 `specs/`，整个 change 挪进 `archive/` | 改 `openspec/specs/` |
-| `explore(问题)` | 读代码和 specs 回答问题 | 不写 |
-| `update(要改什么)` | 修订还在规划中的 change | 改 change 目录 |
-| `sync(范围)` | 让 `specs/` 追上代码现状 | 改 `openspec/specs/` |
+| `propose(input)` | 生成 proposal / spec delta / design / tasks | 只写 `openspec/changes/<name>/` |
+| `apply(change)` | 按 `tasks.md` 逐条实现，边做边勾 | 改代码 + `tasks.md` |
+| `archive(change)` | 合并 delta 进 `specs/`，整个 change 挪进 `archive/` | 改 `openspec/specs/` |
+| `explore(input)` | 读代码和 specs 回答问题 | 不写 |
+| `update(change, input?)` | 修订还在规划中的 change | 改 change 目录 |
+| `sync(change?)` | 让 `specs/` 追上代码现状 | 改 `openspec/specs/` |
+
+`change` 是 change 名（`openspec/changes/<name>/` 里那个 `<name>`，CLI 的 `--change "<name>"`），
+单独一个参数，不混在 `input` 里；`input` 只放本次的额外要求。`propose` / `explore` 没有 change 名可给，
+仍然只有一个 `input`。
+`apply` / `archive` / `sync` 没有第二个参数：这三个 skill 的 input 契约里就只有 change 名，其余都自己问。
 
 ## 权限
 
