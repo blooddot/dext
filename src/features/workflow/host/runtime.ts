@@ -658,12 +658,18 @@ export class DextRuntime implements WorkflowRuntime {
           const loaded = await this.skillLoader(skill, directory, profile.provider);
           runnerMetadata = {
             ...metadata,
-            instruction: [
-              `Execute the standard skill '${skill}' from ${loaded.sourcePath}.`,
-              "Follow its instructions for the direct input below. Do not expose private reasoning.",
-              "SKILL.md:",
-              loaded.instructions
-            ].join("\n\n")
+            // Skill calls are not conversation methods, so the language
+            // instruction has to be prepended here or a skill replies in
+            // whatever language its own template uses.
+            instruction: combineInstructions(
+              languageInstruction,
+              [
+                `Execute the standard skill '${skill}' from ${loaded.sourcePath}.`,
+                "Follow its instructions for the direct input below. Do not expose private reasoning.",
+                "SKILL.md:",
+                loaded.instructions
+              ].join("\n\n")
+            )!
           };
         }
         const onEvent = runnerMetadata.onAgentEvent ? guardPlanDocumentEvents(runnerMetadata.onAgentEvent) : undefined;

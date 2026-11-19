@@ -754,6 +754,7 @@ describe("Dext runtime", () => {
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
     runtime.setAgentSelection({ profileId: "codex", permission: "workspace-write" });
     runtime.setSkillLoader(async (skill) => ({ sourcePath: `${skill}/SKILL.md`, instructions: `skill ${skill}` }));
+    runtime.setOutputLanguage("zh-CN");
     const requests: { id: string; allowWorkspaceWrite?: boolean | undefined; permission?: string | undefined; instruction: string }[] = [];
     runtime.setAgentRunner({
       run: async (request) => {
@@ -772,7 +773,7 @@ describe("Dext runtime", () => {
     await runtime.execute(invoke("skill", [arg("skill", "openspec-propose"), arg("input", "plan it"), arg("apply", true)]));
 
     expect(requests).toEqual([
-      expect.objectContaining({ id: "skill", allowWorkspaceWrite: false, permission: "read-only" }),
+      expect.objectContaining({ id: "skill", allowWorkspaceWrite: false, permission: "read-only", instruction: expect.stringContaining("Interaction language set by Dext:") }),
       expect.objectContaining({
         id: "agent",
         allowWorkspaceWrite: true,
