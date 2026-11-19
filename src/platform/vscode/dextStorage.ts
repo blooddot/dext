@@ -54,16 +54,19 @@ export class DextStorage {
     return attachmentByteLimit(value);
   }
 
-  directory(kind: StoredDextFile): vscode.Uri {
-    if (this.location() === "global") return vscode.Uri.joinPath(this.globalStorageUri, kind);
+  /** `location` defaults to the setting, so a caller that has already resolved
+   * a location for this call (the code API's `location` argument) does not have
+   * to read every file from the same place. */
+  directory(kind: StoredDextFile, location: StorageLocation = this.location()): vscode.Uri {
+    if (location === "global") return vscode.Uri.joinPath(this.globalStorageUri, kind);
     const workspace = vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!workspace) throw new Error("Open a workspace to store Dext files in the project.");
     return vscode.Uri.joinPath(workspace, ".dext", kind);
   }
 
-  reference(kind: StoredDextFile, name: string): string {
+  reference(kind: StoredDextFile, name: string, location: StorageLocation = this.location()): string {
     if (!safeSegments(name)) throw new Error("Dext storage file names must not contain path traversal.");
-    return this.location() === "global"
+    return location === "global"
       ? `${GLOBAL_REFERENCE_ROOT}/${kind}/${name}`
       : `.dext/${kind}/${name}`;
   }

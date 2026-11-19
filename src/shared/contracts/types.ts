@@ -157,7 +157,10 @@ export interface PlanResult extends DextResultBase {
   /** Host-owned grounding; never accepted from provider result JSON. */
   kind: "plan";
   text: string;
-  /** Workspace-relative path of the saved plan document, set only by Plan mode. */
+  /** Path of the saved plan document, set by the host when a plan is saved.
+   * Its shape follows the location that saved it: an absolute file path under
+   * `global` storage, and a plan-directory relative path under `workspace`
+   * storage. Absent when nothing was written. */
   planPath?: string;
   /** The host is building an existing plan; keep the turn in Plan mode but
    * send the implementation request directly instead of creating a new plan. */

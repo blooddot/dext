@@ -36,6 +36,8 @@ const METHODS: readonly CallableDefinition[] = [
     version: "1.0.0",
     input: [
       { name: "input", type: "string", required: true, description: "Goal to plan for. Use @workspace/path tokens for attached code references." },
+      { name: "save", type: "boolean", default: true, description: "Save the plan as a file and return its planPath. Set false to return the plan text only, with no file and no planPath." },
+      { name: "location", type: "enum", values: ["global", "workspace"], description: "Where to save this plan: Dext's global storage or the project plan directory. Defaults to dext.storage.location and applies to this call only." },
       { name: "skills", type: "string", multiple: true, internal: true, description: "Optional Dext skill identifiers loaded only for this Plan call." },
       { name: "rules", type: "string", multiple: true, internal: true, description: "Optional .dext/rules-relative files loaded only for this Plan call." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },

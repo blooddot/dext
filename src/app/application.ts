@@ -27,7 +27,7 @@ import { createResultRepair } from "../features/agents/host/resultRepair.js";
 import { DextRuntime } from "../features/workflow/host/runtime.js";
 import { SkillCatalog } from "../features/workflow/host/skillCatalog.js";
 import { isSkillId } from "../features/workflow/contracts/skill.js";
-import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
+import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResponse, InvocationAst, RuntimeResponse } from "../shared/contracts/types.js";
 import { AGENT_PERMISSIONS, DEFAULT_AGENT_PROFILE_IDS, SUPPORTED_AGENT_PROFILE_IDS, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
 import { AgentProfileStore } from "../features/agents/host/agentProfiles.js";
 import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "../runner/dextHost.js";
@@ -45,7 +45,7 @@ import type { McpCredentialKind, McpDiscoveredTool, McpServerConfig, McpToolConf
 import { McpAccessTokenStore } from "../features/mcp/host/mcpSecrets.js";
 import { DEFAULT_PLAN_DIRECTORY, planFileName, planPathSegments } from "../features/conversations/domain/planFile.js";
 import { splitPlanResponse } from "../features/conversations/domain/planResponse.js";
-import { DextStorage } from "../platform/vscode/dextStorage.js";
+import { DextStorage, type StorageLocation } from "../platform/vscode/dextStorage.js";
 import { RESOURCE_DIRECTORIES, mergeResourceFiles, resourceFileLabels, resourceFileName, resourceFilePathSegments, resourceFiles, resourcePathSegments, resourcePrompt, type ResourceDocument, type ResourceFileLimits, type ResourceKind, type ResourceScope, type ResourceSession, type ResourceTarget } from "../features/resources/contracts/resourceSession.js";
 import { skillEntryId, type ResourcePackRef } from "../features/resources/contracts/resourceDocuments.js";
 import { importSkillPack, preflightSkillPack, SKILL_PACK_MAX_FILES, SKILL_PACK_MAX_BYTES, SKILL_FILE_MAX_BYTES, SKILL_SUPPORT_FILE_MAX_BYTES, type ImportSkillPackOptions, type SkillPackDraft } from "../features/resources/host/skillImporter.js";
@@ -795,11 +795,46 @@ export class DextApplication {
       runnerDirectory: __dirname,
       maxConcurrency: this.dispatchConcurrency,
       runsDirectory: this.runsDirectory(),
-      execute: (invocation, metadata, context) => this.runtime.execute(invocation, context, metadata)
+      execute: (invocation, metadata, context) => this.executeCodeCall(invocation, metadata, context)
     });
     this.kernels.push(kernel);
     this.reservedKernels.add(kernel);
     return kernel;
+  }
+
+  /** One Code-mode call, executed where Dext's storage lives.
+   *
+   * `plan()` saves its document here rather than in `executeInput` afterwards:
+   * `DextHost.onRequest` serializes this response for the kernel's JSON boundary
+   * and records it for replay, so a `planPath` added here is already part of
+   * both. Everything else is returned exactly as the runtime produced it. */
+  private async executeCodeCall(
+    invocation: InvocationAst,
+    metadata: Readonly<ExecutionMetadata>,
+    context: readonly CodeRef[]
+  ): Promise<RuntimeResponse> {
+    const response = await this.runtime.execute(invocation, context, metadata);
+    if (invocation.method !== "plan") return response;
+    const result = response.result;
+    if (result.kind !== "plan" || !result.text.trim()) return response;
+    const args = new Map(invocation.arguments.map((argument) => [argument.name, argument.value]));
+    // The declared `default: true` is applied by the runtime's zod contract, which
+    // this wrapper never sees, so an absent `save` means "save".
+    if (args.get("save") === false) return response;
+    const requested = args.get("location");
+    const location: StorageLocation = requested === "global" || requested === "workspace"
+      ? requested
+      : this.storage.location();
+    const input = args.get("input");
+    const written = await this.writePlanFile(typeof input === "string" ? input : "", result.text.trim(), location);
+    if (!written) return response;
+    // The `.dext-global/...` reference is only resolvable inside Dext, so global
+    // storage hands out the file's own path. The workspace location already
+    // produces the workspace-relative plan path UI history stores.
+    return {
+      ...response,
+      result: { ...result, planPath: location === "global" ? written.filePath : written.reference }
+    };
   }
 
   /** Keeps one idle kernel warm for the next run and disposes the rest: a finished
@@ -1968,13 +2003,32 @@ export class DextApplication {
     if (result.kind !== "plan" || !result.text.trim()) return response;
     const plan = splitPlanResponse(result.text);
     if (!plan.document) return response;
-    const workspaceStorage = this.storage.location() === "workspace";
-    if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return response;
-    const configured = this.planDirectory();
-    const segments = workspaceStorage ? planPathSegments(configured || DEFAULT_PLAN_DIRECTORY) : [];
+    const written = await this.writePlanFile(input, plan.document, this.storage.location(), existingPath, expectedFileHash);
+    if (!written) return response;
+    return { ...response, result: { ...result, text: plan.conversation, planPath: written.reference } };
+  }
+
+  /** The one place a plan document is written. `location` is resolved by the
+   * caller: the UI's Plan turn passes the setting, and the code API passes its
+   * own `location` argument or the setting. Whether to save at all is also the
+   * caller's decision, so this method only writes what it was handed.
+   *
+   * Returns the storage reference history stores plus the file's native path,
+   * which is what an outside process needs for a plan kept in global storage. */
+  private async writePlanFile(
+    input: string,
+    document: string,
+    location: StorageLocation,
+    existingPath?: string,
+    expectedFileHash?: string
+  ): Promise<{ reference: string; filePath: string } | undefined> {
+    if (!document.trim()) return undefined;
+    const workspaceStorage = location === "workspace";
+    if (workspaceStorage && (!this.workspaceTrusted || !this.workspaceUri)) return undefined;
+    const segments = workspaceStorage ? planPathSegments(this.planDirectory() || DEFAULT_PLAN_DIRECTORY) : [];
     const directory = workspaceStorage
       ? vscode.Uri.joinPath(this.workspaceUri!, ...segments)
-      : this.storage.directory("plans");
+      : this.storage.directory("plans", location);
     let name: string | undefined;
     if (!existingPath) {
       const now = new Date();
@@ -2000,9 +2054,9 @@ export class DextApplication {
       const actualHash = createHash("sha256").update(await vscode.workspace.fs.readFile(target)).digest("hex");
       if (!expectedFileHash || actualHash !== expectedFileHash) throw new Error("Plan changed while generating its revision; external edits were preserved. Retry the revision against the current file.");
     }
-    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${plan.document}\n`));
-    const planPath = existingPath ?? (workspaceStorage ? [...segments, name!].join("/") : this.storage.reference("plans", name!));
-    return { ...response, result: { ...result, text: plan.conversation, planPath } };
+    await vscode.workspace.fs.writeFile(target, new TextEncoder().encode(`${document}\n`));
+    const reference = existingPath ?? (workspaceStorage ? [...segments, name!].join("/") : this.storage.reference("plans", name!, location));
+    return { reference, filePath: target.fsPath };
   }
 
   planUri(reference: string): vscode.Uri | undefined {

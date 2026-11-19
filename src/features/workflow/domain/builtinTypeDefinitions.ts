@@ -22,7 +22,7 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
   { name: "AskResult", description: "Text returned by Ask.", fields: [
     { name: "kind", type: '"ask"' }, { name: "text", type: "string" }
   ] },
-  { name: "PlanResult", description: "Text returned by Plan and its optional saved-plan state.", fields: [
+  { name: "PlanResult", description: "Text returned by Plan and its optional saved-plan path; planPath is an absolute path under global storage and a plan-directory relative path under workspace storage.", fields: [
     { name: "kind", type: '"plan"' }, { name: "text", type: "string" }, { name: "planPath", type: "string", optional: true },
     { name: "executePlan", type: "boolean", optional: true }, { name: "planOutcome", type: "object", optional: true }
   ] },
