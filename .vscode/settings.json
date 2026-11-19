@@ -15,6 +15,8 @@
     ],
     "dext.mcpTools": [],
     "dext.hiddenSkills": [
+        "open-code-review",
+        "open-code-review-delegate",
         "openspec-apply-change",
         "openspec-archive-change",
         "openspec-explore",
