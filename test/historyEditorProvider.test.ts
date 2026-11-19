@@ -53,7 +53,7 @@ beforeEach(async () => {
 });
 
 describe("History turn action routing", () => {
-  it.each(["openTurnDiff", "renameTurn", "forkFromTurn", "copyTurn", "openSpill", "deleteTurn"])("routes %s with the clicked turn and session", (action) => {
+  it.each(["openTurnDiff", "renameTurn", "forkFromTurn", "copyTurnInput", "copyTurn", "openSpill", "deleteTurn"])("routes %s with the clicked turn and session", (action) => {
     state.receive?.({ type: "historyCommand", command: `dext.history.${action}`, sessionId: "session-1", turnId: "turn-1" });
     expect(state.execute).toHaveBeenCalledExactlyOnceWith(`dext.history.${action}`, { sessionId: "session-1", turnId: "turn-1" });
   });
