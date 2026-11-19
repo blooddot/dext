@@ -577,9 +577,13 @@ export class DextRuntime implements WorkflowRuntime {
       // Mutation/application and presentation APIs stay deterministic. Only
       // semantic model operations are delegated to the selected Agent CLI.
       if (profile && usesAgentRunner(method.id)) {
-        const agentWriteEnabled = method.id === "agent" && resolved.arguments.apply !== false;
+        // agent applies by default; skill must opt in, so existing skill()
+        // callers keep the read-only contract.
+        const agentWriteEnabled = method.id === "agent"
+          ? resolved.arguments.apply !== false
+          : method.id === "skill" && resolved.arguments.apply === true;
         if (agentWriteEnabled && !this.workspaceTrusted) {
-          throw new Error("agent(apply=true) requires a trusted local workspace.");
+          throw new Error(`${method.id}(apply=true) requires a trusted local workspace.`);
         }
         let runnerMetadata = metadata;
         if (CONVERSATION_METHODS.has(method.id)) {

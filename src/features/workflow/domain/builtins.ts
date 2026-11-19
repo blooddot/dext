@@ -120,12 +120,13 @@ const METHODS: readonly CallableDefinition[] = [
   {
     id: "skill",
     title: "Run Skill",
-    description: "Load and execute a standard SKILL.md from the configured project skill directories.",
+    description: "Load and execute a standard SKILL.md from the configured project skill directories. Skill calls are read-only by default.",
     kind: "skill",
     version: "1.0.0",
     input: [
       { name: "skill", type: "string", required: true, description: "Discovered skill identifier." },
       { name: "input", type: "string", required: true, description: "Direct task input for the skill." },
+      { name: "apply", type: "boolean", default: false, description: "Allow this skill to modify a trusted workspace and run commands. Defaults to false: skill calls are read-only." },
       { name: "workspace", type: "dir", description: "Optional workspace directory; defaults to the current project root." },
       echoField()
     ],
