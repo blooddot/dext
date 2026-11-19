@@ -20,7 +20,17 @@ import { gitHeadUri } from "./platform/vscode/gitChanges.js";
 import { TurnSnapshots } from "./platform/vscode/turnSnapshots.js";
 import type { DextHistoryRecord, DextHistorySession } from "./features/conversations/contracts/history.js";
 import { DEFAULT_HISTORY_LIMITS } from "./features/conversations/contracts/history.js";
-import { openFileHistoryStore } from "./features/conversations/host/historyFileState.js";
+import {
+  historyBodyFile,
+  historyResourceFile,
+  historySessionIdFromBodyFile,
+  openFileHistoryStore,
+  readHistoryBody,
+  readHistoryIndexFile,
+  writeHistoryBody,
+  writeHistoryIndexFile,
+  type HistoryIndex
+} from "./features/conversations/host/historyFileState.js";
 import { renderEditorTabHtml } from "./platform/editor-tabs/editorTabHtml.js";
 import type { VscodeWebviewPanelLike } from "./platform/editor-tabs/editorTabManager.js";
 import { EditorTabManager, createVscodeEditorTabHost, wrapVscodeWebviewPanel, type EditorTabPanelHandle } from "./platform/editor-tabs/editorTabManager.js";
@@ -28,6 +38,7 @@ import { EditorTabRestorer } from "./platform/editor-tabs/editorTabSerializer.js
 import { restoreEditorTabState } from "./platform/editor-tabs/editorTabState.js";
 import { EDITOR_TAB_VIEW_TYPES, parseEditorTabKey } from "./platform/editor-tabs/editorTabTypes.js";
 import { DextSidebarProvider } from "./app/sidebarProvider.js";
+import { DextSyncController } from "./features/sync/host/syncController.js";
 import { DextAppearanceController } from "./platform/vscode/appearance.js";
 import { appearanceColorStyle } from "./platform/vscode/appearanceColors.js";
 import { parseDextAppearanceRequest } from "./platform/webviewProtocol.js";
@@ -88,6 +99,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Same root the sidebar writes to; the class only holds the path.
   const snapshots = new TurnSnapshots(application.storage.globalStorageUri);
   const sidebar = new DextSidebarProvider(context.extensionUri, application, history, preferences, appearance);
+  // Cloud-folder sync merges this machine's conversations, preferences,
+  // attachments and plans with a folder the user points at (OneDrive, Dropbox,
+  // Syncthing, ...). Nothing runs until `dext.sync.directory` is set.
+  const syncStorageDirectory = (kind: "attachments" | "plans"): string | undefined => {
+    try { return application.storage.directory(kind).fsPath; }
+    catch { return undefined; }
+  };
+  const syncHistory = {
+    readIndex: (directory: string) => readHistoryIndexFile(directory),
+    writeIndex: (directory: string, index: HistoryIndex) => writeHistoryIndexFile(directory, index),
+    readBody: (directory: string, sessionId: string) => readHistoryBody(directory, sessionId),
+    writeBody: (directory: string, sessionId: string, turns: Parameters<typeof writeHistoryBody>[2]) => writeHistoryBody(directory, sessionId, turns),
+    bodyFile: historyBodyFile,
+    resourceFile: historyResourceFile,
+    sessionIdFromBodyFile: historySessionIdFromBodyFile
+  };
+  const sync = new DextSyncController({
+    historyDir: historyDirectory,
+    history: syncHistory,
+    queue: history,
+    preferences: {
+      read: () => preferences.syncSnapshot(),
+      adopt: (next) => preferences.adoptSyncSnapshot(next)
+    },
+    attachmentDirectory: () => syncStorageDirectory("attachments"),
+    planDirectory: () => syncStorageDirectory("plans"),
+    refresh: async () => {
+      await sidebar.conversationsChanged();
+      await sidebar.refresh();
+      historyPanel.refresh();
+    }
+  });
+  context.subscriptions.push(sync);
+  context.subscriptions.push({ dispose: history.onDidChange(() => sync.schedule()) });
+  context.subscriptions.push(vscode.commands.registerCommand("dext.sync.now", () => sync.syncNow(true)));
+  sync.start();
   // Unified editor tabs: Resources and History all go through one manager so
   // a stable key can never open twice, whichever recovery path runs first.
   const editors: {

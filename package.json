@@ -125,6 +125,11 @@
         "title": "Copy Conversation as Markdown"
       },
       {
+        "command": "dext.sync.now",
+        "title": "Sync Conversations Now",
+        "category": "Dext"
+      },
+      {
         "command": "dext.history.addConversationToDext",
         "title": "Add Conversation to Dext Input"
       },
@@ -999,6 +1004,23 @@
           "minimum": 1000,
           "maximum": 600000,
           "description": "Timeout applied to terminal() calls that do not pass timeout_ms. Default: 120000 milliseconds (two minutes). Invalid values or values above 600000 milliseconds fall back to the default; 600000 is also the hard ceiling for an explicit timeout_ms."
+        },
+        "dext.sync.directory": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path of a folder Dext merges conversation history, preferences, attachments and plans into. Point it at a cloud-synced folder (OneDrive, Dropbox, iCloud Drive, Syncthing) to keep two machines in step. Empty disables sync."
+        },
+        "dext.sync.intervalSeconds": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 0,
+          "maximum": 86400,
+          "description": "How often Dext syncs while a window is open, in seconds. 0 disables the timer; Dext still syncs on startup, on window focus and after a conversation write."
+        },
+        "dext.sync.attachments": {
+          "type": "boolean",
+          "default": true,
+          "description": "Copy pasted attachment files to the sync folder so images referenced by a synced conversation stay readable on the other machine."
         },
         "dext.workflow.maxConcurrency": {
           "type": "integer",

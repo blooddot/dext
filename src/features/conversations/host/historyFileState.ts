@@ -114,7 +114,7 @@ function compactSession(session: DextHistorySession): DextHistorySession {
   };
 }
 
-interface HistoryIndex {
+export interface HistoryIndex {
   imported: boolean;
   order: string[];
   sessions: Record<string, DextHistorySummary>;
@@ -462,6 +462,42 @@ async function pruneLegacyBackup(directory: string): Promise<void> {
     }
     if (Date.now() - newest > BACKUP_MAX_AGE_MS) await rm(backup, { recursive: true, force: true });
   } catch { /* no backup, or another window already removed it */ }
+}
+
+/** Sync reads and writes the same index and body files through these names, so
+ * an external merge can never invent a second on-disk layout. */
+export const historyBodyFile = bodyPath;
+export const historyResourceFile = resourcePath;
+export const historySessionIdFromBodyFile = bodySessionId;
+export const readHistoryIndexFile = readIndex;
+export const writeHistoryIndexFile = writeIndexFile;
+
+/** The turns of one conversation, or `undefined` when no body exists yet: a
+ * conversation may legitimately hold only provider bindings. */
+export async function readHistoryBody(directory: string, sessionId: string): Promise<DextHistoryRecord[] | undefined> {
+  let text: string;
+  try {
+    text = await readFile(bodyPath(directory, sessionId), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  const turns: DextHistoryRecord[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try { turns.push(JSON.parse(line) as DextHistoryRecord); }
+    catch { /* One damaged line must not hide the rest of the conversation. */ }
+  }
+  return turns;
+}
+
+export async function writeHistoryBody(
+  directory: string,
+  sessionId: string,
+  turns: readonly DextHistoryRecord[]
+): Promise<void> {
+  await mkdir(directory, { recursive: true });
+  await writeDurable(bodyPath(directory, sessionId), bodyText(turns));
 }
 
 /** Import before exposing commands/sidebar. A completion marker makes a crash

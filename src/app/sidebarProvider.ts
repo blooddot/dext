@@ -259,6 +259,13 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     await this.conversation.controller.postPlanContext();
   }
 
+  /** Another process (a sync run) rewrote the history index: re-read it and
+   * repaint the conversation list instead of asking for a window reload. */
+  async conversationsChanged(): Promise<void> {
+    await this.conversation.controller.hydrate();
+    await this.conversation.controller.reloadSummaries();
+  }
+
   async resourcesChanged(): Promise<void> {
     await this.conversation.controller.reconcileInstalledSkills(this.installedSkillIds());
     await this.refresh();

@@ -97,6 +97,33 @@ function normalizeSession(session: DextHistorySession): DextHistorySession {
 
 export class DextHistoryStore implements ConversationHistoryStore {
   private mutation = Promise.resolve();
+  private readonly changeListeners = new Set<() => void>();
+
+  /** A host-side observer (sync, for example) runs after every committed write.
+   * Unsubscribing is the returned function. */
+  onDidChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  /** Re-read the index another process (or a sync run) committed. */
+  async refresh(): Promise<void> {
+    await this.backend.refresh();
+  }
+
+  /** Runs a whole-directory operation while no turn write can interleave, then
+   * re-reads the index it rewrote. Deliberately does not notify: the operation
+   * itself may have been the sync, and notifying would reschedule it forever. */
+  async exclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      const value = await operation();
+      await this.backend.refresh();
+      return value;
+    };
+    const result = this.mutation.then(run, run);
+    this.mutation = result.then(() => undefined, () => undefined);
+    return result;
+  }
 
   /** Limits are read per write rather than captured once, so changing the
    * setting takes effect on the next turn instead of the next window. */
@@ -366,7 +393,12 @@ export class DextHistoryStore implements ConversationHistoryStore {
       // Another window's committed metadata must be seen before this one
       // rewrites the index over it.
       await this.backend.refresh();
-      return operation();
+      const value = await operation();
+      for (const listener of this.changeListeners) {
+        try { listener(); }
+        catch { /* an observer must never fail the write it observed */ }
+      }
+      return value;
     };
     const result = this.mutation.then(run, run);
     this.mutation = result.then(() => undefined, () => undefined);

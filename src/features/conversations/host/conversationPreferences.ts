@@ -8,6 +8,7 @@ import type {
 } from "../contracts/preferences.js";
 import { normalizeConversationLayout } from "../domain/conversationOrder.js";
 import { normalizeAgentSelection } from "../domain/agentSelection.js";
+import type { SyncPreferences } from "../../sync/contracts/sync.js";
 
 const PINNED_KEY = "dext.pinnedConversations";
 const FAVORITES_KEY = "dext.favoriteConversations";
@@ -145,6 +146,37 @@ export class DextConversationPreferences implements ConversationPreferences {
     if (Object.keys(nextDrafts).length !== Object.keys(drafts).length) await this.state.update(DRAFTS_KEY, nextDrafts);
     if (pins.some((id) => !ids.has(id))) await this.state.update(PINNED_KEY, pins.filter((id) => ids.has(id)));
     if (favorites.some((id) => !ids.has(id))) await this.state.update(FAVORITES_KEY, favorites.filter((id) => ids.has(id)));
+  }
+
+  /** The user-level state a sync run carries: everything except the drafts a
+   * machine currently holds in a composer belongs to the same set. Drafts are
+   * included so an unsent message follows the user to the other machine. */
+  syncSnapshot(): SyncPreferences {
+    return {
+      pinned: this.pinned(),
+      favorites: this.favorites(),
+      titles: { ...this.state.get<Record<string, string>>(TITLES_KEY, {}) },
+      layout: this.conversationLayout(),
+      selections: { ...this.state.get<Record<string, AgentSelection>>(SELECTIONS_KEY, {}) },
+      drafts: this.composerDrafts()
+    };
+  }
+
+  /** Writes a merged snapshot back, skipping keys that did not change: a sync
+   * every few minutes must not rewrite the workspace state database each time. */
+  async adoptSyncSnapshot(snapshot: SyncPreferences): Promise<void> {
+    const writes: Thenable<void>[] = [];
+    const write = <T>(key: string, value: T): void => {
+      if (JSON.stringify(this.state.get(key)) === JSON.stringify(value)) return;
+      writes.push(this.state.update(key, value));
+    };
+    write(PINNED_KEY, [...snapshot.pinned]);
+    write(FAVORITES_KEY, [...snapshot.favorites]);
+    write(TITLES_KEY, { ...snapshot.titles });
+    write(LAYOUT_KEY, normalizeConversationLayout(snapshot.layout));
+    write(SELECTIONS_KEY, { ...snapshot.selections });
+    write(DRAFTS_KEY, { ...snapshot.drafts });
+    await Promise.all(writes);
   }
 
   // A deleted conversation must not linger as a pin that reopens on reload, a

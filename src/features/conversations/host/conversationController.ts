@@ -240,6 +240,14 @@ export class ConversationController {
     return orderedConversationIds(this.openConversations, (id) => this.preferences.isPinned(id));
   }
 
+  /** Another process (a sync run) rewrote the index: refresh the metadata the
+   * open tabs are labelled with without discarding the sessions this window
+   * already holds in memory. New conversations surface in the history panel. */
+  async reloadSummaries(): Promise<void> {
+    for (const summary of this.history.summaries(true)) this.summaries.set(summary.id, summary);
+    await this.postConversationState();
+  }
+
   /** What a tab shows: the loaded conversation if this window has it, the index
    * entry otherwise. */
   summarize(sessionId: string): ConversationSummary | undefined {
