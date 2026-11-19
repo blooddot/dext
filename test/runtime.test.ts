@@ -744,10 +744,10 @@ describe("Dext runtime", () => {
     ]))).rejects.toThrow("rules must stay below .dext/rules.");
   });
 
-  /** `.dext/api/spec` depends on this pair: `skill()` cannot write, while
-   * `agent({ skills })` loads the same SKILL.md with the selected write scope.
-   * If either half changes, the spec APIs silently stop producing files. */
-  it("keeps skill() read-only and lets agent({ skills }) write", async () => {
+  /** `.dext/api/spec` relies on `agent({ skills })` to write; `skill()` writes
+   * only when the caller passes `apply: true`. If either half changes, the spec
+   * APIs silently stop producing files. */
+  it("keeps skill() read-only by default and writes only with apply: true", async () => {
     const { runtime } = setup();
     runtime.setWorkspaceRoot(process.cwd());
     runtime.setWorkspaceTrusted(true);
@@ -769,6 +769,7 @@ describe("Dext runtime", () => {
 
     await runtime.execute(invoke("skill", [arg("skill", "openspec-propose"), arg("input", "plan it")]));
     await runtime.execute(invoke("agent", [arg("input", "plan it"), arg("apply", true), arg("skills", ["openspec-propose"])]));
+    await runtime.execute(invoke("skill", [arg("skill", "openspec-propose"), arg("input", "plan it"), arg("apply", true)]));
 
     expect(requests).toEqual([
       expect.objectContaining({ id: "skill", allowWorkspaceWrite: false, permission: "read-only" }),
@@ -777,7 +778,8 @@ describe("Dext runtime", () => {
         allowWorkspaceWrite: true,
         permission: "workspace-write",
         instruction: expect.stringContaining("Follow the skill 'openspec-propose'")
-      })
+      }),
+      expect.objectContaining({ id: "skill", allowWorkspaceWrite: true, permission: "workspace-write" })
     ]);
   });
 
