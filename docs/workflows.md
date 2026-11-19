@@ -90,7 +90,7 @@ The old interpreter's resource limits (`while` iteration count, `range` size, fo
 - `template({ input, source, values={}, workspace?, cli?, model?, echo? }) -> TemplateResult` — renders text from a template file ([templates](#templates)).
 - `apply({ result }) -> ApplyResult` — an `AgentResult` without a patch returns `unchanged`; a malformed patch still throws.
 - `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult` — runs an arbitrary command in the platform shell. `env` supplies string environment variables to that command.
-- `skill({ skill, input, workspace?, cli?, model?, echo? }) -> SkillResult`
+- `skill({ skill, input, apply=false, workspace?, cli?, model?, echo? }) -> SkillResult`
 - `mcp.<server>.<tool>({...})` — calls a configured MCP tool.
 - `ui.select | ui.radio | ui.checkbox | ui.input | ui.confirm | ui.alert | ui.form` — see [UI interactions and forms](#ui-interactions-and-forms).
 
@@ -245,7 +245,7 @@ The selected value, confirmation state, or input text is also rendered in Output
 
 Every API output implements the shared `Result` contract. The result kinds are exactly nine — `ask`, `plan`, `agent`, `template`, `apply`, `terminal`, `skill`, `ui` and `mcpRaw` — plus the generated `mcp.<server>.<tool>` kind for structured MCP tools. `ask`, `skill` and `template` are three names for the same `{ kind, text }` shape, and `PatchResult` is not a result kind: it is the shape of `AgentResult.patch`. Result variables and fields such as `AgentResult.patch` are typed by the generated declaration, so completion and hover work in the composer and in `.dext/api/*.ts`. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings.
 
-`ask` is always read-only. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Code mode has no permission picker, so typed `agent({ apply: true })` calls use `Full access` by default. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
+`ask` is always read-only. `skill` is read-only by default and takes the same scope as `agent` when it is called with `apply: true`, because command execution is only granted by the write scopes. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Code mode has no permission picker, so typed `agent({ apply: true })` calls use `Full access` by default. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
 
 ```ts
 const answer = await ask({ input: "Explain this code:" });

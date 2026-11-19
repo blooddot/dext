@@ -81,7 +81,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 - `template({ input, source, values={}, workspace?, cli?, model?, echo? }) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
 - `apply({ result }) -> ApplyResult`：`AgentResult` 没有 patch 时返回 unchanged；非法 patch 仍然报错。
 - `terminal({ command, cwd=".", env={}, timeout_ms=120000 }) -> TerminalResult`：在平台 Shell 中运行任意终端命令；`env` 可传入仅对此命令有效的字符串环境变量。
-- `skill({ skill, input, workspace?, cli?, model?, echo? }) -> SkillResult`：使用指定 Skill 执行任务。
+- `skill({ skill, input, apply=false, workspace?, cli?, model?, echo? }) -> SkillResult`：使用指定 Skill 执行任务；默认只读，`apply: true` 才允许写入与执行命令。
 - `mcp.<server>.<tool>({...})`：调用已配置的 MCP 工具。
 - `ui.select | ui.radio | ui.checkbox | ui.input | ui.confirm | ui.alert | ui.form`：见 [UI 交互与表单](#ui-交互与表单)。
 
@@ -238,7 +238,7 @@ if (confirmation.confirmed) {
 
 所有 API 输出都实现统一的 `Result` 契约。结果类型恰好九种——`ask`、`plan`、`agent`、`template`、`apply`、`terminal`、`skill`、`ui` 和 `mcpRaw`——外加结构化 MCP 工具生成的 `mcp.<server>.<tool>`。`ask`、`skill`、`template` 是同一种 `{ kind, text }` 形状的三个名字；`PatchResult` 不是结果类型，而是 `AgentResult.patch` 的形状。结果变量和字段（如 `AgentResult.patch`）由生成的声明提供类型，因此补全和悬停说明在输入区与 `.dext/api/*.ts` 中都能工作。Agent CLI 接收的前序结果是带版本号的 `dext-result` JSON 数据，而不是直接插入字符串。
 
-`ask` 始终只读。`agent` 和 `plan` 使用输入区域选择的写入范围；在受信任的本地工作区中，`Workspace write` 将编辑限制在所选工作区。Code 模式没有权限选择器，因此其中的 `agent({ apply: true })` 调用默认使用 `Full access`。Dext 可以在自身管理的全局存储中保存计划文档。两者的 `workspace` 都默认为当前项目根目录。
+`ask` 始终只读。`skill` 默认只读，传入 `apply: true` 时与 `agent` 同档——因为命令执行能力只随写档发放。`agent` 和 `plan` 使用输入区域选择的写入范围；在受信任的本地工作区中，`Workspace write` 将编辑限制在所选工作区。Code 模式没有权限选择器，因此其中的 `agent({ apply: true })` 调用默认使用 `Full access`。Dext 可以在自身管理的全局存储中保存计划文档。两者的 `workspace` 都默认为当前项目根目录。
 
 ```ts
 const answer = await ask({ input: "解释这段代码：" });

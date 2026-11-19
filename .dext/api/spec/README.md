@@ -35,12 +35,13 @@ Files changed:
 
 ## 权限
 
-`skill()` 固定只读：`src/features/workflow/host/runtime.ts` 里只有 `method.id === "agent"`
-才打开 `allowWorkspaceWrite`，其余模型类调用一律 `permission: "read-only"`。所以走 `skill()`
-的调用没有写权限，`openspec new change` 跑不了，proposal / specs / design / tasks 只能写回回复
+`skill()` 默认只读，只有显式传 `apply: true` 才会拿到写入与命令执行权限：`src/features/workflow/host/runtime.ts`
+里 `agent` 默认开启 `allowWorkspaceWrite`，`skill` 必须 `apply: true`，否则 `permission: "read-only"`。
+只读的 `skill()` 没有 shell，`openspec new change` 跑不了，proposal / specs / design / tasks 只能写回回复
 正文——这就是 `propose` 曾经「执行完什么文件都没有」的原因。
 
-因此上表里要写盘的 5 个函数走 `agent({ skills: [id], apply: true, patch: false })`：加载同一个
+因此上表里要写盘的 5 个函数继续走 `agent({ skills: [id], apply: true, patch: false })`（`skill({ apply: true })` 也能写，
+这里不改现有写法）：加载同一个
 `SKILL.md`、用当前 Agent 的写入权限执行，工作区由 CLI 自己改，不再回传 patch 让宿主二次落盘。
 `explore` 保持 `skill()`，因为它本来就只读。
 
