@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { InvocationAst, RuntimeResponse } from "../src/shared/contracts/types.js";
@@ -34,6 +34,15 @@ function askResponse(invocation: InvocationAst): RuntimeResponse {
     invocation,
     method: { id: invocation.method, title: invocation.method, kind: "command", source: "builtin" },
     result: { kind: "ask", text: typeof input === "string" ? input : "" },
+    durationMs: 0
+  };
+}
+
+function planResponse(invocation: InvocationAst, planPath?: string): RuntimeResponse {
+  return {
+    invocation,
+    method: { id: invocation.method, title: invocation.method, kind: "command", source: "builtin" },
+    result: { kind: "plan", text: "# Plan", ...(planPath ? { planPath } : {}) },
     durationMs: 0
   };
 }
@@ -179,5 +188,60 @@ describe("Dext run replay", () => {
     // recorded call stays aligned with the second `ask`.
     expect(response.steps?.map((step) => step.method)).toEqual(["stdout", "ask", "stdout", "stderr"]);
     expect(response.steps?.filter((step) => step.method === "ask")).toHaveLength(1);
+  });
+
+  it("replays a saved plan path without writing a second plan", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const plans = join(root, ".dext", "plans");
+    const planPath = join(plans, "20260821-090503-add-a-cache.plan.md");
+    const file = await fixture(root, "plan-run.ts", [
+      "import { plan } from \"dext\";",
+      "const saved = await plan({ input: \"add a cache\" });",
+      "console.log(saved.planPath ?? \"none\");",
+      ""
+    ].join("\n"));
+    let calls = 0;
+    const first = host(root, async (invocation) => {
+      calls += 1;
+      await mkdir(plans, { recursive: true });
+      await writeFile(planPath, "# Plan\n", "utf8");
+      return planResponse(invocation, planPath);
+    });
+    let recorded: readonly DextReplayEntry[] = [];
+    const attempt = await first.run(file, { onCallLog: (entries) => { recorded = entries; } });
+    expect(calls).toBe(1);
+    expect(attempt.executions[0]?.result).toMatchObject({ planPath });
+
+    // The retry answers from the recorded call, so no second file is written.
+    const retry = host(root, async (invocation) => {
+      calls += 1;
+      return planResponse(invocation, planPath);
+    });
+    const replayed = await retry.run(file, { resume: recorded });
+    expect(calls).toBe(1);
+    expect(replayed.executions[0]?.result).toMatchObject({ planPath });
+    expect(replayed.steps?.at(-1)?.stream?.text).toBe(`${planPath}\n`);
+    expect(await readdir(plans)).toEqual(["20260821-090503-add-a-cache.plan.md"]);
+  });
+
+  it("replays a plan that was not saved without inventing a planPath", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const plans = join(root, ".dext", "plans");
+    const file = await fixture(root, "unsaved-plan.ts", [
+      "import { plan } from \"dext\";",
+      "const saved = await plan({ input: \"add a cache\", save: false });",
+      "console.log(saved.planPath ?? \"none\");",
+      ""
+    ].join("\n"));
+    let recorded: readonly DextReplayEntry[] = [];
+    const first = host(root, async (invocation) => planResponse(invocation));
+    await first.run(file, { onCallLog: (entries) => { recorded = entries; } });
+    expect(recorded[0]?.arguments).toEqual({ input: "add a cache", save: false });
+
+    const retry = host(root, async (invocation) => planResponse(invocation, "must-not-be-used.plan.md"));
+    const replayed = await retry.run(file, { resume: recorded });
+    expect(replayed.executions[0]?.result).toEqual({ kind: "plan", text: "# Plan" });
+    expect(replayed.steps?.at(-1)?.stream?.text).toBe("none\n");
+    expect(await readdir(plans).catch(() => [])).toEqual([]);
   });
 });

@@ -150,6 +150,29 @@ describe("Dext kernel host", () => {
     expect(response.steps?.[0]?.response?.result.kind).toBe("ask");
   });
 
+  it("carries a saved plan path across the kernel boundary", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const plans = join(root, ".dext", "plans");
+    const planPath = join(plans, "20260821-090503-add-a-cache.plan.md");
+    await mkdir(plans, { recursive: true });
+    await writeFile(planPath, "# Plan\n", "utf8");
+    const kernel = host(root, async (invocation) => ({
+      ...askResponse(invocation),
+      result: { kind: "plan", text: "# Plan", planPath }
+    }));
+    const response = await kernel.runSource([
+      'import { plan } from "dext";',
+      'const saved = await plan({ input: "add a cache" });',
+      'console.log(saved.planPath);',
+      ""
+    ].join("\n"));
+
+    // The path is an ordinary JSON string, so it is identical on both sides.
+    expect(response.steps?.[0]?.response?.result).toMatchObject({ kind: "plan", planPath });
+    expect(response.executions[0]?.result).toMatchObject({ planPath });
+    expect(response.steps?.at(-1)?.stream?.text).toBe(`${planPath}\n`);
+  });
+
   it("drives an interactive ui call from the host while the kernel waits", { timeout: 30000 }, async () => {
     const root = await workspace();
     const file = await fixture(root, "question.ts", [
