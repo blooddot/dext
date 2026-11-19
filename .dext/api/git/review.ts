@@ -26,6 +26,7 @@ function reviewScope(kind: ReviewKind, first?: string, second?: string): string 
 async function runReview(scope: string): Promise<SkillResult> {
   return await skill({
     skill: "open-code-review-delegate",
+    apply: true,
     input: [
       scope,
       "只读审查，不修改文件，不提交代码。",
