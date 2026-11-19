@@ -31,7 +31,8 @@ async function runReview(scope: string): Promise<SkillResult> {
       scope,
       "只读审查，不修改文件，不提交代码。",
       "覆盖所有 reviewable_files，按 severity 和 category 输出结果，并报告审查覆盖率。",
-      "命令返回的 JSON 仅供内部处理，最终 SkillResult.text 必须是 Markdown 审查报告，不要原样返回 JSON。"
+      "命令返回的 JSON 仅供内部处理，最终 SkillResult.text 必须是 Markdown 审查报告，不要原样返回 JSON。",
+      "报告的每条问题描述与建议必须使用简体中文，不要翻译标题、文件路径、命令和代码。"
     ].join("\n"),
     echo: true
   });
