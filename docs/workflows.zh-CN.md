@@ -76,7 +76,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 
 - 点击侧栏 Resources 面板中的 **New API / New MCP / New Rule / New Skill**，打开复用 Conversation 和 Input 布局的专用 Tab。底部选择 **API / MCP / Rule / Skill** 和 **Project / Global**（菜单显示保存目录）。可以选择 **New resource** 新建，或选择已有资源描述修改；预览草稿后保存，对话里只列出草稿文件。新建 Skill 时还提供 **Describe | Import**：Import 以确定性方式安装 GitHub Skill 包，仅在候选有歧义时调用 Agent，并且仍需显式 Create。草稿可包含独立的 rules、模板和 skill 支持文件；API 通过文件名引用规则。预览用一个只读 Tab 列出全部草稿文件，草稿是 API 时还画出执行流程；保存会检查所有文件的冲突并一起写入。保存后保留 Tab，方便继续修改；更改已有资源的保存位置表示连同关联文件另存一份。资源目标、关联文件、草稿和对话会随历史记录恢复。
 - `ask({ input, workspace?, cli?, model?, echo? }) -> AskResult`：只读解释和分析。
-- `plan({ input, workspace?, cli?, model?, echo? }) -> PlanResult`：创建、维护和执行实施计划。
+- `plan({ input, save=true, location?, workspace?, cli?, model?, echo? }) -> PlanResult`：创建、维护和执行实施计划；`save=false` 只返回计划文本，不写文件也没有 `planPath`；`location`（`"global"` 或 `"workspace"`）决定这次保存到哪里，缺省跟随 `dext.storage.location`。
 - `agent({ input, apply=true, patch=true, workspace?, cli?, model?, echo? }) -> AgentResult`：执行持续性任务；`patch=false` 时只以 text 汇报结论，不产出补丁。
 - `template({ input, source, values={}, workspace?, cli?, model?, echo? }) -> TemplateResult`：按模板文件渲染文本（见[模板](#模板)）。
 - `apply({ result }) -> ApplyResult`：`AgentResult` 没有 patch 时返回 unchanged；非法 patch 仍然报错。
@@ -109,7 +109,7 @@ Node 内置模块和工作区依赖可以直接使用，因为代码运行在真
 
 Plan（包括 `plan()`）是统一的规划入口。Plan 回合先调研工作区再写出计划文档；Build 会重新读取该文件，因此执行的是用户在编辑器里改过的内容。任务进度通过计划任务列表上报，完成判定依赖这些上报而不是文字声明。自定义 `.dext/rules/plan.md` 只改变表达方式。没有新增 Spec 模式、`spec()` API 或执行引擎。
 
-Plan 轮次同时返回一段对话回复和一份 Markdown 计划文档，Dext 将它保存为 `.plan.md`。默认指令要求按顺序包含 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Acceptance`、`## Risks`，以及可选的 `## Out of scope`。`## Context` 之后固定包含 `### Assumptions and open questions` 子节。`## Design` 下可以有 `### Before / After`、`### Execution flow` 和 `### Decisions`；这三个子节是条件式的，没有结构性影响的改动不应画空图。
+Plan 轮次同时返回一段对话回复和一份 Markdown 计划文档，Dext 将它保存为 `.plan.md`。从代码调用 `plan()` 的保存方式相同：`save` 默认为 `true`，结果带有 `planPath`；`save: false` 只返回文本。`location` 只为这一次调用选择 Dext 的 global 存储或项目计划目录，不会改动 `dext.storage.location` 与 `dext.planDirectory`。`global` 存储下 `planPath` 是文件的绝对路径，任何 Node `fs` 调用都能读取；`workspace` 存储下仍是计划历史所保存的工作区相对计划路径。写入失败会让这次调用失败；空计划或工作区不受信任时不会返回 `planPath`，而不是返回一个不存在的路径。默认指令要求按顺序包含 `## Goal`、`## Context`、`## Design`、`## Files`、`## Tasks`、`## Verification`、`## Acceptance`、`## Risks`，以及可选的 `## Out of scope`。`## Context` 之后固定包含 `### Assumptions and open questions` 子节。`## Design` 下可以有 `### Before / After`、`### Execution flow` 和 `### Decisions`；这三个子节是条件式的，没有结构性影响的改动不应画空图。
 
 计划正文采用 `dext.outputLanguage`；`auto` 跟随 VS Code 显示语言，而非操作系统语言。未配置语言时，正文跟随用户使用的语言。章节标题和任务语法保持格式自身的语言，以保证计划仍可解析；代码、命令、路径、标识符、引用原文和响应分隔符不会被翻译。设置入口、工作区覆盖关系和隐藏思考语言的限制见 [Agent 配置](agents.zh-CN.md#交互语言)。
 
