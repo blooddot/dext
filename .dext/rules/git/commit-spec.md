@@ -12,6 +12,6 @@
 ## 创建提交
 
 1. 暂存前记录 HEAD 和当前暂存区。按文件或 hunk 构造候选提交，确保无关改动保持原有的暂存或未暂存状态。已有无关暂存项时，在临时索引中从 HEAD 构造候选提交，并基于候选提交树预先验证能否重放原有的无关暂存差异。同一路径上的无关暂存 hunk 也要保留。无法安全重放时，在修改 HEAD 或真实索引前报告并结束。
-2. 在实际用于提交的索引上检查 `git diff --cached`，核对当前 HEAD 和涉及的 diff 仍与筛选时一致。只创建一个 `<type>[optional scope]: <description>` 格式的 Conventional Commit。禁止全量暂存、修改工作区文件、自动归档、推送、amend 和 `reset --hard`。
+2. 在实际用于提交的索引上检查 `git diff --cached`，核对当前 HEAD 和涉及的 diff 仍与筛选时一致。只创建一个 `<type>[optional scope]: <description>` 格式的 Conventional Commit，并在提交信息末尾追加一行 trailer `OpenSpec-Change: <完整归档目录名，无归档时为原 change 名>`。标题只描述代码改动本身，不包含 change 名称或日期前缀。禁止全量暂存、修改工作区文件、自动归档、推送、amend 和 `reset --hard`。
 3. 使用临时索引提交成功后，将真实索引同步为新的提交树加上已验证的无关暂存差异，保留工作区文件。提交失败时撤销本次造成的暂存变动，保留调用前用户的改动。
-4. 核对新 commit 的内容及 `git status --short`，确认无关暂存项和未暂存改动保留。报告提交哈希、提交信息、包含的路径或 hunks，以及被跳过的改动。
+4. 核对新 commit 的内容及 `git status --short`，确认无关暂存项和未暂存改动保留。报告提交哈希、提交信息（含 `OpenSpec-Change` trailer）、包含的路径或 hunks，以及被跳过的改动。
