@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
 import { join } from "node:path";
 import type * as vscode from "vscode";
 import {
@@ -89,6 +90,22 @@ async function writeLegacyValue(path: string, key: string, value: unknown): Prom
   } finally { await rm(temporary, { force: true }); }
 }
 
+/** Replacing a file is atomic, but Windows still refuses the rename for a
+ * moment: a scanner, the indexer or the handle of the read that just finished
+ * holds the target. Retry the same rename instead of failing the write. */
+async function renameOver(temporary: string, path: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(temporary, path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt === 4 || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw error;
+      await delay(20 * (attempt + 1));
+    }
+  }
+}
+
 async function writeDurable(path: string, text: string): Promise<void> {
   const temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
   try {
@@ -97,7 +114,7 @@ async function writeDurable(path: string, text: string): Promise<void> {
       await file.writeFile(text);
       await file.sync();
     } finally { await file.close(); }
-    await rename(temporary, path);
+    await renameOver(temporary, path);
   } finally { await rm(temporary, { force: true }); }
 }
 

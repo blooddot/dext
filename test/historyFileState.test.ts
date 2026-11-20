@@ -3,6 +3,17 @@ import { mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as FsPromises from "node:fs/promises";
+
+const renameMock = vi.hoisted(() => vi.fn());
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  // Windows refuses a replace while a handle is briefly held, which is what the
+  // host retries; every other test still renames for real.
+  renameMock.mockImplementation(actual.rename);
+  return { ...actual, rename: renameMock };
+});
+
 import { HistoryFiles, openFileHistoryStore } from "../src/features/conversations/host/historyFileState.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
@@ -82,6 +93,20 @@ describe("file history storage", () => {
     expect(legacy.writes).toHaveLength(1);
     const reopened = await openFileHistoryStore(path, legacy);
     expect((await reopened.sessions())[0]?.turns.map((entry) => entry.input)).toEqual(["original input", "new input"]);
+  });
+
+  it("retries the index replace while Windows still holds the file", async () => {
+    const path = await directory();
+    const store = await openFileHistoryStore(path, new Memento());
+    const refused = Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
+    const actual = renameMock.getMockImplementation()!;
+    renameMock.mockClear();
+    renameMock.mockRejectedValueOnce(refused).mockRejectedValueOnce(refused).mockImplementation(actual);
+
+    await store.addSuccess("one", [], { kind: "workflow", executions: [] }, "shared");
+
+    expect(renameMock).toHaveBeenCalledTimes(3);
+    expect((await (await openFileHistoryStore(path, new Memento())).sessions()).map((entry) => entry.id)).toEqual(["shared"]);
   });
 
   it("keeps a turn another window committed after this window loaded", async () => {
