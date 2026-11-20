@@ -168,6 +168,9 @@ lines.on("line", async (line) => {
         answer = "repaired after the tool's diagnostics";
       } else if (channel && text.includes("submit-result")) {
         answer = `final message prose: ${JSON.stringify(await channel.submit({ kind: "ask", text: "submitted answer" }))}`;
+      } else if (channel && text.includes("submit-null")) {
+        // What a strict tool schema forces: every optional field arrives as null.
+        answer = JSON.stringify(await channel.submit({ kind: "agent", text: "kept", summary: null, patch: null }));
       } else if (text.includes("received-tool")) {
         answer = JSON.stringify(tool ?? null);
       }

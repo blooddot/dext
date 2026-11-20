@@ -260,6 +260,11 @@ describe("Harness runner", { timeout: 15000 }, () => {
     const text = await runner().run(executionRequest("submit-result"));
     expect(text).toBe(JSON.stringify({ kind: "ask", text: "submitted answer" }));
   });
+  it("accepts a submission whose optional fields arrive as explicit nulls", async () => {
+    const method = { ...BUILTIN_METHODS.find((item) => item.id === "agent")!, source: "builtin" as const };
+    const request = { ...executionRequest("submit-null"), method, contract: new AxAdapter().compile(method) };
+    expect(await runner().run(request)).toBe(JSON.stringify({ kind: "agent", text: "kept" }));
+  });
   it("returns a rejected submission's diagnostics to the model and keeps the repaired value", async () => {
     const events: AgentStreamEvent[] = [];
     const text = await runner().run({ ...executionRequest("submit-repair"), onEvent: (event) => events.push(event) });

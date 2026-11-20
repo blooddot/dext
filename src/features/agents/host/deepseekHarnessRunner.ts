@@ -10,7 +10,7 @@ import { agentTodoEvent, normalizeAgentTodos } from "../domain/agentTodoTracking
 import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "../domain/harnessQuestions.js";
 import { harnessInstallation, harnessPresetLayer, harnessPresetPatch } from "./harnessPresets.js";
 import { harnessResultEnvelope } from "../domain/harnessPresetDefault.js";
-import { formatDiagnostics } from "../../../shared/protocol/resultBoundary.js";
+import { formatDiagnostics, stripNullProperties } from "../../../shared/protocol/resultBoundary.js";
 import { harnessResultInstruction, harnessResultTool, type HarnessResultOutcome, type HarnessResultRequest } from "../domain/harnessResultTool.js";
 import type { AxMethodContract } from "../domain/axAdapter.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "../domain/agentTimeout.js";
@@ -284,7 +284,9 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     if (!active || active.signal?.aborted) return { status: "unavailable" };
     const contract = active.contract;
     if (!contract) return { status: "unavailable" };
-    const parsed = contract.outputSchema.safeParse(request.args);
+    // A tool schema can mark an optional field required-but-nullable, the way Codex's
+    // `--output-schema` does, so an explicit null still means "absent".
+    const parsed = contract.outputSchema.safeParse(stripNullProperties(request.args));
     if (!parsed.success) return { status: "rejected", diagnostics: formatDiagnostics(parsed.error) };
     session.submitted = JSON.stringify(parsed.data);
     return { status: "accepted" };

@@ -9,7 +9,7 @@ import { PiEvents } from "../domain/piEvents.js";
 import { decodePiSession, encodePiSession, parsePiModelId, piModelId, piModelOptions, piModels, piThinkingLevels } from "../domain/piModels.js";
 import { agentTimeout, DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, type AgentTimeout } from "../domain/agentTimeout.js";
 import { ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
-import { formatDiagnostics } from "../../../shared/protocol/resultBoundary.js";
+import { formatDiagnostics, stripNullProperties } from "../../../shared/protocol/resultBoundary.js";
 import { insideRoot } from "../../../platform/node/insideRoot.js";
 import { resultToolParameters } from "../domain/harnessResultTool.js";
 import { agentPayload, bootstrappedConversationInput, type AgentConversationRequest, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
@@ -179,7 +179,9 @@ export class PiAgentRunner implements AgentRunner {
       if (!active.request.planTodo) return { status: "rejected", diagnostics: "This turn does not execute a Dext plan, so there is no task list to update." };
       active.request.planTodo(frame.report); return { status: "accepted" };
     }
-    const parsed = active.request.contract?.outputSchema.safeParse(frame.args);
+    // A strict tool schema marks an optional field required-but-nullable, exactly as
+    // Codex's `--output-schema` does, so an explicit null still means "absent".
+    const parsed = active.request.contract?.outputSchema.safeParse(stripNullProperties(frame.args));
     if (!parsed) return { status: "unavailable" };
     if (!parsed.success) return { status: "rejected", diagnostics: formatDiagnostics(parsed.error) };
     active.submitted = JSON.stringify(parsed.data); return { status: "accepted" };
