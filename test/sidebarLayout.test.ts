@@ -941,6 +941,10 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.composer-menu:last-child \.composer-model-submenu \{[\s\S]*?right: auto;[\s\S]*?bottom: 34px;[\s\S]*?left: calc\(100% \+ 4px\);/);
     expect(css).toMatch(/\.composer-menu:last-child \.composer-model-submenu\[data-submenu-side="left"\] \{[\s\S]*?right: calc\(var\(--composer-model-menu-width\) \+ 4px\);[\s\S]*?left: auto;/);
     expect(main).toMatch(/function positionModelSubmenu\(\): void \{[\s\S]*?fitsRight[\s\S]*?fitsLeft[\s\S]*?modelSubmenu\.dataset\.submenuSide/);
+    // The centered .app-shell column clips its content, so fitting a submenu
+    // against the window width still let it be cut off in a maximized panel.
+    expect(main).toMatch(/closest\("\.app-shell"\)[\s\S]*?const rightSpace = columnRight - modelMenu\.right/);
+    expect(main).not.toMatch(/const rightSpace = viewportWidth - modelMenu\.right/);
     expect(main).not.toMatch(/button\.addEventListener\("mouseenter"[\s\S]*renderModelChoices\(elements\.modelSubmenu/);
     // Keep checking the actual clipping ancestors, not any later occurrence
     // of overflow: visible elsewhere in the stylesheet.

@@ -1470,12 +1470,16 @@ function renderModelChoices(
 function positionModelSubmenu(): void {
   if (elements.modelSubmenu.hidden) return;
   const modelMenu = elements.modelMenu.getBoundingClientRect();
-  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-  const submenuWidth = Math.min(216, Math.max(0, viewportWidth - 24));
+  // The composer sits in a centered, clipped column (.app-shell), so a menu has
+  // to fit inside that column rather than inside the wider host window.
+  const column = elements.modelSubmenu.closest(".app-shell")?.getBoundingClientRect();
+  const columnLeft = column ? column.left : 0;
+  const columnRight = column ? column.right : document.documentElement.clientWidth || window.innerWidth;
+  const submenuWidth = Math.min(216, Math.max(0, columnRight - columnLeft - 24));
   const gap = 4;
   const edgePadding = 8;
-  const rightSpace = viewportWidth - modelMenu.right - gap - edgePadding;
-  const leftSpace = modelMenu.left - gap - edgePadding;
+  const rightSpace = columnRight - modelMenu.right - gap - edgePadding;
+  const leftSpace = modelMenu.left - columnLeft - gap - edgePadding;
   const fitsRight = rightSpace >= submenuWidth;
   const fitsLeft = leftSpace >= submenuWidth;
   const side = fitsRight ? "right" : fitsLeft ? "left" : "above";
