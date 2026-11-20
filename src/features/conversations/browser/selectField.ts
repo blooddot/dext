@@ -1,19 +1,23 @@
 import type { UiFieldAnswer, UiSelectionField } from "../../../shared/contracts/uiForm.js";
 import type { FieldControl } from "./selectionGroupField.js";
+import { Button } from "../../../shared/lib/ui/nativeControls.js";
+import { interactionOptionDescription } from "./interactionControls.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 let popupId = 0;
 /** A top-layer popover keeps dropdowns inside small dialogs from being clipped. */
 export function selectField(field: UiSelectionField, draft: UiFieldAnswer | undefined, change: () => void): FieldControl {
-  const element = document.createElement("div"); element.className = "interaction-select";
+  const adapter = domUiAdapter(document);
+  const element = adapter.element("div", { class: "interaction-select" }, []);
   const selected = new Set(draft && draft.type !== "input" ? draft.selected : field.default ?? []);
-  const trigger = document.createElement("button"); trigger.type = "button";
-  trigger.setAttribute("aria-haspopup", "listbox"); trigger.setAttribute("aria-expanded", "false");
-  trigger.setAttribute("aria-label", field.label);
-  const popup = document.createElement("div"); popup.className = "interaction-select-popup";
-  popup.id = `interaction-list-${++popupId}`; popup.popover = "manual";
-  popup.setAttribute("role", "listbox"); popup.setAttribute("aria-label", field.label);
-  if (field.multiple) popup.setAttribute("aria-multiselectable", "true");
-  trigger.setAttribute("aria-controls", popup.id);
+  const id = `interaction-list-${++popupId}`;
+  const trigger = Button(adapter, {
+    "aria-haspopup": "listbox", "aria-expanded": "false", "aria-label": field.label, "aria-controls": id
+  });
+  const popup = adapter.element("div", {
+    class: "interaction-select-popup", id, popover: "manual", role: "listbox",
+    "aria-label": field.label, "aria-multiselectable": field.multiple ? "true" : false
+  }, []);
   const options: HTMLButtonElement[] = [];
   let opened = false;
   const close = (focus = true): void => {
@@ -39,9 +43,8 @@ export function selectField(field: UiSelectionField, draft: UiFieldAnswer | unde
     (options.find((option) => selected.has(option.value)) ?? options[0])?.focus();
   };
   for (const option of field.options) {
-    const item = document.createElement("button"); item.type = "button"; item.value = option.value;
-    item.setAttribute("role", "option"); item.tabIndex = -1; item.textContent = option.label;
-    if (option.description) { const detail = document.createElement("small"); detail.textContent = option.description; item.append(detail); }
+    const item = Button(adapter, { value: option.value, role: "option", tabindex: "-1" },
+      [option.label, ...interactionOptionDescription(option.description)]) as HTMLButtonElement;
     item.addEventListener("click", () => {
       if (!field.multiple) selected.clear();
       if (field.multiple && selected.has(option.value)) selected.delete(option.value); else selected.add(option.value);
@@ -60,8 +63,7 @@ export function selectField(field: UiSelectionField, draft: UiFieldAnswer | unde
   popup.addEventListener("focusout", () => { queueMicrotask(() => { if (!popup.contains(document.activeElement)) close(false); }); });
   trigger.addEventListener("click", () => opened ? close() : open());
   trigger.addEventListener("keydown", (event) => { if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); open(); } });
-  const clear = document.createElement("button"); clear.type = "button"; clear.textContent = "Clear";
-  clear.setAttribute("aria-label", `Clear ${field.label}`);
+  const clear = Button(adapter, { "aria-label": `Clear ${field.label}` }, ["Clear"]);
   clear.addEventListener("click", () => { selected.clear(); refresh(); change(); trigger.focus(); });
   element.append(trigger, clear, popup); refresh();
   return { element, read: () => ({ type: "select", selected: [...selected] }), clearSecret: () => close(false) };

@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runLabChecks } from './monaco-ref-lab/check.mjs';
+import { runWebviewChecks } from './monaco-ref-lab/check.mjs';
+import { readSidebarBody } from './monaco-ref-lab/serve.mjs';
 
-await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
-  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
-  const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
-  await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
-    document.body.innerHTML=${JSON.stringify(body)};
+await runWebviewChecks(async ({ evaluate, settle, send, artifacts }) => {
+  const body = await readSidebarBody();
+  await evaluate(`document.body.innerHTML=${JSON.stringify(body)};
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}
     window.acquireVsCodeApi=()=>({postMessage:()=>{},getState:()=>({}),setState:()=>{}});
     window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
@@ -66,4 +65,4 @@ await runLabChecks(async ({ evaluate, settle, send, artifacts }) => {
   const shot = await send('Page.captureScreenshot');
   await writeFile(join(artifacts, 'stream-jump-scrollbar.png'), Buffer.from(shot.data, 'base64'));
   console.log('PASS jump-to-latest control never covers the conversation scrollbar');
-}, false);
+});

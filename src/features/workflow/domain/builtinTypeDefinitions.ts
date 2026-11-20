@@ -5,6 +5,9 @@
  */
 import { BUILTIN_METHODS } from "./builtins.js";
 import { formatFieldType } from "./methodSignature.js";
+import {
+  UI_VIEW_NODE_TYPES, UI_VIEW_LINE_CHILD_TYPES, UI_VIEW_ICONS, UI_VIEW_STATUSES, UI_VIEW_TONES
+} from "../../../shared/contracts/uiView.js";
 export interface BuiltinTypeField {
   name: string;
   type: string;
@@ -16,7 +19,33 @@ export interface BuiltinTypeDefinition {
   name: string;
   description: string;
   fields: readonly BuiltinTypeField[];
+  alias?: string;
 }
+
+/** These names are reserved for future consumers and never form part of ui.Node. */
+export const RESERVED_UI_TYPE_DEFINITIONS = [
+  "Table", "Progress", "Tooltip", "Popover", "Drawer", "Toast", "Breadcrumb",
+  "Slider", "Switch", "Avatar", "Skeleton", "Kbd"
+].map((name) => ({ name, status: "reserved" as const }));
+
+const literals = (values: readonly string[]): string => values.map((value) => JSON.stringify(value)).join(" | ");
+const uiNodeFields: Record<typeof UI_VIEW_LINE_CHILD_TYPES[number], string> = {
+  Trace: "ordered?: boolean; children: list[ui.TraceLine]",
+  TraceIcon: `icon: ${literals(UI_VIEW_ICONS)}`,
+  TraceTitle: "text: string",
+  TraceDescription: `text: string; tone?: ${literals(UI_VIEW_TONES)}`,
+  Text: `text: string; tone?: ${literals(UI_VIEW_TONES)}`,
+  Markdown: "source: string",
+  Code: "text: string",
+  CodeBlock: "code: string",
+  Separator: "",
+  Badge: `text: string; status?: ${literals(UI_VIEW_STATUSES)}`,
+  Spinner: "label: string",
+  Alert: `text: string; tone?: ${literals(UI_VIEW_TONES)}`
+};
+const uiNodeAlias = (types: readonly (keyof typeof uiNodeFields | "TraceLine")[]): string => types.map((type) =>
+  type === "TraceLine" ? "ui.TraceLine" : `{ type: ${JSON.stringify(type)}${uiNodeFields[type] ? `; ${uiNodeFields[type]}` : ""} }`
+).join(" | ");
 
 const staticTypes: readonly BuiltinTypeDefinition[] = [
   { name: "AskResult", description: "Text returned by Ask.", fields: [
@@ -70,6 +99,15 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
     { name: "primary", type: "boolean", optional: true, description: "Highlighted button and the one Enter submits. Defaults to the first action." },
     { name: "requires", type: "list[string]", optional: true, description: "Field IDs this action must have answered, even when the field itself is optional." }
   ] },
+  { name: "ui.Node", description: "A public read-only display node accepted by ui.render.",
+    fields: [], alias: uiNodeAlias(UI_VIEW_NODE_TYPES) },
+  { name: "ui.TraceLineChild", description: "A read-only node that can appear inside a trace line.",
+    fields: [], alias: uiNodeAlias(UI_VIEW_LINE_CHILD_TYPES) },
+  { name: "ui.TraceLine", description: "A row of display nodes within a trace.",
+    fields: [{ name: "type", type: '"TraceLine"' },
+      { name: "status", type: literals(UI_VIEW_STATUSES), optional: true },
+      { name: "tone", type: literals(UI_VIEW_TONES), optional: true },
+      { name: "children", type: "list[ui.TraceLineChild]" }] },
   { name: "ui.Field", description: "Base form field. The `type` discriminator selects a concrete field variant.", fields: [
     { name: "id", type: "string" }, { name: "type", type: '"select" | "radio" | "checkbox" | "input"' }, { name: "label", type: "string" },
     { name: "description", type: "string", optional: true }, { name: "required", type: "boolean", optional: true },

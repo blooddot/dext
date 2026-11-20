@@ -8,6 +8,7 @@ import { createApiReferenceSource, parseApiReference, type ApiReferenceCatalog }
 import { createApiDataSource, createFileResourceDataSource, apiReferenceEntries } from "../src/features/resources/host/resourceEditorProvider.js";
 import { buildResourceList, renderResourceDefinition, renderResourceList } from "../src/features/resources/presentation/resourceDocuments.js";
 import { ResourceBrowserProvider } from "../src/features/resources/host/resourceBrowserProvider.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
 import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
 import type { SidebarState } from "../src/platform/webviewProtocol.js";
@@ -253,6 +254,31 @@ describe("API reference catalog", () => {
     expect(await apis.definition("api:project:git/commit.ts")).toBeUndefined();
   });
 
+  it("shows ui.render in the existing ui group and documents the recursive node types in its detail", async () => {
+    const method = BUILTIN_METHODS.find((entry) => entry.id === "ui.render")!;
+    const dext = [
+      { name: "UiNode", kind: "type", signature: 'type UiNode = { type: "Trace"; children: UiTraceLine[] };' },
+      { name: "UiTraceLine", kind: "type", signature: "type UiTraceLine = { children: UiTraceLineChild[] };" },
+      { name: "UiTraceLineChild", kind: "type", signature: 'type UiTraceLineChild = { type: "Text"; text: string };' }
+    ] as const;
+    const apis = createApiDataSource({
+      methods: () => [{ ...method, source: "builtin" }],
+      reference: async () => ({ ...catalog(), dext })
+    });
+    const [entry] = await apis.list(["api"], "");
+    expect(entry).toMatchObject({
+      name: "ui.render", group: "ui", api: { returnType: "void", parameters: [{ name: "nodes", type: "list[ui.Node]" }] }
+    });
+    const detail = (await apis.definition(entry!.id))!;
+    const html = renderResourceDefinition({ ...detail, source: detail.entry.source });
+    expect(html).toContain("insertResourceReference");
+    expect(html).toContain("<h3>Parameters</h3>");
+    for (const type of dext) {
+      expect(html).toContain(`data-resource-member="${type.name}"`);
+      expect(html.replace(/<[^>]+>/g, "").replaceAll("&quot;", '"')).toContain(type.signature);
+    }
+  });
+
   it("copies a specifier through the host rather than the Webview clipboard", async () => {
     const host = new FakeHost();
     const manager = new EditorTabManager(host);
@@ -286,6 +312,23 @@ describe("API reference catalog", () => {
     expect(parse.signature).toContain("parse(");
     expect(parse.documentation).toBeTruthy();
     expect(module("js.Array").members[0]!.members!.some((member) => member.name === "map")).toBe(true);
+    const ui = shipped!.dext?.find((member) => member.name === "ui");
+    expect(ui?.members?.find((member) => member.name === "render")).toMatchObject({
+      signature: "render(options: { nodes: UiNode[]; }): Promise<void>"
+    });
+    const nodes = shipped!.dext?.find((member) => member.name === "UiNode");
+    expect(nodes?.signature).toContain("children: UiTraceLine[]");
+    expect(nodes?.signature).not.toContain('"Tooltip"');
+    const apis = createApiDataSource({
+      methods: () => BUILTIN_METHODS.map((method) => ({ ...method, source: "builtin" })),
+      reference: async () => shipped
+    });
+    const detail = (await apis.definition("api:global:ui/render.ts"))!;
+    const html = renderResourceDefinition({ ...detail, source: detail.entry.source });
+    for (const name of ["UiNode", "UiTraceLine", "UiTraceLineChild"]) {
+      expect(html).toContain(`data-resource-member="${name}"`);
+    }
+    expect(html.replace(/<[^>]+>/g, "")).toContain("children: UiTraceLineChild[]");
     for (const candidate of shipped!.modules) expect(candidate.members.length).toBeGreaterThan(0);
   });
 });

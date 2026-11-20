@@ -6,7 +6,11 @@ import assert from 'node:assert/strict';
 import { startLab } from './serve.mjs';
 import { fileURLToPath } from 'node:url';
 
-export async function runLabChecks(extra = async () => {}, baseline = true) {
+export function runWebviewChecks(extra) {
+  return runLabChecks(extra, false, true);
+}
+
+export async function runLabChecks(extra = async () => {}, baseline = true, webview = false) {
 
 const candidates = [process.env.DEXT_BROWSER, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/chromium', '/usr/bin/google-chrome'].filter(Boolean);
 let executable;
@@ -56,9 +60,12 @@ try {
   await send('Runtime.enable');
   await send('Browser.grantPermissions', { origin: url, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] });
   await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 1000, deviceScaleFactor: 1, mobile: false });
-  await send('Page.navigate', { url });
-  for (let attempt = 0; attempt < 100; attempt++) { if (await evaluate('Boolean(window.lab)')) break; await new Promise(done => setTimeout(done, 100)); }
-  assert.equal(await evaluate('Boolean(window.lab)'), true, 'Monaco lab boots');
+  // The production bundle must initialize its own Monaco registry in a fresh
+  // document. Destroying an editor does not dispose the lab bundle's services.
+  const ready = webview ? "location.pathname === '/webview' && document.readyState === 'complete'" : 'Boolean(window.lab)';
+  await send('Page.navigate', { url: webview ? `${url}/webview` : url });
+  for (let attempt = 0; attempt < 100; attempt++) { if (await evaluate(ready)) break; await new Promise(done => setTimeout(done, 100)); }
+  assert.equal(await evaluate(ready), true, webview ? 'Webview fixture loads' : 'Monaco lab boots');
 
   if (baseline) {
   const source = 'agent(input="前 @src/features/workflow/components/main.ts#L12,5-L20,6 后")';

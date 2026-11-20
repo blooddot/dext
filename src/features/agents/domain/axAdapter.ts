@@ -1,6 +1,7 @@
 import { f, type AxSignature } from "@ax-llm/ax";
 import { z, type ZodType } from "zod";
 import { formatDiagnostics } from "../../../shared/protocol/resultBoundary.js";
+import { uiRenderArgumentsSchema, uiViewResultSchema } from "../../../shared/contracts/uiView.js";
 import {
   askResultSchema,
   agentResultSchema,
@@ -97,6 +98,7 @@ function scalarSchema(field: FieldDefinition): ZodType {
 }
 
 function inputSchema(definition: CallableDefinition): ZodType {
+  if (definition.id === "ui.render") return uiRenderArgumentsSchema;
   const shape: Record<string, ZodType> = {};
   for (const field of definition.input) {
     const scalar = scalarSchema(field);
@@ -112,6 +114,7 @@ function inputSchema(definition: CallableDefinition): ZodType {
 }
 
 function outputSchema(output: CallableDefinition["output"]): ZodType {
+  if (output.kind === "view") return uiViewResultSchema;
   // UI field metadata describes editor hints, including a dynamic answer map.
   // The executable contract must always use the strict result union instead.
   if (output.kind === "ui") return output.resultType
@@ -193,9 +196,14 @@ export class AxAdapter {
    */
   compileOutput(definition: CallableDefinition, output: ZodType): AxMethodContract {
     const input = inputSchema(definition);
+    const inputJsonSchema = z.toJSONSchema(input);
+    const outputJsonSchema = z.toJSONSchema(output);
+    // Ax hashes its own field metadata, which cannot contain recursive Zod
+    // objects. Dext validates these values directly and keeps the JSON Schema
+    // references in the executable contract.
     const signature = f()
-      .input("invocationArguments", input)
-      .output("structuredOutput", output)
+      .input("invocationArguments", "$defs" in inputJsonSchema ? z.unknown() : input)
+      .output("structuredOutput", "$defs" in outputJsonSchema ? z.unknown() : output)
       .description(definition.description)
       .useStructured()
       .build();
@@ -204,12 +212,17 @@ export class AxAdapter {
       signature,
       inputSchema: input,
       outputSchema: output,
-      inputJsonSchema: z.toJSONSchema(input),
-      outputJsonSchema: z.toJSONSchema(output)
+      inputJsonSchema,
+      outputJsonSchema
     };
   }
 
   validateInput(contract: AxMethodContract, value: Record<string, InvocationValue>): void {
+    if (contract.methodId === "ui.render") {
+      const parsed = contract.inputSchema.safeParse(value);
+      if (!parsed.success) throw new Error(formatDiagnostics(parsed.error));
+      return;
+    }
     contract.inputSchema.parse(value);
   }
 

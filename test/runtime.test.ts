@@ -11,7 +11,8 @@ import { parseMcpManifest } from "../src/features/mcp/domain/mcpManifest.js";
 import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
 import { parseAgentResult } from "../src/shared/protocol/resultBoundary.js";
 import { DextRuntime, type RuntimeResultRepairRequest, type DeterministicHandler } from "../src/features/workflow/host/runtime.js";
-import { mcpRawResultSchema } from "../src/shared/contracts/schemas.js";
+import { dextResultSchema, mcpRawResultSchema } from "../src/shared/contracts/schemas.js";
+import { UI_VIEW_MAX_BYTES, UI_VIEW_MAX_DEPTH, UI_VIEW_MAX_NODES, UI_VIEW_NODE_TYPES } from "../src/shared/contracts/uiView.js";
 import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
 import type { AgentConversationRequest, AgentExecutionRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
 import type { UiFormDefinition } from "../src/shared/contracts/uiForm.js";
@@ -96,6 +97,74 @@ function mcpSetup(manifest: unknown): { registry: MethodRegistry; runtime: DextR
 }
 
 describe("Dext runtime", () => {
+  describe("ui.render", () => {
+    const call = (nodes: unknown) => invoke("ui.render", [arg("nodes", nodes as InvocationValue)]);
+    const leaf = { type: "Text", text: "Visible" };
+    const nested = (depth: number, content: unknown = leaf): unknown => depth === 1
+      ? content : { type: depth % 2 === 0 ? "TraceLine" : "Trace", children: [nested(depth - 1, content)] };
+
+    it("registers a strict recursive signature and records display nodes in supplied order", async () => {
+      const { registry, runtime } = setup();
+      const contract = new AxAdapter().compile(registry.get("ui.render")!);
+      expect(contract.inputJsonSchema).toHaveProperty("$defs");
+      expect(contract.outputJsonSchema).toHaveProperty("$defs");
+      const nodes = [
+        { type: "Markdown", source: "**first**" },
+        { type: "Trace", ordered: true, children: [{ type: "TraceLine", status: "completed", children: [
+          { type: "TraceTitle", text: "Checks" }, { type: "TraceDescription", text: "Passed" },
+          { type: "Trace", children: [{ type: "TraceLine", children: [leaf] }] }
+        ] }] },
+        { type: "TraceLine", children: [] },
+        { type: "TraceIcon", icon: "check" },
+        { type: "TraceTitle", text: "Title" },
+        { type: "TraceDescription", text: "Description", tone: "muted" },
+        leaf, { type: "Code", text: "file.ts" }, { type: "CodeBlock", code: "const x = 1" },
+        { type: "Separator" }, { type: "Badge", text: "Queued", status: "pending" },
+        { type: "Spinner", label: "Waiting" }, { type: "Alert", text: "Notice", tone: "info" }
+      ];
+      expect(nodes.map((node) => node.type).sort()).toEqual([...UI_VIEW_NODE_TYPES].sort());
+      await expect(runtime.execute(call(nodes))).resolves.toMatchObject({ result: { kind: "view", nodes } });
+      expect(dextResultSchema.parse({ kind: "view", nodes })).toEqual({ kind: "view", nodes });
+      await expect(runtime.execute(call([]))).resolves.toMatchObject({ result: { kind: "view", nodes: [] } });
+      await expect(runtime.execute(call([nested(UI_VIEW_MAX_DEPTH)]))).resolves.toHaveProperty("result.kind", "view");
+    });
+
+    it("rejects null, non-JSON values and omitted nodes", async () => {
+      const { runtime } = setup();
+      await expect(runtime.execute(invoke("ui.render"))).rejects.toThrow("nodes");
+      await expect(runtime.execute(call(null))).rejects.toThrow("nodes");
+      await expect(runtime.execute(call([null]))).rejects.toThrow("nodes.0");
+      await expect(runtime.execute(call([{ type: "Text", text: null }]))).rejects.toThrow("nodes.0.text");
+      await expect(runtime.execute(call([{ type: "Text", text: new Date() }]))).rejects.toThrow("nodes.0.text");
+      await expect(runtime.execute(call([{ type: "Text", text: undefined }]))).rejects.toThrow("nodes.0.text");
+      await expect(runtime.execute(call([Object.assign(Object.create({}), leaf)]))).rejects.toThrow("nodes.0");
+      await expect(runtime.execute(call([{ type: "Spinner", label: " " }]))).rejects.toThrow("nodes.0.label");
+      await expect(runtime.execute(call([{ type: "TraceIcon", icon: "custom" }]))).rejects.toThrow("nodes.0.icon");
+    });
+
+    it("rejects deep invalid children and every raw host field with its node path", async () => {
+      const { runtime } = setup();
+      await expect(runtime.execute(call([{ type: "Trace", children: [leaf] }]))).rejects.toThrow("nodes.0.children.0.type");
+      await expect(runtime.execute(call([{ type: "TraceLine", children: [{ type: "TraceLine", children: [] }] }]))).rejects.toThrow("nodes.0.children.0.type");
+      for (const key of ["tag", "html", "class", "className", "style", "onClick", "handlerId", "id", "aria-label", "data-code", "__proto__"]) {
+        const invalidLeaf = { ...leaf, [key]: "forbidden" };
+        await expect(runtime.execute(call([leaf, nested(3, invalidLeaf)]))).rejects.toThrow(`nodes.1.children.0.children.0: Unrecognized key: "${key}"`);
+      }
+      for (const type of ["Unknown", "TraceCollapsible", "Form", "Dialog", "Button", "Select", "Input", "Checkbox", "Table", "Tooltip"]) {
+        await expect(runtime.execute(call([leaf, nested(3, { type })]))).rejects.toThrow("nodes.1.children.0.children.0.type");
+      }
+    });
+
+    it("bounds node count, depth and UTF-8 size before producing a result", async () => {
+      const { runtime } = setup();
+      await expect(runtime.execute(call(Array.from({ length: UI_VIEW_MAX_NODES + 1 }, () => leaf))))
+        .rejects.toThrow(`nodes: UI tree exceeds ${UI_VIEW_MAX_NODES} nodes`);
+      await expect(runtime.execute(call([nested(UI_VIEW_MAX_DEPTH + 1)]))).rejects.toThrow(`UI tree exceeds ${UI_VIEW_MAX_DEPTH} levels`);
+      await expect(runtime.execute(call([{ ...leaf, text: "中".repeat(Math.ceil(UI_VIEW_MAX_BYTES / 3)) }])))
+        .rejects.toThrow(`nodes: UI tree exceeds ${UI_VIEW_MAX_BYTES} UTF-8 bytes`);
+      expect(dextResultSchema.safeParse({ kind: "view", nodes: [{ ...leaf, html: "<b>x</b>" }] }).success).toBe(false);
+    });
+  });
   it("builds strict contracts for public builtins", () => {
     const { registry } = setup();
     const ask = new AxAdapter().compile(registry.get("ask")!);

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { readHistoryResponse } from "../src/features/conversations/domain/historyResponse.js";
 import { formatTurnTokenUsage, presentTurn } from "../src/features/conversations/presentation/turnPresentation.js";
 import { renderTurnResult } from "../src/features/conversations/presentation/turnComponents.js";
-import { turnDomAdapter } from "../src/features/conversations/browser/turnDomAdapter.js";
+import { domUiAdapter } from "../src/platform/browser/domUiAdapter.js";
 import { formatDuration } from "../src/shared/lib/duration.js";
 import type { AgentStreamEvent } from "../src/shared/contracts/types.js";
 
@@ -95,7 +95,7 @@ function harness() {
     pendingAgentEventBatches: [{ sessionId: "session", events: [{ phase: "message", text: "live delta" }] }], agentEventBatchFrame: 2
   };
   const context = {
-    readHistoryResponse, presentTurn, renderTurnResult, turnDomAdapter, formatDuration, formatTurnTokenUsage,
+    readHistoryResponse, presentTurn, renderTurnResult, domUiAdapter, formatDuration, formatTurnTokenUsage,
     ...state, turn, record, executing: true, trace, transcript,
     // The Webview's acceptance cache and plan-label state, mirroring the host.
     planAcceptanceBySession: new Map(), planLabelStates: new WeakMap(),

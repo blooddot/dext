@@ -569,7 +569,7 @@ describe("sidebar panel layout", () => {
     const css = await source("media/styles.css");
     expect(main).toContain('const markdown = dextMarkdown();');
     expect(markdown).toContain('new MarkdownIt({ html: false, breaks: true, linkify: true })');
-    expect(main).toMatch(/function copyableText[\s\S]*?className = "markdown-body"[\s\S]*?markdown\.render\(content\)/);
+    expect(main).toMatch(/function copyableText[\s\S]*?Markdown\(adapter, content, \{ trustedLinks: true, copyCode: true \}\)/);
     expect(css).toContain(".markdown-body pre");
     expect(css).toContain(".tok-keyword");
   });
@@ -885,7 +885,7 @@ describe("sidebar panel layout", () => {
     expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?if \(event\.phase === "tool"\)[\s\S]*?this\.createToolCommand\(event, group\?\.body \?\? panel, group\)/);
     expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?this\.group = undefined;[\s\S]*?panel\.append\(item\);/);
     expect(trace).toMatch(/private updateGroupLabel[\s\S]*?Ran \$\{count\} command/);
-    expect(trace).toMatch(/private createToolCommand[\s\S]*?document\.createElement\("details"\)/);
+    expect(trace).toMatch(/private createToolCommand[\s\S]*?TraceCollapsible\(adapter, summary, content, \{ class: "agent-trace-command" \}\)/);
     expect(trace).toMatch(/renderEvent\(event: AgentStreamEvent\): void \{[\s\S]*?this\.host\.terminal\(raw\)/);
     expect(trace).toMatch(/private renderMessageItem[\s\S]*?body\.replaceChildren\(\.\.\.renderTurnMessage/);
     expect(css).toMatch(/\.terminal-output \{[\s\S]*?max-height: 360px;[\s\S]*?overflow: auto;[\s\S]*?white-space: pre-wrap;/);
@@ -920,8 +920,8 @@ describe("sidebar panel layout", () => {
     const trace = await source("src/features/conversations/browser/agentTraceView.ts");
     expect(css).toMatch(/\.agent-trace-message > \.agent-stream-text \{[\s\S]*?font-family: var\(--vscode-font-family\);[\s\S]*?white-space: normal;/);
     expect(css).toMatch(/\.agent-trace-command-body \{[\s\S]*?border: 1px solid var\(--vscode-widget-border\);/);
-    expect(trace).toContain('body.className = "terminal-output agent-trace-command-body";');
-    expect(trace).toMatch(/summary\.append\(this\.toolGlyph\(event\.toolKind\), summaryLabel, chevron\)/);
+    expect(trace).toContain('CodeBlock(adapter, "", { class: "terminal-output agent-trace-command-body" })');
+    expect(trace).toMatch(/TraceCollapsibleTrigger\(adapter, \[this\.toolGlyph\(event\.toolKind\), summaryLabel, TraceChevron\(adapter\)\]\)/);
   });
 
   it("keeps the expanded process timeline inside the transcript width", async () => {

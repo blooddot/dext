@@ -1,5 +1,5 @@
 import type { ApiFlow } from "../../workflow/contracts/apiFlow.js";
-import type { ApiReferenceCatalog, ApiReferenceModule, ApiSourceFunction } from "../../workflow/contracts/apiReference.js";
+import type { ApiReferenceCatalog, ApiReferenceMember, ApiReferenceModule, ApiSourceFunction } from "../../workflow/contracts/apiReference.js";
 import type { RegisteredCallable } from "../../../shared/contracts/types.js";
 import { isSkillId } from "../../workflow/contracts/skill.js";
 import { type EditorTabManager } from "../../../platform/editor-tabs/editorTabManager.js";
@@ -46,6 +46,7 @@ export interface ResourceEntry {
   /** A Skill the composer's Input menu leaves out; it still loads by id. */
   hidden?: boolean;
   api?: ApiSourceFunction["api"];
+  apiTypes?: readonly ApiReferenceMember[];
   /** Exported functions read from a file; both pages render these with the same API component. */
   apiFunctions?: ApiSourceFunction[];
   /** Function-level Execution flow. Parsed only for a detail page, never for a list. */

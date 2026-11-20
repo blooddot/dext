@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { builtinTypeDefinition } from "../src/features/workflow/domain/builtinTypeDefinitions.js";
+import { builtinTypeDefinition, RESERVED_UI_TYPE_DEFINITIONS } from "../src/features/workflow/domain/builtinTypeDefinitions.js";
 
 describe("built-in Dext type definitions", () => {
   it("declares Pi model identity and dynamic reasoning without Codex speed", () => {
@@ -58,5 +58,23 @@ describe("built-in Dext type definitions", () => {
       .toEqual(["model", "reasoning", "speed"]);
     expect(builtinTypeDefinition("ui.Field")?.fields.find((field) => field.name === "options"))
       .toMatchObject({ type: "list[string | ui.Option]", optional: true });
+  });
+
+  it("records the recursive UI node schema and reserves Tier 2 without public variants", () => {
+    const node = builtinTypeDefinition("ui.Node")!;
+    const line = builtinTypeDefinition("ui.TraceLine")!;
+    const lineChild = builtinTypeDefinition("ui.TraceLineChild")!;
+    expect(node.alias).toContain("ui.TraceLine");
+    expect(line.fields).toContainEqual({ name: "children", type: "list[ui.TraceLineChild]" });
+    expect(lineChild.alias).toContain('type: "Trace"; ordered?: boolean; children: list[ui.TraceLine]');
+    expect(builtinTypeDefinition("ViewResult")?.fields).toEqual([
+      { name: "kind", type: '"view"' }, { name: "nodes", type: "list[ui.Node]" }
+    ]);
+    expect(RESERVED_UI_TYPE_DEFINITIONS).toHaveLength(12);
+    for (const entry of RESERVED_UI_TYPE_DEFINITIONS) {
+      expect(entry.status).toBe("reserved");
+      expect(node.alias).not.toContain(`"${entry.name}"`);
+      expect(builtinTypeDefinition(`ui.${entry.name}`)).toBeUndefined();
+    }
   });
 });

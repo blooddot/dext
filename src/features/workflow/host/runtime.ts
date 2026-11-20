@@ -1,4 +1,5 @@
 import { uiCallForm, uiCallResult, validateUiFormResult, type UiAction } from "../../../shared/contracts/uiForm.js";
+import type { UiNode } from "../../../shared/contracts/uiView.js";
 import { performance } from "node:perf_hooks";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
@@ -251,6 +252,7 @@ export const DEFAULT_HANDLERS: Readonly<Record<string, DeterministicHandler>> = 
   uiConfirm: uiHandler("confirm"),
   uiAlert: uiHandler("alert"),
   uiForm: uiHandler("form"),
+  uiRender: ({ arguments: { nodes } }) => ({ kind: "view", nodes: nodes as UiNode[] }),
   runSkill: () => {
     throw new Error("skill requires a configured Agent profile.");
   },

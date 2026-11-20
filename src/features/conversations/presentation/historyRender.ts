@@ -1,8 +1,12 @@
 import { answerChoices, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerFieldPresentation } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "../domain/historyResponse.js";
 import { turnChanges, type TurnChange } from "../domain/turnDiff.js";
-import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, turnHtmlAdapter } from "./turnComponents.js";
-import { markdownCodeCopy } from "../../../shared/lib/markdownCopy.js";
+import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, renderTurnDisclosureSummary } from "./turnComponents.js";
+import { htmlUiAdapter, type HtmlFragment } from "../../../shared/lib/ui/htmlUiAdapter.js";
+import {
+  CodeBlock, Markdown, Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
+  TraceDescription, TraceIcon, TraceLine, TraceTitle
+} from "../../../shared/lib/ui/traceComponents.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, PlanAcceptanceItem, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession, type DextHistorySummary } from "../contracts/history.js";
@@ -21,17 +25,13 @@ import {
 } from "../../workspace/domain/fileReference.js";
 import { terminalSegments } from "./terminalText.js";
 import { escapeHtml } from "../../../shared/lib/html.js";
-import { dextMarkdown } from "../../../shared/lib/markdown.js";
 
 // Process events are also shown in the live conversation, where Markdown owns
 // paragraph and soft-break layout. History must use the same interpretation:
 // rendering the stored source with pre-wrap turns Markdown's blank lines into
 // unusually large gaps after a conversation is reopened.
-const processMarkdown = dextMarkdown();
-processMarkdown.use(markdownCodeCopy);
-
-function renderProcessMarkdown(source: string): string {
-  return processMarkdown.render(source);
+function historyMarkdown(source: string, className = "markdown-body"): HtmlFragment {
+  return Markdown(htmlUiAdapter, source, { trustedLinks: true, copyCode: true, attributes: { class: className } });
 }
 
 function chevron(): string {
@@ -56,17 +56,15 @@ function historyTurnSection(
   options: { open?: boolean; action?: string } = {}
 ): string {
   const action = options.action === undefined ? undefined : { html: options.action };
-  return renderTurnSection(turnHtmlAdapter, section, [{ html: body }], options.open, action).disclosure.html;
+  return renderTurnSection(htmlUiAdapter, section, [{ html: body }], options.open, action).disclosure.html;
 }
 
 function markdownOutput(text: string): string {
-  return renderTurnMarkdown(turnHtmlAdapter,
-    { html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` }
-  ).html;
+  return renderTurnMarkdown(htmlUiAdapter, historyMarkdown(text)).html;
 }
 
 function jsonOutput(text: string): string {
-  return renderTurnJson(turnHtmlAdapter, text, { html: copyButton(text) })?.html ?? markdownOutput(text);
+  return renderTurnJson(htmlUiAdapter, text, { html: copyButton(text) })?.html ?? markdownOutput(text);
 }
 
 /** High-frequency conversation actions stay visible on hover; the complete
@@ -169,7 +167,7 @@ function renderedInputSource(source: string): string {
 
 function resultBody(result: DextResult, patchApplication?: RuntimeResponse["patchApplication"]): string {
   return renderTurnResult({
-    ...turnHtmlAdapter,
+    ...htmlUiAdapter,
     markdown: (text) => ({ html: markdownOutput(text) }),
     json: (text) => ({ html: jsonOutput(text) }),
     plan: (path) => ({ html: planLink(path) })
@@ -192,15 +190,20 @@ function steps(response: InputExecutionResponse): WorkflowStepResponse[] {
   return response.steps ?? response.executions.map((item) => ({ method: item.method.id, state: "success", response: item }));
 }
 
-function output(response: InputExecutionResponse): string {
+function output(response: InputExecutionResponse, decorate: (html: string) => string): string {
   return steps(response).map((step) => {
     if (step.quiet) return "";
     if (step.stream) {
-      return `<div class="markdown-body history-process-output process-output-${step.stream.channel}">${renderProcessMarkdown(step.stream.text)}</div>`;
+      return decorate(historyMarkdown(step.stream.text, `markdown-body history-process-output process-output-${step.stream.channel}`).html);
     }
-    return step.response
-      ? execution(step.response)
-      : `<details class="history-disclosure step-result"><summary>${chevron()}<span>${escapeHtml(step.method)}</span><span class="history-meta">${escapeHtml(step.state)}</span></summary>${step.error ? `<pre class="error">${escapeHtml(step.error)}</pre>` : ""}</details>`;
+    if (step.response) {
+      const html = execution(step.response);
+      return step.response.result.kind === "view" ? html : decorate(html);
+    }
+    const summary = renderTurnDisclosureSummary(htmlUiAdapter, step.method, step.state, "history-meta");
+    const errors = step.error ? [htmlUiAdapter.element("pre", { class: "error" }, [step.error])] : [];
+    return TraceCollapsible(htmlUiAdapter, summary, TraceCollapsibleContent(htmlUiAdapter, errors),
+      { class: "history-disclosure step-result" }).html;
   }).join("");
 }
 
@@ -213,9 +216,9 @@ function outputText(response: InputExecutionResponse): string {
 
 function processMessage(text: string): string {
   return renderTurnMessage({
-    ...turnHtmlAdapter,
-    prose: (text) => ({ html: `<div class="markdown-body">${renderProcessMarkdown(text)}</div>` }),
-    code: (text) => ({ html: `<pre>${escapeHtml(text)}</pre>` }),
+    ...htmlUiAdapter,
+    prose: historyMarkdown,
+    code: (text) => CodeBlock(htmlUiAdapter, [text]),
   }, presentAgentMessage(text)).map((node) => node.html).join("");
 }
 
@@ -223,12 +226,22 @@ function commandLabel(event: AgentStreamEvent): string {
   return (event.title ?? event.text.split(/\r?\n/, 1)[0] ?? "Command").slice(0, 180);
 }
 
-function commandRow(event: AgentStreamEvent, className = "process-command"): string {
-  return `<details class="history-disclosure ${className}"><summary>${chevron()}<i class="codicon codicon-check agent-trace-glyph"></i><span class="agent-trace-command-label">${escapeHtml(commandLabel(event))}</span></summary><pre class="terminal-text">${highlightTerminal(event.text)}</pre></details>`;
+function historyTerminal(text: string): HtmlFragment {
+  return CodeBlock(htmlUiAdapter, [{ html: highlightTerminal(text) }], { class: "terminal-text" });
+}
+
+function commandRow(event: AgentStreamEvent, className = "process-command"): HtmlFragment {
+  const summary = TraceCollapsibleTrigger(htmlUiAdapter, [
+    TraceChevron(htmlUiAdapter),
+    TraceIcon(htmlUiAdapter, "check", { class: "codicon codicon-check agent-trace-glyph" }),
+    TraceTitle(htmlUiAdapter, [commandLabel(event)], { class: "agent-trace-command-label" })
+  ]);
+  return TraceCollapsible(htmlUiAdapter, summary, TraceCollapsibleContent(htmlUiAdapter, [historyTerminal(event.text)]),
+    { class: `history-disclosure ${className}` });
 }
 
 function process(events: readonly AgentStreamEvent[]): { html: string; copyText: string } {
-  const html: string[] = [];
+  const rows: HtmlFragment[] = [];
   // Use the same stable-id replay that Conversation history restoration uses.
   const replayEvents = prepareHistoryTrace(events);
   let tools: AgentStreamEvent[] = [];
@@ -240,8 +253,13 @@ function process(events: readonly AgentStreamEvent[]): { html: string; copyText:
     // real groups need a nested row per command.
     const lone = !firstTool.groupLabel && tools.length === 1;
     const label = firstTool.groupLabel ?? (lone ? commandLabel(firstTool) : `Ran ${tools.length} commands`);
-    const body = lone ? `<pre class="terminal-text">${highlightTerminal(firstTool.text)}</pre>` : tools.map((event) => commandRow(event)).join("");
-    html.push(`<details class="history-disclosure process-event process-command-group"><summary>${chevron()}<span>${escapeHtml(label)}</span></summary><div class="disclosure-body">${body}</div></details>`);
+    const body = lone ? [historyTerminal(firstTool.text)] : tools.map((event) => commandRow(event));
+    const summary = TraceCollapsibleTrigger(htmlUiAdapter, [
+      TraceChevron(htmlUiAdapter), TraceDescription(htmlUiAdapter, [label])
+    ]);
+    rows.push(TraceCollapsible(htmlUiAdapter, summary,
+      TraceCollapsibleContent(htmlUiAdapter, body, { class: "disclosure-body" }, "div"),
+      { class: "history-disclosure process-event process-command-group" }));
     tools = [];
     groupId = undefined;
   };
@@ -250,7 +268,7 @@ function process(events: readonly AgentStreamEvent[]): { html: string; copyText:
     if (event.phase === "tool") {
       if (event.solo) {
         flushTools();
-        html.push(commandRow(event, "process-event process-command-solo"));
+        rows.push(commandRow(event, "process-event process-command-solo"));
         continue;
       }
       if (tools.length && event.groupId !== groupId) flushTools();
@@ -259,11 +277,11 @@ function process(events: readonly AgentStreamEvent[]): { html: string; copyText:
       continue;
     }
     flushTools();
-    html.push(`<section class="process-message agent-stream-item agent-trace-message"><div class="agent-stream-text">${processMessage(event.text)}</div></section>`);
+    const content = htmlUiAdapter.markup("div", { class: "agent-stream-text" }, processMessage(event.text), []);
+    rows.push(TraceLine(htmlUiAdapter, [content], { class: "process-message agent-stream-item agent-trace-message", role: false }, "section"));
   }
   flushTools();
-  const content = html.join("");
-  if (!content) return { html: "", copyText: "" };
+  if (!rows.length) return { html: "", copyText: "" };
   const copyText = replayEvents
     .filter((event) => event.phase !== "status" && event.phase !== "todo" && event.phase !== "input")
     .map((event) => event.phase === "tool"
@@ -271,7 +289,7 @@ function process(events: readonly AgentStreamEvent[]): { html: string; copyText:
       : agentMessageCopyText(presentAgentMessage(event.text)))
     .filter(Boolean)
     .join("\n\n");
-  return { html: `<div class="process-content">${content}</div>`, copyText };
+  return { html: Trace(htmlUiAdapter, rows, { class: "process-content", role: false }, "div").html, copyText };
 }
 
 /** A restored card keeps every choice the question offered, with the picked ones
@@ -296,7 +314,7 @@ function inputHistory(events: readonly AgentStreamEvent[]): string {
     const action = state.form.actions?.find((action) => action.id === state.action);
     const fields = state.form.fields.map((field) =>
       `<div class="agent-input-field">${answerField(presentAnswerField(field, state.answers?.[field.id]))}</div>`).join("");
-    const description = state.form.description ? `<div class="interaction-description markdown-body">${renderProcessMarkdown(state.form.description)}</div>` : "";
+    const description = state.form.description ? historyMarkdown(state.form.description, "interaction-description markdown-body").html : "";
     const title = answeredCardTitle(state.form.title, state.status === "submitted", action?.label);
     return `<section class="agent-input-card"><details class="agent-input-disclosure"><summary>${chevron()}<strong>${escapeHtml(title)}</strong></summary><div class="agent-input-disclosure-body">${description}${fields}</div></details></section>`;
   }).join("");
@@ -348,7 +366,7 @@ export function renderHistoryRecord(
   const executePlan = record.executePlan || !!planExecution;
   // An executed Plan keeps its own label and hides the instruction it was given.
   const promptHtml = executePlan ? "" : `<span class="output-turn-prompt">${renderedInputSource(record.input)}</span>`;
-  const modeHtml = executePlan ? "" : renderTurnMode(turnHtmlAdapter, presentTurnMode(record.mode)).html;
+  const modeHtml = executePlan ? "" : renderTurnMode(htmlUiAdapter, presentTurnMode(record.mode)).html;
   const titleClass = `output-turn-title${record.mode === "code" ? " code-prompt" : ""}`;
   // An executed Plan hides its prompt, so its Plan name is the row label.
   const nameHidden = !record.title && !executePlan;
@@ -358,11 +376,13 @@ export function renderHistoryRecord(
   // History is read-only: the same rows render disabled checkboxes, so a
   // confirmed state stays visible without offering a control that cannot write.
   const todoHtml = renderAgentTodos(latestAgentTodos(record.process), acceptance) + inputHistory(record.process);
-  const outputHtml = record.error
-    ? `<pre class="error">${escapeHtml(record.error)}</pre>`
-    : response ? output(response) : (renderTurnJson(turnHtmlAdapter, record.output, { html: copyButton(record.output) })?.html
+  const changes = sessionId ? turnChanges(record) : [];
+  const decorateOutput = (html: string): string => linkChangedPaths(html, changes, sessionId, record.id);
+  const outputHtml = response ? output(response, decorateOutput) : record.error ? "" : decorateOutput(
+    renderTurnJson(htmlUiAdapter, record.output, { html: copyButton(record.output) })?.html
       ?? `<pre>${escapeHtml(record.output)}</pre>`);
-  const outputCopy = record.error ? "" : response ? outputText(response) : record.output;
+  const errorHtml = record.error ? `<pre class="error">${escapeHtml(record.error)}</pre>` : "";
+  const outputCopy = response ? outputText(response) : record.error ? "" : record.output;
   const context = sessionId
     ? ` ${contextAttribute({
       webviewSection: "turn",
@@ -374,14 +394,19 @@ export function renderHistoryRecord(
   const hint = sessionId ? ` title="${TURN_ACTION_HINT}"` : "";
   const target = sessionId ? ` data-session-id="${escapeHtml(sessionId)}" data-turn-id="${escapeHtml(record.id)}"` : "";
   const planOutcome = record.planOutcome ?? (planExecution?.result.kind === "plan" ? planExecution.result.planOutcome : undefined);
-  const planStatusHtml = executePlan ? `<span class="plan-status">${planExecutionLabel(record.process, record.error, planOutcome, acceptance)}</span>` : "";
+  const planStatusHtml = executePlan ? TraceDescription(htmlUiAdapter, [
+    planExecutionLabel(record.process, record.error, planOutcome, acceptance)
+  ], { class: "plan-status" }).html : "";
+  const title = TraceTitle(htmlUiAdapter, [
+    TraceTitle(htmlUiAdapter, [historyTurnTitle(record)], { class: "output-turn-title-name", hidden: nameHidden }),
+    { html: promptHtml }
+  ], { class: titleClass });
   const processSummary = historyTurnSection(turn.process, processView.html, {
     ...(processView.copyText ? { action: copyButton(processView.copyText) } : {})
   });
-  const outputSection = renderTurnOutput(turnHtmlAdapter, [{ html: outputHtml }],
+  const outputSection = renderTurnOutput(htmlUiAdapter, [{ html: outputHtml + errorHtml }],
     outputCopy ? { html: copyButton(outputCopy) } : undefined).section.html;
-  const changes = sessionId ? turnChanges(record) : [];
-  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}<span class="${titleClass}"><span class="output-turn-title-name"${nameHidden ? " hidden" : ""}>${escapeHtml(historyTurnTitle(record))}</span>${promptHtml}</span>${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath), record.changedFiles !== undefined) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${linkChangedPaths(outputSection, changes, sessionId, record.id)}${changedFiles(changes, sessionId, record.id)}</div></details>`;
+  return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}${title.html}${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath), record.changedFiles !== undefined) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${outputSection}${changedFiles(changes, sessionId, record.id)}</div></details>`;
 }
 
 /** The name a conversation carries until the user renames it: the opening line
@@ -452,13 +477,13 @@ export function renderHistorySession(session: DextHistorySession | DextHistorySu
 
 export function historyTurnMarkdown(record: DextHistoryRecord, index = 0): string {
   const response = parsedResponse(record);
-  const answer = record.error || (response ? outputText(response) : record.output);
+  const answer = response ? outputText(response) : record.error ? "" : record.output;
   return [
     `## Turn ${index + 1}${record.title ? ` — ${record.title}` : ""} — ${dateLabel(record.createdAt)}`,
     "### Input",
     inputReferenceDisplayText(normalizeInputReferenceSource(record.input)),
-    record.error ? "### Error" : "### Output",
-    answer
+    ...(!record.error || answer ? ["### Output", answer] : []),
+    ...(record.error ? ["### Error", record.error] : [])
   ].join("\n\n");
 }
 

@@ -1,6 +1,7 @@
 import { formatDuration } from "../../../shared/lib/duration.js";
 import type { AgentStreamEvent, AgentTokenUsage, DextResult } from "../../../shared/contracts/types.js";
 import { uiResultText } from "./uiInteractionPresentation.js";
+import { uiViewText } from "../../../shared/lib/ui/uiViewPresentation.js";
 
 /** Shared labels and icons for the live conversation and History toolbars. */
 // `rename` is an I-beam caret; the pencil is what every other app calls rename, so
@@ -77,6 +78,7 @@ export function resultCopyText(result: DextResult): string {
   if (result.kind === "apply") return result.summary;
   // terminal 的返回值是给 API 读的，不进 Output，也就不进复制文本。
   if (result.kind === "terminal") return "";
+  if (result.kind === "view") return uiViewText(result);
   const declared = typeof (result as { kind?: unknown }).kind === "string";
   return declared ? uiResultText(result) : "";
 }

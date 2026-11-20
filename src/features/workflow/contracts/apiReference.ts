@@ -43,6 +43,7 @@ export interface ApiReferenceCatalog {
   version: number;
   typescript: string;
   modules: readonly ApiReferenceModule[];
+  dext?: readonly ApiReferenceMember[];
 }
 
 /** A documented exported function read from workspace source. */

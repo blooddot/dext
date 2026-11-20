@@ -1,11 +1,12 @@
 import "../../media/styles.css";
 import { TranscriptView, type OutputTurnElements } from "../features/conversations/browser/transcriptView.js";
-import { turnDomAdapter } from "../features/conversations/browser/turnDomAdapter.js";
+import { domUiAdapter } from "../platform/browser/domUiAdapter.js";
 import type { DextHistoryRecord, DextHistorySession } from "../features/conversations/contracts/history.js";
 import type { ConversationSummary } from "../features/conversations/contracts/protocol.js";
 import { prepareHistoryTrace } from "../features/conversations/domain/agentTraceReplay.js";
 import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
-import { renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
+import { renderTurnDisclosureSummary, renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
+import { CodeBlock, Markdown, TraceCollapsible, TraceCollapsibleContent, TraceIcon, TraceTitle } from "../shared/lib/ui/traceComponents.js";
 import { turnChanges } from "../features/conversations/domain/turnDiff.js";
 import {
   formatTurnTokenUsage,
@@ -48,9 +49,13 @@ import { AgentTodoView } from "../features/conversations/browser/agentTodoView.j
 import { AgentTraceView } from "../features/conversations/browser/agentTraceView.js";
 import { ComposerDraftStore } from "../features/conversations/browser/composerController.js";
 import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
+import {
+  bindComposerMenuKeys, composerMenuCategory, composerMenuChoice, composerMenuEmpty, composerMenuItem,
+  focusComposerMenuItem, focusComposerMenuSelection
+} from "../features/conversations/browser/composerMenu.js";
 import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
 import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
-import { renderConversationTabs } from "../features/conversations/browser/conversationTabs.js";
+import { renderConversationTabs, setTabSelected } from "../features/conversations/browser/conversationTabs.js";
 import type { InteractionFileHost } from "../features/conversations/browser/interactionForm.js";
 import { OutputScrollController } from "../features/conversations/browser/outputScrollController.js";
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
@@ -424,7 +429,6 @@ const transcript = new TranscriptView({
 
 const trace = new AgentTraceView({
   document,
-  markdown: (text) => markdown.render(text),
   colorizeCode: (root) => colorizeCodeBlocks(root),
   codeBlock: (text) => codeBlock(text),
   terminal: (text) => terminalText(text),
@@ -870,8 +874,7 @@ function renderResourceSource(resource: ResourceSession | undefined): void {
   elements.resourceSourceToggle.hidden = !visible;
   for (const button of [elements.resourceSourceDescribe, elements.resourceSourceImport]) {
     const selected = button.dataset.resourceSource === resourceSource;
-    button.setAttribute("aria-selected", String(selected));
-    button.classList.toggle("is-selected", selected);
+    setTabSelected(button, selected, "is-selected");
     button.disabled = composerSelectionLocked();
   }
   elements.inputSection.classList.toggle("resource-import", visible && resourceSource === "import");
@@ -967,19 +970,13 @@ function renderSkillsMenu(state: SidebarState, selected: readonly string[], enab
   menu.replaceChildren();
   const groups = groupSkills(state.skills ?? [], state.skillCommands ?? [], selected);
   if (!enabled) {
-    const note = document.createElement("div");
-    note.className = "composer-menu-empty";
-    note.textContent = state.skillsDisabledReason ?? "Skills are disabled in this workspace.";
-    menu.append(note);
+    menu.append(composerMenuEmpty(state.skillsDisabledReason ?? "Skills are disabled in this workspace."));
     return;
   }
   if (!groups.length) {
-    const note = document.createElement("div");
-    note.className = "composer-menu-empty";
-    note.textContent = (state.skills ?? []).length
+    menu.append(composerMenuEmpty((state.skills ?? []).length
       ? "Every installed Skill is hidden from this menu. Toggle visibility in the Dext Resources page."
-      : "No skills are installed. Add a SKILL.md package under .dext/skills or import a GitHub repository.";
-    menu.append(note);
+      : "No skills are installed. Add a SKILL.md package under .dext/skills or import a GitHub repository."));
     return;
   }
   const row = (options: {
@@ -991,30 +988,12 @@ function renderSkillsMenu(state: SidebarState, selected: readonly string[], enab
     commands?: string;
     disabled?: boolean;
     onToggle(): void;
-  }): HTMLButtonElement => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.disabled = options.disabled === true;
-    button.className = `composer-menu-option composer-skill-option${options.pack ? " composer-skill-pack" : ""}`;
-    button.dataset.level = String(options.level);
-    button.dataset.value = options.value;
-    button.tabIndex = -1;
-    button.setAttribute("role", "menuitemcheckbox");
-    button.setAttribute("aria-checked", options.checked);
-    const glyph = document.createElement("i");
-    glyph.className = `codicon codicon-${options.checked === "checked" ? "check" : options.checked === "mixed" ? "circle-filled" : "blank"}`;
-    const text = document.createElement("span");
-    text.textContent = options.label;
-    if (options.commands) {
-      const hint = document.createElement("small");
-      hint.className = "composer-skill-commands";
-      hint.textContent = options.commands;
-      text.append(hint);
-    }
-    button.append(glyph, text);
-    button.addEventListener("click", () => { if (!composerSelectionLocked() && enabled) options.onToggle(); });
-    return button;
-  };
+  }): HTMLButtonElement => composerMenuChoice(options.label, options.checked === "mixed" ? "mixed" : options.checked === "checked",
+    "menuitemcheckbox", {
+      class: `composer-menu-option composer-skill-option${options.pack ? " composer-skill-pack" : ""}`,
+      "data-level": String(options.level), "data-value": options.value, disabled: options.disabled === true
+    }, () => { if (!composerSelectionLocked() && enabled) options.onToggle(); },
+    { checkFirst: true, ...(options.commands ? { hint: options.commands } : {}) });
   for (const group of groups) {
     if (group.packId) {
       const availableIds = group.skills.filter((skill) => skill.available !== false).map((skill) => skill.id);
@@ -1156,25 +1135,13 @@ function renderComposerMenu(
 ): void {
   menu.replaceChildren();
   for (const [value, label, icon] of items) {
-    const button = document.createElement("button");
-    button.type = "button";
     const itemClass = itemClasses[value];
-    button.dataset.value = value;
-    button.className = `composer-menu-option${warningValues.includes(value) ? " composer-menu-option-warning" : ""}${itemClass ? ` ${itemClass}` : ""}`;
-    button.tabIndex = -1;
-    button.setAttribute("role", "menuitemradio");
-    button.setAttribute("aria-checked", String(value === selected));
-    const glyph = document.createElement("i");
-    glyph.className = `codicon ${icon}`;
-    const text = document.createElement("span");
-    text.textContent = label;
-    const check = document.createElement("i");
-    check.className = `codicon codicon-${value === selected ? "check" : "blank"}`;
-    button.append(glyph, text, check);
-    button.addEventListener("click", () => {
+    menu.append(composerMenuChoice(label, value === selected, "menuitemradio", {
+      "data-value": value,
+      class: `composer-menu-option${warningValues.includes(value) ? " composer-menu-option-warning" : ""}${itemClass ? ` ${itemClass}` : ""}`
+    }, () => {
       if (!composerSelectionLocked()) onSelect(value);
-    });
-    menu.append(button);
+    }, { leading: icon }));
   }
 }
 
@@ -1218,59 +1185,30 @@ function renderModelMenu(
   elements.modelSubmenu.replaceChildren();
   elements.modelSubmenu.hidden = true;
   if (profile?.provider === "deepseek-harness") {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "composer-menu-option composer-menu-category";
-    button.tabIndex = -1;
-    const title = document.createElement("span");
-    title.textContent = "Agent preset";
-    const value = document.createElement("span");
-    value.className = "composer-menu-category-value";
     // The catalog is the only source of preset choices; an unset selection is
     // shown as the Harness default it will run as.
     const selectedPreset = harnessPresetOrDefault(current.agentPreset);
-    value.textContent = profile.presets?.find((preset) => preset.id === selectedPreset)?.label ?? selectedPreset;
-    const chevron = document.createElement("i");
-    chevron.className = "codicon codicon-chevron-right";
-    button.append(title, value, chevron);
-    button.addEventListener("click", (event) => {
+    const value = profile.presets?.find((preset) => preset.id === selectedPreset)?.label ?? selectedPreset;
+    elements.modelMenu.append(composerMenuCategory("Agent preset", value, (event) => {
       event.stopPropagation();
       if (!composerSelectionLocked()) renderHarnessPresetChoices(state);
-    });
-    elements.modelMenu.append(button);
+    }));
   }
   if (!options.length) {
-    const empty = document.createElement("div");
-    empty.className = "composer-menu-empty";
-    empty.textContent = profile?.provider === "pi" ? "No Pi models discovered. Associate an installed Pi CLI using Dext: Configure Agent; configure models and authentication in Pi."
+    elements.modelMenu.append(composerMenuEmpty(profile?.provider === "pi" ? "No Pi models discovered. Associate an installed Pi CLI using Dext: Configure Agent; configure models and authentication in Pi."
       : profile?.provider === "deepseek-harness"
       ? "No models discovered. Using the Harness configuration; run Dext: Configure Agent to refresh this list."
-      : "No models are available for this Agent.";
-    elements.modelMenu.append(empty);
+      : "No models are available for this Agent."));
     if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu();
     return;
   }
   for (const category of categories) {
     if (!category.items.length) continue;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "composer-menu-option composer-menu-category";
-    button.tabIndex = -1;
-    const title = document.createElement("span");
-    title.textContent = category.title;
-    const value = document.createElement("span");
-    value.className = "composer-menu-category-value";
-    value.textContent = category.value;
-    const chevron = document.createElement("i");
-    chevron.className = "codicon codicon-chevron-right";
-    button.append(title, value, chevron);
-    const openChoices = (event: Event): void => {
+    elements.modelMenu.append(composerMenuCategory(category.title, category.value, (event) => {
       event.stopPropagation();
       if (composerSelectionLocked()) return;
       renderModelChoices(elements.modelSubmenu, category.title, category.items, category.selected, category.onSelect);
-    };
-    button.addEventListener("click", openChoices);
-    elements.modelMenu.append(button);
+    }));
   }
   if (profile?.provider === "deepseek-harness") appendHarnessPresetManagementMenu();
   if (profile?.provider === "pi" && state.piPlugins?.length) appendPluginCategory(state);
@@ -1282,23 +1220,11 @@ function appendPluginCategory(state: SidebarState): void {
   const installed = state.piPlugins ?? [];
   const selected = state.agentSelection.piPlugins;
   const count = selected ? selected.length : installed.length;
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "composer-menu-option composer-menu-category";
-  button.tabIndex = -1;
-  const title = document.createElement("span");
-  title.textContent = "Plugins";
-  const value = document.createElement("span");
-  value.className = "composer-menu-category-value";
-  value.textContent = count === 0 ? "None" : count === installed.length ? `All (${count})` : `${count} of ${installed.length}`;
-  const chevron = document.createElement("i");
-  chevron.className = "codicon codicon-chevron-right";
-  button.append(title, value, chevron);
-  button.addEventListener("click", (event) => {
+  const value = count === 0 ? "None" : count === installed.length ? `All (${count})` : `${count} of ${installed.length}`;
+  elements.modelMenu.append(composerMenuCategory("Plugins", value, (event) => {
     event.stopPropagation();
     if (!composerSelectionLocked()) renderPluginChoices(state);
-  });
-  elements.modelMenu.append(button);
+  }));
 }
 
 function renderPluginChoices(state: SidebarState): void {
@@ -1308,40 +1234,21 @@ function renderPluginChoices(state: SidebarState): void {
   const selected = state.agentSelection.piPlugins ?? installed.map((plugin) => plugin.id);
   for (const plugin of installed) {
     const checked = selected.includes(plugin.id);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "composer-menu-option";
-    button.tabIndex = -1;
-    button.setAttribute("role", "menuitemcheckbox");
-    button.setAttribute("aria-checked", String(checked));
-    const text = document.createElement("span");
-    text.textContent = plugin.label;
-    const check = document.createElement("i");
-    check.className = `codicon codicon-${checked ? "check" : "blank"}`;
-    button.append(text, check);
-    button.addEventListener("click", (event) => {
+    menu.append(composerMenuChoice(plugin.label, checked, "menuitemcheckbox", {}, (event) => {
       event.stopPropagation();
       submitAgentSelection({ piPlugins: checked ? selected.filter((id) => id !== plugin.id) : [...selected, plugin.id] });
-    });
-    menu.append(button);
+    }));
   }
 }
 
 function appendHarnessPresetManagementMenu(): void {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "composer-menu-option composer-preset-management";
-  button.tabIndex = -1;
-  const label = document.createElement("span");
-  label.textContent = "Manage presets";
-  const chevron = document.createElement("i");
-  chevron.className = "codicon codicon-chevron-right";
-  button.append(label, chevron);
-  button.addEventListener("click", (event) => {
+  const adapter = domUiAdapter(document);
+  elements.modelMenu.append(composerMenuItem({ class: "composer-menu-option composer-preset-management" }, [
+    TraceTitle(adapter, ["Manage presets"]), TraceIcon(adapter, "chevron-right")
+  ], (event) => {
     event.stopPropagation();
     if (!composerSelectionLocked()) renderHarnessPresetManagement();
-  });
-  elements.modelMenu.append(button);
+  }));
 }
 
 function renderHarnessPresetChoices(state: SidebarState): void {
@@ -1359,43 +1266,24 @@ function renderHarnessPresetChoices(state: SidebarState): void {
   const menu = elements.modelSubmenu;
   renderModelChoices(menu, "Agent preset", [], current, () => undefined);
   if (locked) {
-    const note = document.createElement("div");
-    note.className = "composer-menu-empty";
-    note.textContent = "This conversation keeps its preset. Start a new conversation to change it.";
-    menu.append(note);
+    menu.append(composerMenuEmpty("This conversation keeps its preset. Start a new conversation to change it."));
   }
   if (!presets.length) {
-    const missing = document.createElement("div");
-    missing.className = "composer-menu-empty";
-    missing.textContent = "No Harness presets found. Refresh presets or check the installed Harness.";
-    menu.append(missing);
+    menu.append(composerMenuEmpty("No Harness presets found. Refresh presets or check the installed Harness."));
   }
   for (const preset of presets) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "composer-menu-option";
-    button.tabIndex = -1;
-    button.setAttribute("role", "menuitemradio");
-    button.setAttribute("aria-checked", String(preset.id === current));
     const restriction = preset.requiresFullAccess && !fullAccess;
     const buildOnly = !restriction && Boolean(preset.writableTurnsOnly) && writable && inputMode === "plan";
-    button.disabled = locked || Boolean(preset.error) || restriction;
-    button.dataset.presetDisabled = String(button.disabled);
-    button.title = preset.error || (restriction ? "Requires Full access in Agent or Plan mode."
+    const disabled = locked || Boolean(preset.error) || restriction;
+    const title = preset.error || (restriction ? "Requires Full access in Agent or Plan mode."
       : buildOnly ? "Planning turns stay read-only; this preset runs when the plan builds." : preset.description);
-    const label = document.createElement("span");
-    label.textContent = `${preset.label}${preset.error ? " (unavailable)" : restriction ? " (Full access)" : buildOnly ? " (Build only)" : ""}`;
-    const check = document.createElement("i");
-    check.className = `codicon codicon-${preset.id === current ? "check" : "blank"}`;
-    button.append(label, check);
-    button.addEventListener("click", (event) => { event.stopPropagation(); submitAgentSelection({ agentPreset: preset.id }); });
-    menu.append(button);
+    const label = `${preset.label}${preset.error ? " (unavailable)" : restriction ? " (Full access)" : buildOnly ? " (Build only)" : ""}`;
+    menu.append(composerMenuChoice(label, preset.id === current, "menuitemradio", {
+      disabled, "data-preset-disabled": String(disabled), title
+    }, (event) => { event.stopPropagation(); submitAgentSelection({ agentPreset: preset.id }); }));
   }
   if (presets.length && !presets.some((preset) => preset.id === current)) {
-    const missing = document.createElement("div");
-    missing.className = "composer-menu-empty";
-    missing.textContent = `Preset '${current}' is unavailable. Refresh presets or choose another in a new conversation.`;
-    menu.append(missing);
+    menu.append(composerMenuEmpty(`Preset '${current}' is unavailable. Refresh presets or choose another in a new conversation.`));
   }
   positionModelSubmenu();
 }
@@ -1403,22 +1291,15 @@ function renderHarnessPresetChoices(state: SidebarState): void {
 function renderHarnessPresetManagement(): void {
   const menu = elements.modelSubmenu;
   renderModelChoices(menu, "Manage presets", [], "", () => undefined);
+  const adapter = domUiAdapter(document);
   const actions: ["refresh", string][] = [["refresh", "Refresh presets"]];
   for (const [action, label] of actions) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "composer-menu-option";
-    button.tabIndex = -1;
-    button.setAttribute("role", "menuitem");
-    const text = document.createElement("span");
-    text.textContent = label;
-    button.append(text);
-    button.addEventListener("click", (event) => {
+    menu.append(composerMenuItem({ role: "menuitem" }, [TraceTitle(adapter, [label])], (event) => {
       event.stopPropagation();
       if (composerSelectionLocked()) return;
       closeComposerMenus();
-      vscode.postMessage({ type: "harnessPresetAction", action });    });
-    menu.append(button);
+      vscode.postMessage({ type: "harnessPresetAction", action });
+    }));
   }
   positionModelSubmenu();
 }
@@ -1447,23 +1328,11 @@ function renderModelChoices(
       menu.append(heading);
     }
     priorGroup = group;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "composer-menu-option";
-    button.tabIndex = -1;
-    button.setAttribute("role", "menuitemradio");
-    button.setAttribute("aria-checked", String(value === selected));
-    const text = document.createElement("span");
-    text.textContent = label;
-    const check = document.createElement("i");
-    check.className = `codicon codicon-${value === selected ? "check" : "blank"}`;
-    button.append(text, check);
-    button.addEventListener("click", (event) => {
+    menu.append(composerMenuChoice(label, value === selected, "menuitemradio", {}, (event) => {
       event.stopPropagation();
       if (composerSelectionLocked()) return;
       onSelect(value);
-    });
-    menu.append(button);
+    }));
   }
 }
 
@@ -1528,8 +1397,7 @@ function selectConversation(sessionId: string): void {
   scheduleComposerDraftRestore(sessionId, switchId);
   for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
     const active = tab.dataset.sessionId === sessionId;
-    tab.classList.toggle("active", active);
-    tab.setAttribute("aria-selected", String(active));
+    setTabSelected(tab, active);
   }
   executing = false;
   stopping = false;
@@ -1612,9 +1480,25 @@ const composerMenus = [
 observeComposerOverflow(element<HTMLElement>("composer-controls"));
 
 for (const item of composerMenus) {
-  item.menu.addEventListener("keydown", (event) => handleComposerMenuKeydown(item.menu, event));
+  bindComposerMenuKeys(item.menu, {
+    close: () => { closeComposerMenus(); item.control.focus(); },
+    ...(item.menu === elements.modelMenu ? {
+      openSubmenu: (choice: HTMLButtonElement) => {
+        choice.click();
+        queueMicrotask(() => focusComposerMenuItem(elements.modelSubmenu, 0));
+      }
+    } : {})
+  });
 }
-elements.modelSubmenu.addEventListener("keydown", (event) => handleComposerMenuKeydown(elements.modelSubmenu, event));
+bindComposerMenuKeys(elements.modelSubmenu, {
+  close: () => { closeComposerMenus(); elements.modelControl.focus(); },
+  returnToParent: () => {
+    elements.modelSubmenu.hidden = true;
+    elements.modelSubmenu.replaceChildren();
+    elements.modelMenu.hidden = false;
+    focusComposerMenuItem(elements.modelMenu, 0);
+  }
+});
 
 function closeComposerMenus(except?: HTMLElement): void {
   for (const item of composerMenus) {
@@ -1630,63 +1514,11 @@ function closeComposerExtras(): void {
   elements.composerMore.closest(".composer-controls")?.classList.remove("show-extra");
 }
 
-function composerMenuItems(menu: HTMLElement): HTMLButtonElement[] {
-  return [...menu.querySelectorAll<HTMLButtonElement>(":scope > button")].filter((button) => !button.disabled);
-}
-
-function focusComposerMenuItem(menu: HTMLElement, index: number): void {
-  const items = composerMenuItems(menu);
-  if (!items.length) return;
-  const target = items[Math.max(0, Math.min(index, items.length - 1))]!;
-  items.forEach((item) => { item.tabIndex = item === target ? 0 : -1; });
-  target.focus();
-}
-
-function focusComposerTrigger(menu: HTMLElement): void {
-  const item = composerMenus.find((entry) => entry.menu === menu);
-  (item?.control ?? elements.modelControl).focus();
-}
-
-function handleComposerMenuKeydown(menu: HTMLElement, event: KeyboardEvent): void {
-  const items = composerMenuItems(menu);
-  if (!items.length) return;
-  const current = items.indexOf(document.activeElement as HTMLButtonElement);
-  if (event.key === "Escape") {
-    event.preventDefault();
-    closeComposerMenus();
-    focusComposerTrigger(menu === elements.modelSubmenu ? elements.modelMenu : menu);
-    return;
-  }
-  if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
-    event.preventDefault();
-    const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
-    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
-      : (current < 0 ? 0 : (current + direction + items.length) % items.length);
-    focusComposerMenuItem(menu, next);
-    return;
-  }
-  if (menu === elements.modelMenu && event.key === "ArrowRight" && current >= 0) {
-    event.preventDefault();
-    items[current]!.click();
-    queueMicrotask(() => focusComposerMenuItem(elements.modelSubmenu, 0));
-  } else if (menu === elements.modelSubmenu && event.key === "ArrowLeft") {
-    event.preventDefault();
-    elements.modelSubmenu.hidden = true;
-    elements.modelSubmenu.replaceChildren();
-    elements.modelMenu.hidden = false;
-    focusComposerMenuItem(elements.modelMenu, 0);
-  }
-}
-
 function toggleComposerMenu(menu: HTMLElement): void {
   if (composerSelectionLocked()) return;
   closeComposerMenus(menu.hidden ? menu : undefined);
   if (!menu.hidden) {
-    queueMicrotask(() => {
-      const items = composerMenuItems(menu);
-      const selected = items.findIndex((item) => item.getAttribute("aria-checked") === "true");
-      focusComposerMenuItem(menu, selected >= 0 ? selected : 0);
-    });
+    queueMicrotask(() => focusComposerMenuSelection(menu, menu !== elements.skillsMenu));
   }
 }
 
@@ -1716,24 +1548,15 @@ function copyButtonFrom(read: () => string): HTMLButtonElement {
   return button;
 }
 
-function copyableContent(content: string, className = ""): HTMLElement {
+function codeBlock(content: string): HTMLElement {
   const wrapper = document.createElement("div");
   wrapper.className = "output-copyable";
-  const pre = document.createElement("pre");
-  if (className) pre.className = className;
-  const code = document.createElement("code");
-  code.textContent = content;
-  pre.append(code);
-  wrapper.append(pre, copyButton(content));
+  wrapper.append(CodeBlock(domUiAdapter(document), content), copyButton(content));
   return wrapper;
 }
 
-function codeBlock(content: string): HTMLElement {
-  return copyableContent(content);
-}
-
 function jsonOutput(content: string): HTMLElement {
-  return renderTurnJson(turnDomAdapter(document), content, copyButton(content)) ?? copyableText(content);
+  return renderTurnJson(domUiAdapter(document), content, copyButton(content)) ?? copyableText(content);
 }
 
 
@@ -1754,25 +1577,11 @@ function terminalText(content: string): DocumentFragment {
 }
 
 function copyableText(content: string): HTMLElement {
-  const body = document.createElement("div");
-  body.className = "markdown-body";
-  body.innerHTML = markdown.render(content);
+  const adapter = domUiAdapter(document);
+  const body = Markdown(adapter, content, { trustedLinks: true, copyCode: true });
   renderMarkdownDiagrams(body);
   colorizeCodeBlocks(body);
-  return renderTurnMarkdown(turnDomAdapter(document), body);
-}
-
-function disclosureSummary(label: string, detail: string): HTMLElement {
-  const summary = document.createElement("summary");
-  const chevron = document.createElement("i");
-  chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-  const title = document.createElement("span");
-  title.textContent = label;
-  const meta = document.createElement("span");
-  meta.className = "disclosure-meta";
-  meta.textContent = detail;
-  summary.append(chevron, title, meta);
-  return summary;
+  return renderTurnMarkdown(adapter, body);
 }
 
 function syncTurnActions(): void {
@@ -1786,7 +1595,7 @@ function syncTurnActions(): void {
 function renderExecution(response: RuntimeResponse): DocumentFragment {
   const fragment = document.createDocumentFragment();
   fragment.append(...renderTurnResult({
-    ...turnDomAdapter(document),
+    ...domUiAdapter(document),
     markdown: copyableText,
     json: jsonOutput,
     plan: (planPath) => planActions(document, planPath, (reference) => vscode.postMessage({ type: "openFileReference", reference }))
@@ -1824,19 +1633,14 @@ function renderResult(response: InputExecutionResponse): void {  const target = 
       colorizeCodeBlocks(output);
       item.append(output);
     } else {
-      const disclosure = document.createElement("details");
-      disclosure.className = "execution-disclosure step-disclosure";
-      disclosure.append(disclosureSummary(
+      const adapter = domUiAdapter(document);
+      const summary = renderTurnDisclosureSummary(adapter,
         step.method,
         `${step.state}${step.assignment ? ` | ${step.assignment}` : ""}`
-      ));
-      if (step.error) {
-        const error = document.createElement("pre");
-        error.className = "error-output";
-        error.textContent = String(step.error);
-        disclosure.append(error);
-      }
-      item.append(disclosure);
+      );
+      const errors = step.error ? [adapter.element("pre", { class: "error-output" }, [String(step.error)])] : [];
+      item.append(TraceCollapsible(adapter, summary, TraceCollapsibleContent(adapter, errors),
+        { class: "execution-disclosure step-disclosure" }));
     }
     if (step.branch === undefined) {
       fanOut = undefined;
@@ -2793,8 +2597,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     else resourceSessions.delete(message.activeId);
     for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
       const active = tab.dataset.sessionId === message.activeId;
-      tab.classList.toggle("active", active);
-      tab.setAttribute("aria-selected", String(active));
+      setTabSelected(tab, active);
     }
     if (lastSidebarState) renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
     activePlanPath = message.planPath;

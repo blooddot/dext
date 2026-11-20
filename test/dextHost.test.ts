@@ -12,6 +12,7 @@ import { DextRuntime } from "../src/features/workflow/host/runtime.js";
 import type { ExecutionMetadata, InvocationAst, RuntimeResponse } from "../src/shared/contracts/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
 import { workflowCases } from "./dextWorkflowCases.js";
+import { UI_VIEW_MAX_BYTES, UI_VIEW_MAX_NODES } from "../src/shared/contracts/uiView.js";
 
 const runnerDirectory = resolve("src", "runner");
 workflowCases(runnerDirectory);
@@ -197,6 +198,78 @@ describe("Dext kernel host", () => {
     expect(asked).toEqual(["Review"]);
     expect(response.steps?.[0]?.response?.result).toMatchObject({ kind: "ui", type: "form", status: "submitted" });
     expect(response.steps?.at(-1)?.stream?.text).toBe("submitted\n");
+  });
+
+  it("renders through the real host without an interaction handler and refuses JSON coercion", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const runtime = builtinRuntime(root);
+    const calls: string[] = [];
+    const kernel = host(root, (invocation, metadata) => {
+      calls.push(invocation.method);
+      return runtime.execute(invocation, [], metadata);
+    });
+    const result = await kernel.runSource([
+      'import { ui } from "dext";',
+      'const returned = await ui.render({ nodes: [{ type: "Text", text: "view" }] });',
+      'try { await ui.render({ nodes: [{ type: "Text", text: new Date() }] }); } catch (error) { console.log(error.message); }',
+      'if (returned !== undefined) throw new Error("expected void");'
+    ].join("\n"));
+    expect(calls).toEqual(["ui.render"]);
+    expect(result.executions[0]?.result).toEqual({ kind: "view", nodes: [{ type: "Text", text: "view" }] });
+    expect(result.steps?.[0]?.quiet).toBeUndefined();
+    expect(result.steps?.[1]?.stream?.text).toContain("plain JSON at nodes[0].text");
+  });
+
+  it("round-trips a 32-level UI tree and reports the UI limit at 33 levels", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const runtime = builtinRuntime(root);
+    const kernel = host(root, (invocation, metadata) => runtime.execute(invocation, [], metadata));
+    const result = await kernel.runSource([
+      'import { ui, type UiNode } from "dext";',
+      'let node: UiNode = { type: "Text", text: "leaf" };',
+      'const wrap = (child: UiNode): UiNode => child.type === "TraceLine"',
+      '  ? { type: "Trace", children: [child] } : { type: "TraceLine", children: [child] };',
+      'for (let i = 1; i < 32; i++) node = wrap(node);',
+      'await ui.render({ nodes: [node] });',
+      'try { await ui.render({ nodes: [wrap(node)] }); }',
+      'catch (error) { console.log(error.message); }'
+    ].join("\n"));
+    expect(result.steps?.map((step) => step.state)).toEqual(["success", "failed", "success"]);
+    expect(result.steps?.[1]?.error).toContain("UI tree exceeds 32 levels.");
+    expect(result.steps?.[2]?.stream?.text).toContain("UI tree exceeds 32 levels.");
+    const view = result.executions[0]?.result;
+    expect(view?.kind === "view" && JSON.stringify(view.nodes).match(/"type":/g)).toHaveLength(32);
+  });
+
+  it("bounds ui.render node counts and JSON bytes before dispatch", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const runtime = builtinRuntime(root);
+    const calls: string[] = [];
+    const kernel = host(root, (invocation, metadata) => {
+      calls.push(invocation.method);
+      return runtime.execute(invocation, [], metadata);
+    });
+    const result = await kernel.runSource([
+      'import { ui } from "dext";',
+      'const leaf = { type: "Text", text: "" };',
+      `const maxNodes = ${UI_VIEW_MAX_NODES};`,
+      `const maxBytes = ${UI_VIEW_MAX_BYTES};`,
+      'const textLimit = maxBytes - Buffer.byteLength(JSON.stringify([leaf]));',
+      'await ui.render({ nodes: Array(maxNodes).fill(leaf) });',
+      'await ui.render({ nodes: [{ ...leaf, text: "x".repeat(textLimit) }] });',
+      'for (const nodes of [',
+      '  [{ type: "TraceLine", children: Array(maxNodes).fill(leaf) }],',
+      '  [{ ...leaf, text: "中".repeat(Math.floor(textLimit / 3) + 1) }],',
+      '  [{ ...leaf, text: "\\n".repeat(Math.floor(textLimit / 2) + 1) }],',
+      '  [{ ...leaf, text: "x".repeat(maxBytes) }, new Date()]',
+      ']) {',
+      '  try { await ui.render({ nodes }); } catch (error) { console.log(error.message); }',
+      '}'
+    ].join("\n"));
+    expect(calls).toEqual(["ui.render", "ui.render"]);
+    const diagnostics = result.steps?.flatMap((step) => step.stream ? [step.stream.text] : []).join("");
+    expect(diagnostics?.match(new RegExp(`UI tree exceeds ${UI_VIEW_MAX_NODES} nodes`, "g"))).toHaveLength(1);
+    expect(diagnostics?.match(new RegExp(`UI tree exceeds ${UI_VIEW_MAX_BYTES} UTF-8 bytes`, "g"))).toHaveLength(3);
   });
 
   it("resolves dext/api/<id> against .dext/api and any configured root", { timeout: 30000 }, async () => {

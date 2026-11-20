@@ -55,6 +55,7 @@ export async function renderMermaidSvg(source: string, root: HTMLElement): Promi
 /** Render loaded Mermaid without letting one bad diagram break the form. */
 export function renderMarkdownDiagrams(root: HTMLElement): void {
   for (const code of root.querySelectorAll<HTMLElement>("pre > code.language-mermaid")) {
+    if (code.closest("[data-script-view]")) continue;
     const pre = code.parentElement!;
     const source = code.textContent ?? "";
     const diagram = document.createElement("div");

@@ -1,15 +1,19 @@
 import type { AgentTodoItem, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
-import { agentAcceptanceProgressLabel, agentAcceptanceRows, agentTodoProgress, agentTodoRows } from "../presentation/agentTodoPresentation.js";
+import {
+  agentAcceptanceProgressLabel, agentTodoProgress, buildAgentAcceptanceRows, buildAgentTodoRows, buildAgentTodoSection
+} from "../presentation/agentTodoPresentation.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 /** Own state per turn so cached conversations retain both progress and the
  * user's disclosure choice. The provider remains the only source of status. */
 export class AgentTodoView {
-  readonly element = document.createElement("details");
-  private readonly meta = document.createElement("span");
-  private readonly list = document.createElement("ul");
-  private readonly acceptanceSection = document.createElement("section");
-  private readonly acceptanceMeta = document.createElement("span");
-  private readonly acceptanceList = document.createElement("ul");
+  private readonly adapter = domUiAdapter(document);
+  readonly element: HTMLDetailsElement;
+  private readonly meta: HTMLElement;
+  private readonly list: HTMLElement;
+  private readonly acceptanceSection: HTMLElement;
+  private readonly acceptanceMeta: HTMLElement;
+  private readonly acceptanceList: HTMLElement;
   private items: readonly AgentTodoItem[] = [];
   private acceptance: readonly PlanAcceptanceItem[] = [];
   private running = true;
@@ -19,32 +23,13 @@ export class AgentTodoView {
   private focusAcceptanceId: string | undefined;
 
   constructor(private readonly onToggleAcceptance?: (itemId: string, checked: boolean) => void) {
-    this.element.className = "output-turn-section turn-section agent-todos";
-    this.element.hidden = true;
-    const summary = document.createElement("summary");
-    const chevron = document.createElement("i");
-    chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-    const title = document.createElement("span");
-    title.textContent = "Todo";
-    this.meta.className = "turn-section-meta disclosure-meta";
-    this.meta.setAttribute("role", "status");
-    this.meta.setAttribute("aria-live", "polite");
-    this.list.className = "turn-section-body agent-todo-list";
-    summary.append(chevron, title, this.meta);
-    this.acceptanceSection.className = "agent-acceptance";
-    this.acceptanceSection.hidden = true;
-    const header = document.createElement("div");
-    header.className = "agent-acceptance-header";
-    const glyph = document.createElement("i");
-    glyph.className = "codicon codicon-checklist";
-    glyph.setAttribute("aria-hidden", "true");
-    const heading = document.createElement("span");
-    heading.textContent = "Acceptance";
-    this.acceptanceMeta.className = "turn-section-meta";
-    header.append(glyph, heading, this.acceptanceMeta);
-    this.acceptanceList.className = "agent-acceptance-list";
-    this.acceptanceSection.append(header, this.acceptanceList);
-    this.element.append(summary, this.list, this.acceptanceSection);
+    const view = buildAgentTodoSection(this.adapter, [], [], { interactive: true });
+    this.element = view.element as HTMLDetailsElement;
+    this.meta = view.meta;
+    this.list = view.list;
+    this.acceptanceSection = view.acceptanceSection;
+    this.acceptanceMeta = view.acceptanceMeta;
+    this.acceptanceList = view.acceptanceList;
     // Only a user's click reaches this handler; the provider's task reports
     // cannot address an acceptance id.
     this.acceptanceList.addEventListener("change", (event) => {
@@ -65,7 +50,7 @@ export class AgentTodoView {
     this.meta.textContent = progress.label;
     // A status update re-renders the rows; keep a phase the user opened open.
     const open = [...this.list.children].map((row) => row.querySelector("details")?.open === true);
-    this.list.innerHTML = agentTodoRows(items, this.running);
+    this.list.replaceChildren(...buildAgentTodoRows(this.adapter, items, this.running));
     [...this.list.children].forEach((row, index) => {
       const details = row.querySelector("details");
       if (details && open[index]) details.open = true;
@@ -93,7 +78,7 @@ export class AgentTodoView {
 
   private renderAcceptance(): void {
     this.acceptanceMeta.textContent = agentAcceptanceProgressLabel(this.acceptance);
-    this.acceptanceList.innerHTML = agentAcceptanceRows(this.acceptance, { interactive: true });
+    this.acceptanceList.replaceChildren(...buildAgentAcceptanceRows(this.adapter, this.acceptance, { interactive: true }));
     const focusId = this.focusAcceptanceId;
     this.focusAcceptanceId = undefined;
     if (!focusId) return;

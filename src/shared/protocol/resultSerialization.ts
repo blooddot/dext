@@ -29,13 +29,13 @@ const MAX_BOUNDARY_DEPTH = 64;
  * `src/runner/dextSerialization.mjs` implements the same rule for the kernel side
  * and is tested against the same shapes.
  */
-export function toBoundaryJson(value: unknown, label = "value"): unknown {
+export function toBoundaryJson(value: unknown, label = "value", maxDepth = MAX_BOUNDARY_DEPTH): unknown {
   const seen = new Set<object>();
 
   const convert = (current: unknown, path: string, depth: number): unknown => {
     const at = path || "value";
-    if (depth > MAX_BOUNDARY_DEPTH) {
-      throw new Error(`${label} is nested more than ${MAX_BOUNDARY_DEPTH} levels deep at ${at}.`);
+    if (depth > maxDepth) {
+      throw new Error(`${label} is nested more than ${maxDepth} levels deep at ${at}.`);
     }
     if (current === null || typeof current === "boolean" || typeof current === "string") return current;
     if (typeof current === "number") {

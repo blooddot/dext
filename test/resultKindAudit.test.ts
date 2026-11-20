@@ -12,9 +12,9 @@ function declaredBuiltinKinds(): string[] {
 }
 
 describe("Dext result kinds", () => {
-  it("declares exactly the nine built-in kinds, with no escape hatch", () => {
+  it("declares the public result kinds and the internal view kind", () => {
     expect(declaredBuiltinKinds()).toEqual([
-      "agent", "apply", "ask", "mcpRaw", "plan", "skill", "template", "terminal", "ui"
+      "agent", "apply", "ask", "mcpRaw", "plan", "skill", "template", "terminal", "ui", "view"
     ]);
     const source = readFileSync(resolve("src", "shared", "contracts", "types.ts"), "utf8");
     // A custom API is an ordinary module now, so `OutputKind` may only add the
@@ -33,6 +33,7 @@ describe("Dext result kinds", () => {
       apply: { kind: "apply", status: "unchanged", files: [], summary: "nothing to do" },
       terminal: { kind: "terminal", status: "succeeded", command: "ls", cwd: ".", exit_code: 0, stdout: "", stderr: "", duration_ms: 1 },
       ui: { kind: "ui", type: "confirm", confirmed: true },
+      view: { kind: "view", nodes: [{ type: "Text", text: "x" }] },
       mcpRaw: { kind: "mcpRaw", server: "team", tool: "query" }
     };
     expect(Object.keys(samples).sort()).toEqual(declaredBuiltinKinds());

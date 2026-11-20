@@ -118,6 +118,20 @@ const METHODS: readonly CallableDefinition[] = [
   },
   ...(["select", "radio", "checkbox", "input", "confirm", "alert", "form"] as const).map(uiDefinition),
   {
+    id: "ui.render",
+    title: "Render UI",
+    description: "Append an ordered, read-only tree of display components to this turn's Output. The call completes after Dext records it.",
+    kind: "command",
+    version: "1.0.0",
+    input: [{ name: "nodes", type: "list", required: true, items: { name: "node", type: "object", shapeType: "ui.Node" },
+      description: "An ordered JSON node tree. Maximum 32 levels, 1000 nodes and 256 KiB of UTF-8 JSON." }],
+    output: { kind: "view", resultType: "ViewResult", fields: [
+      { name: "kind", type: "enum", values: ["view"], required: true },
+      { name: "nodes", type: "list", required: true, items: { name: "node", type: "object", shapeType: "ui.Node" } }
+    ] },
+    executor: { kind: "deterministic", handler: "uiRender" }
+  },
+  {
     id: "skill",
     title: "Run Skill",
     description: "Load and execute a standard SKILL.md from the configured project skill directories. Skill calls are read-only by default.",

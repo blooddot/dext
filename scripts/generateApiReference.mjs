@@ -1,5 +1,5 @@
 /**
- * Generates the Node and JavaScript API reference the APIs page lists.
+ * Generates API reference from the Node, JavaScript and Dext declarations.
  *
  *   node scripts/generateApiReference.mjs [--check]
  *
@@ -25,6 +25,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import ts from "typescript";
+import { buildDeclaration } from "./generateDextTypes.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -272,21 +273,21 @@ function exportAssignmentMembers(moduleSymbol, checker, declaration, shortName) 
   return members;
 }
 
-/** A program whose only root file is empty, so the symbols in scope at that file
- * are exactly the globals the compiler options expose. */
-function createGlobalsProgram(name, options) {
+/** A compiler program with a single in-memory root. An empty root exposes only
+ * the globals from the compiler options. */
+function createGlobalsProgram(name, options, contents = "") {
   const synthetic = path.join(root, "scripts", `.api-reference-${name}.d.ts`);
   const host = ts.createCompilerHost(options, true);
   host.getCurrentDirectory = () => root;
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) =>
     path.resolve(fileName) === synthetic
-      ? ts.createSourceFile(fileName, "", languageVersion, true)
+      ? ts.createSourceFile(fileName, contents, languageVersion, true)
       : getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
   const fileExists = host.fileExists.bind(host);
   host.fileExists = (fileName) => path.resolve(fileName) === synthetic || fileExists(fileName);
   const readFile = host.readFile.bind(host);
-  host.readFile = (fileName) => path.resolve(fileName) === synthetic ? "" : readFile(fileName);
+  host.readFile = (fileName) => path.resolve(fileName) === synthetic ? contents : readFile(fileName);
   const program = ts.createProgram({ rootNames: [synthetic], options, host });
   const source = program.getSourceFile(synthetic);
   if (!source) throw new Error(`The ${name} globals program has no synthetic source file.`);
@@ -364,8 +365,34 @@ function globalModules(program, source, family, skip) {
   return modules.sort((left, right) => left.id.localeCompare(right.id));
 }
 
+/** The same ui object the compiler resolves, with the display tree types kept
+ * named so the reference can describe the recursive shape. */
+function dextUiReference(declaration) {
+  const { program, source } = createGlobalsProgram("dext", { ...COMPILER_OPTIONS, types: [] }, declaration);
+  const checker = program.getTypeChecker();
+  const module = checker.getAmbientModules().find((symbol) => symbol.getName() === '"dext"');
+  if (!module) throw new Error("The Dext declaration is missing its module.");
+  const exports = checker.getExportsOfModule(module);
+  const ui = exports.find((symbol) => symbol.getName() === "ui");
+  if (!ui) throw new Error("The Dext declaration is missing its ui object.");
+  const type = checker.getTypeOfSymbolAtLocation(ui, ui.valueDeclaration ?? source);
+  const uiTypes = exports.filter((symbol) => /^Ui(?:Node|TraceLine|TraceLineChild)$/.test(symbol.getName())).map((symbol) => {
+    const node = symbol.declarations?.[0];
+    if (!node) throw new Error(`The Dext declaration is missing ${symbol.getName()}.`);
+    return {
+      ...memberOf(symbol, checker, source, 0),
+      signature: node.getText().replace(/^export\s+/, "")
+    };
+  });
+  return [{
+    name: "ui", kind: "namespace", signature: "namespace ui",
+    documentation: documentationOf(ui, checker),
+    members: nestedMembers(type, checker, source, 1)
+  }, ...uiTypes];
+}
+
 /** The whole catalog, sorted by id so a regeneration is byte-identical. */
-export function buildApiReference() {
+export function buildApiReference(declaration) {
   const js = createGlobalsProgram("js", { ...COMPILER_OPTIONS, types: [], typeRoots: [] });
   const node = createGlobalsProgram("node", {
     ...COMPILER_OPTIONS,
@@ -382,13 +409,14 @@ export function buildApiReference() {
   return {
     version: API_REFERENCE_VERSION,
     typescript: ts.version,
-    modules: [...nodeModulesAll, ...jsModules].sort((left, right) => left.id.localeCompare(right.id))
+    modules: [...nodeModulesAll, ...jsModules].sort((left, right) => left.id.localeCompare(right.id)),
+    dext: dextUiReference(declaration)
   };
 }
 
 /** The shipped catalog text. One line, so `--check` compares exact bytes. */
-export async function buildApiReferenceText() {
-  const catalog = buildApiReference();
+export async function buildApiReferenceText(declaration) {
+  const catalog = buildApiReference(declaration ?? await buildDeclaration());
   if (!catalog.modules.length) throw new Error("The API reference catalog is empty.");
   return `${JSON.stringify(catalog)}\n`;
 }

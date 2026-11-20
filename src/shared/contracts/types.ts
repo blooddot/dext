@@ -1,4 +1,5 @@
 import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
+import type { UiViewResult } from "./uiView.js";
 import type { WritableAgentPermission } from "./permissions.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
@@ -11,6 +12,7 @@ export type BuiltinOutputKind =
   | "terminal"
   | "skill"
   | "ui"
+  | "view"
   | "mcpRaw";
 
 /** A structured MCP tool declares its own `mcp.<server>.<tool>` kind, which is the
@@ -291,6 +293,7 @@ export type DextResult = McpTypedResult
   | TerminalResult
   | SkillResult
   | UiResult
+  | UiViewResult
   | McpRawResult;
 
 export interface ResolvedInvocation {

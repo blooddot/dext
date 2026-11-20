@@ -1,9 +1,11 @@
 import type { InteractionForm } from "./interactionForm.js";
+import { Button } from "../../../shared/lib/ui/nativeControls.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 /** The dialog and the inline card share the whole-view toggle: the button names
  * the size it switches to, and the surface carries the class. */
 export function interactionFullscreen(target: HTMLElement): HTMLButtonElement {
-  const button = document.createElement("button"); button.type = "button";
+  const button = Button(domUiAdapter(target.ownerDocument), {}) as HTMLButtonElement;
   const render = (full: boolean): void => {
     const label = full ? "Restore interaction size" : "Fullscreen interaction";
     button.className = `interaction-close interaction-fullscreen-toggle codicon codicon-chrome-${full ? "restore" : "maximize"}`;
@@ -19,13 +21,12 @@ export function interactionFullscreen(target: HTMLElement): HTMLButtonElement {
 
 /** Each request owns its dialog and callback; local confirmations cannot overwrite it. */
 export class InteractionDialog {
-  readonly element = document.createElement("dialog");
+  readonly element: HTMLDialogElement;
   private previousFocus: HTMLElement | undefined;
   constructor(form: InteractionForm) {
-    this.element.className = "interaction-dialog";
-    this.element.setAttribute("aria-label", form.definition.title);
-    const close = document.createElement("button"); close.type = "button"; close.textContent = "×";
-    close.className = "interaction-close"; close.setAttribute("aria-label", "Close interaction");
+    const adapter = domUiAdapter(form.element.ownerDocument);
+    this.element = adapter.element("dialog", { class: "interaction-dialog", "aria-label": form.definition.title }, []) as HTMLDialogElement;
+    const close = Button(adapter, { class: "interaction-close", "aria-label": "Close interaction" }, ["×"]);
     close.addEventListener("click", () => form.cancel());
     const fullscreen = interactionFullscreen(this.element);
     // Escape leaves fullscreen first so a maximized form is not cancelled by habit.
@@ -38,7 +39,8 @@ export class InteractionDialog {
   }
   open(): void {
     if (this.element.open || !this.element.isConnected) return;
-    this.previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    const active = this.element.ownerDocument.activeElement;
+    this.previousFocus = active instanceof HTMLElement ? active : undefined;
     this.element.showModal();
   }
   close(): void {

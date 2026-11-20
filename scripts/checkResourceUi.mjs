@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { startLab } from "./monaco-ref-lab/serve.mjs";
+import { readSidebarBody, startLab } from "./monaco-ref-lab/serve.mjs";
 
 const candidates = [process.env.DEXT_BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/chromium", "/usr/bin/google-chrome"].filter(Boolean);
 let executable;
@@ -29,13 +29,13 @@ try {
   shutdown = () => send("Browser.close");
   const evaluate = async (expression) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
   const key = async (key, code) => { await send("Input.dispatchKeyEvent", { type: "keyDown", key, windowsVirtualKeyCode: code, ...(key === "Enter" ? { text: "\r" } : key === " " ? { text: " " } : {}) }); await send("Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code }); };
-  await send('Page.navigate',{url});
-  for(let attempt=0;attempt<100;attempt++){if(await evaluate('Boolean(window.lab)'))break;await new Promise(done=>setTimeout(done,100));}
-  await evaluate(`lab.production.destroy();document.head.querySelectorAll('link[rel=stylesheet]').forEach(link=>link.remove());
-    {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}`);
-  const template = await readFile("src/app/sidebarProvider.ts", "utf8");
-  const body = template.slice(template.indexOf("<body>"), template.lastIndexOf("</body>") + 7).replace(/<script[\s\S]*?<\/script>/g, "");
-  await evaluate(`document.body.outerHTML=${JSON.stringify(body)};window.sent=[];window.uiErrors=[];window.addEventListener('error', e=>uiErrors.push(e.message));window.acquireVsCodeApi=()=>({postMessage:m=>sent.push(m),getState:()=>({}),setState:()=>{}});window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
+  await send('Page.navigate',{url:`${url}/webview`});
+  const ready = "location.pathname === '/webview' && document.readyState === 'complete'";
+  for(let attempt=0;attempt<100;attempt++){if(await evaluate(ready))break;await new Promise(done=>setTimeout(done,100));}
+  assert.equal(await evaluate(ready), true, "Webview fixture loads");
+  await evaluate(`{const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}`);
+  const body = await readSidebarBody();
+  await evaluate(`document.body.innerHTML=${JSON.stringify(body)};window.sent=[];window.uiErrors=[];window.addEventListener('error', e=>uiErrors.push(e.message));window.acquireVsCodeApi=()=>({postMessage:m=>sent.push(m),getState:()=>({}),setState:()=>{}});window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
   const font = (await readFile("dist/codicons/codicon.ttf")).toString("base64");
   const icons = (await readFile("dist/codicons/codicon.css", "utf8")).replace(/url\([^)]*\)/g, `url(data:font/ttf;base64,${font})`);
   const css = `${icons}\n${await readFile("dist/webview/main.css", "utf8")}\n${await readFile("media/appearance.css", "utf8")}`;
@@ -140,7 +140,7 @@ try {
       await evaluate(`document.getElementById('mode-control').click()`);
       const items = await evaluate(`Array.from(document.querySelectorAll('#mode-menu button')).map(button=>({icon:button.querySelector('i').className,color:getComputedStyle(button).color,selected:button.getAttribute('aria-checked'),background:getComputedStyle(button).backgroundColor}))`);
       assert.deepEqual(items.map(item=>item.icon), appearances.map(([,glyph])=>`codicon codicon-${glyph}`));
-      assert.equal(new Set(items.map(item=>item.color)).size, appearances.length);
+      assert.equal(new Set(items.map(item=>item.color)).size, name.startsWith("contrast") ? 1 : appearances.length, `${name}: menu colors`);
       assert.equal(items.find(item=>item.selected==='true').color, appearance.label);
       await evaluate(`document.querySelector('#mode-menu button[data-resource-type="${type}"]').focus()`);
       assert.equal(await evaluate(`getComputedStyle(document.activeElement).color`), appearance.label);
@@ -152,7 +152,7 @@ try {
       await new Promise(done => setTimeout(done, 80));
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, `${name}/${type} overflow`);
     }
-    assert.equal(colors.size, appearances.length, `${name}: each resource has a distinct theme color`);
+    assert.equal(colors.size, name.startsWith("contrast") ? 1 : appearances.length, `${name}: resource palette`);
     assert.equal(disabledFills.size, 1, `${name}: disabled saves stay neutral`);
     const screenshot = await send("Page.captureScreenshot"); await writeFile(join(artifacts, `${name}.png`), Buffer.from(screenshot.data, "base64"));
   }
@@ -166,7 +166,7 @@ try {
   assert.equal(await evaluate(`document.getElementById('skills-menu-shell').hidden`), false);
   assert.equal(await evaluate(`document.getElementById('skills-control-value').textContent`), "No skills");
   await evaluate(`document.getElementById('skills-control').click()`);
-  assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "unchecked");
+  assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "false");
   assert.equal(await evaluate(`document.querySelector('#skills-menu').textContent.includes('Review')`), true);
   await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').click()`);
   assert.deepEqual(await evaluate(`sent.filter(x=>x.type==='agentSelection').at(-1).selection.skills`), ["ponytail", "ponytail-review"]);
@@ -177,7 +177,7 @@ try {
   await evaluate(`Array.from(document.querySelectorAll('#skills-menu .composer-skill-option')).find(button=>button.textContent.includes('Review')).click()`);
   assert.deepEqual(await evaluate(`sent.filter(x=>x.type==='agentSelection').at(-1).selection.skills`), ["ponytail", "ponytail-review"]);
   await evaluate(`host({type:'conversations',sessions,activeId:'chat',selection:{...selection,mode:'agent',skills:['ponytail','ponytail-review']},planStatus:'new',hostInitiated:true});document.getElementById('skills-control').click()`);
-  assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "checked");
+  assert.equal(await evaluate(`document.querySelector('#skills-menu .composer-skill-pack').getAttribute('aria-checked')`), "true");
 
   // Slash completion only offers a command whose skill is selected.
   await evaluate(`document.body.click()`);
@@ -202,13 +202,26 @@ try {
   // Describe | Import is available only for a pristine new Skill.
   await evaluate(`resource={type:'skill',scope:'project'};activate('resource');`);
   assert.equal(await evaluate(`document.getElementById('resource-source-toggle').hidden`), false);
+  assert.deepEqual(await evaluate(`(() => {
+    const group=document.getElementById('resource-source-toggle');
+    return [group.getAttribute('role'),group.getAttribute('aria-label'),[...group.children].map(tab=>[tab.textContent,tab.getAttribute('role'),tab.getAttribute('aria-selected')])];
+  })()`), ["tablist", "Skill creation mode", [["Describe", "tab", "true"], ["Import", "tab", "false"]]]);
   assert.equal(await evaluate(`document.getElementById('resource-source-describe').getAttribute('aria-selected')`), "true");
+  // Earlier appearance checks intentionally leave text in this conversation.
+  await evaluate(`new Promise(done=>requestAnimationFrame(()=>requestAnimationFrame(done)))`);
+  await evaluate(`document.querySelector('#code-editor textarea').focus()`);
+  await send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key: "a", windowsVirtualKeyCode: 65, modifiers: 2 });
+  await key("Backspace", 8);
   // Monaco paints the placeholder on a later frame, so wait for the text instead of a fixed delay.
   const skillPlaceholder = `document.querySelector('.monaco-editor .editorPlaceholder')?.textContent`;
   for (let attempt = 0; attempt < 40 && await evaluate(skillPlaceholder) !== "Describe the Skill to create…"; attempt++) await new Promise(done => setTimeout(done, 50));
   assert.equal(await evaluate(skillPlaceholder), "Describe the Skill to create…");
-  await evaluate(`document.getElementById('resource-source-import').click()`);
+  await evaluate(`document.getElementById('resource-source-import').focus()`);
+  await key("Enter", 13);
+  assert.equal(await evaluate(`document.activeElement.matches('#code-editor textarea')`), true);
   assert.equal(await evaluate(`document.getElementById('resource-source-import').getAttribute('aria-selected')`), "true");
+  assert.equal(await evaluate(`document.getElementById('resource-source-describe').getAttribute('aria-selected')`), "false");
   assert.equal(await evaluate(`document.querySelector('.monaco-editor .editorPlaceholder')?.textContent`), "Paste a GitHub URL");
   assert.equal(await evaluate(`getComputedStyle(document.getElementById('attach-files')).display`), "none");
   assert.equal(await evaluate(`document.getElementById('run').disabled`), true);
@@ -259,7 +272,7 @@ try {
   assert.equal(await evaluate(`(()=>{const r=document.getElementById('resource-source-toggle').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;})()`), true);
 
   assert.deepEqual(await evaluate(`uiErrors`), []);
-  console.log("PASS: resource tab entry, six resource types, save destinations, shared composer, stop, scoped preview/save, tab isolation, save failure/retry, retained saved tab, six distinct resource palettes/icons, synchronized action colors, neutral disabled actions, keyboard focus, pack tree with tri-state skills, selected-only slash completion, Describe/Import URL gating and resourceSource, AI report before Draft, hidden/disabled states, 320 px import layout, narrow dark/light/high-contrast themes. Screenshots: .tmp-tb/resource-ui");
+  console.log("PASS: resource tab entry, resource types and palettes, save destinations, shared composer, stop, scoped preview/save, tab isolation, save failure/retry, retained saved tab, synchronized action colors, neutral disabled actions, keyboard focus, pack tree with tri-state skills, selected-only slash completion, Describe/Import URL gating and resourceSource, AI report before Draft, hidden/disabled states, 320 px import layout, narrow dark/light/high-contrast themes. Screenshots: .tmp-tb/resource-ui");
 } finally {
   server.close();
   try { await shutdown?.(); } catch {}

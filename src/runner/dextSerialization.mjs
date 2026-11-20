@@ -7,6 +7,8 @@
  * the same rule on the TypeScript side and is tested against the same shapes.
  */
 
+import limits from "../shared/contracts/dextSerializationLimits.json" with { type: "json" };
+
 const MAX_DEPTH = 64;
 
 function describe(path) {
@@ -24,22 +26,48 @@ function kindOf(value) {
   return typeof value;
 }
 
-export function toDextJson(value, label = "value", path = "") {
+export function toDextJson(value, label = "value", path = "", { plain = false } = {}) {
   const seen = new Set();
+  // A UI level uses a node object and its children array. The shared limit
+  // covers the response envelope and leaves room for the host's depth diagnostic.
+  const maxDepth = plain ? limits.uiRenderDepth : MAX_DEPTH;
+  let nodeCount = 0;
+  // The host measures the nodes array. The kernel also copies its argument envelope.
+  let bytesLeft = limits.uiRenderMaxBytes + '{"nodes":}'.length;
+  const tooLarge = () => new Error(`UI tree exceeds ${limits.uiRenderMaxBytes} UTF-8 bytes.`);
+  const chargeBytes = (bytes) => {
+    bytesLeft -= bytes;
+    if (bytesLeft < 0) throw tooLarge();
+  };
+  const chargeString = (string) => {
+    // Bound the temporary encoded string before measuring escapes and UTF-8 bytes.
+    if (string.length + 2 > bytesLeft) throw tooLarge();
+    chargeBytes(Buffer.byteLength(JSON.stringify(string)));
+  };
+  const nonJson = (at) => new Error(`${label} requires plain JSON at ${describe(at)}.`);
+  const ownValue = (object, key, at) => {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    if (!descriptor?.enumerable || !("value" in descriptor)) throw nonJson(at);
+    return descriptor.value;
+  };
 
   function convert(current, currentPath, depth) {
-    if (depth > MAX_DEPTH) {
-      throw new Error(`${label} is nested more than ${MAX_DEPTH} levels deep at ${describe(currentPath)}.`);
+    if (depth > maxDepth) {
+      throw new Error(`${label} is nested more than ${maxDepth} levels deep at ${describe(currentPath)}.`);
     }
     switch (kindOf(current)) {
       case "null":
       case "boolean":
+        if (plain) chargeBytes(String(current).length);
+        return current;
       case "string":
+        if (plain) chargeString(current);
         return current;
       case "number":
         if (!Number.isFinite(current)) {
           throw new Error(`${label} contains ${String(current)} at ${describe(currentPath)}; use a finite number.`);
         }
+        if (plain) chargeBytes(String(current).length);
         return current;
       case "undefined":
         throw new Error(`${label} is undefined at ${describe(currentPath)}; use null instead.`);
@@ -51,6 +79,7 @@ export function toDextJson(value, label = "value", path = "") {
       case "bigint":
         throw new Error(`${label} contains a bigint at ${describe(currentPath)}; convert it with String() or Number().`);
       case "Date":
+        if (plain) throw nonJson(currentPath);
         return current.toISOString();
       case "Map":
         throw new Error(`${label} contains a Map at ${describe(currentPath)}; convert it to a plain object first.`);
@@ -62,13 +91,25 @@ export function toDextJson(value, label = "value", path = "") {
         throw new Error(`${label} contains a typed array at ${describe(currentPath)}; convert it to a number array.`);
       case "array": {
         if (seen.has(current)) throw new Error(`${label} contains a circular reference at ${describe(currentPath)}.`);
+        if (plain) {
+          // Every array in a valid ui.render argument is a list of UI nodes.
+          nodeCount += current.length;
+          if (nodeCount > limits.uiRenderMaxNodes) throw new Error(`UI tree exceeds ${limits.uiRenderMaxNodes} nodes.`);
+          chargeBytes(2 + Math.max(0, current.length - 1));
+          if (Object.getPrototypeOf(current) !== Array.prototype || Reflect.ownKeys(current).length !== current.length + 1) {
+            throw nonJson(currentPath);
+          }
+        }
         seen.add(current);
-        const items = current.map((item, index) => convert(item, `${currentPath}[${index}]`, depth + 1));
+        const items = plain ? Array.from({ length: current.length }, (_, index) => {
+          const at = `${currentPath}[${index}]`;
+          return convert(ownValue(current, index, at), at, depth + 1);
+        }) : current.map((item, index) => convert(item, `${currentPath}[${index}]`, depth + 1));
         seen.delete(current);
         return items;
       }
       case "object": {
-        if (typeof current.toJSON === "function") return convert(current.toJSON(), currentPath, depth + 1);
+        if (!plain && typeof current.toJSON === "function") return convert(current.toJSON(), currentPath, depth + 1);
         const prototype = Object.getPrototypeOf(current);
         if (prototype !== Object.prototype && prototype !== null) {
           throw new Error(
@@ -78,10 +119,22 @@ export function toDextJson(value, label = "value", path = "") {
         }
         if (seen.has(current)) throw new Error(`${label} contains a circular reference at ${describe(currentPath)}.`);
         seen.add(current);
-        const result = {};
-        for (const [key, item] of Object.entries(current)) {
-          if (item === undefined) continue;
-          result[key] = convert(item, currentPath ? `${currentPath}.${key}` : key, depth + 1);
+        const result = plain ? Object.create(null) : {};
+        if (plain) {
+          const keys = Reflect.ownKeys(current);
+          chargeBytes(2 + Math.max(0, keys.length - 1));
+          for (const key of keys) {
+            if (typeof key !== "string") throw nonJson(currentPath);
+            chargeString(key);
+            chargeBytes(1);
+            const at = currentPath ? `${currentPath}.${key}` : key;
+            result[key] = convert(ownValue(current, key, at), at, depth + 1);
+          }
+        } else {
+          for (const [key, item] of Object.entries(current)) {
+            if (item === undefined) continue;
+            result[key] = convert(item, currentPath ? `${currentPath}.${key}` : key, depth + 1);
+          }
         }
         seen.delete(current);
         return result;

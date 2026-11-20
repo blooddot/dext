@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
-import { runLabChecks } from './monaco-ref-lab/check.mjs';
+import { runWebviewChecks } from './monaco-ref-lab/check.mjs';
+import { readSidebarBody } from './monaco-ref-lab/serve.mjs';
 
 const historyBundle = await build({ entryPoints: ['src/features/conversations/presentation/historyRender.ts'], bundle: true, write: false, platform: 'node', format: 'cjs' });
 const historyModule = { exports: {} };
@@ -19,11 +20,9 @@ const execution = (patchApplication, legacy = false) => ({
 const workflow = (entry) => ({ kind: 'workflow', executions: [entry] });
 const record = (entry) => ({ id: 'patch', createdAt: 1, input: 'edit', process: [], output: '', response: workflow(entry) });
 
-await runLabChecks(async ({ evaluate, settle }) => {
-  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
-  const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
-  await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
-    document.body.innerHTML=${JSON.stringify(body)};
+await runWebviewChecks(async ({ evaluate, settle }) => {
+  const body = await readSidebarBody();
+  await evaluate(`document.body.innerHTML=${JSON.stringify(body)};
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}
     window.errors=[];window.addEventListener('error',e=>errors.push(e.error?.stack??e.message));
     window.messages=[];window.acquireVsCodeApi=()=>({postMessage:m=>messages.push(m),getState:()=>({}),setState:()=>{}});
@@ -66,4 +65,4 @@ await runLabChecks(async ({ evaluate, settle }) => {
   await absent();
   assert.match(renderHistoryRecord(record(execution(undefined, true))), /Legacy patch ignored/);
   console.log('PASS patch outcomes, real errors, legacy ignore, history hydration and no review UI');
-}, false);
+});

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { dextFiles, dextModuleDeclaration, dextSharedDeclaration, dextStorageFiles, dextTsconfig } from "../src/features/workflow/domain/dextApiTypes.js";
 import { parseMcpManifest } from "../src/features/mcp/domain/mcpManifest.js";
-import { methodResultType } from "../src/features/workflow/domain/methodSignature.js";
+import { methodReturnType } from "../src/features/workflow/domain/methodSignature.js";
 
 /**
  * Decision (recorded for the kernel/editor contract): Dext keeps Node's native
@@ -88,7 +88,7 @@ describe("generated Dext TypeScript surface", () => {
     expect(declaration).toContain('declare module "dext"');
     for (const method of BUILTIN_METHODS) {
       expect(declaration, `missing ${method.id}`).toContain(method.id);
-      expect(declaration, `missing result type of ${method.id}`).toContain(`Promise<${methodResultType(method)}>`);
+      expect(declaration, `missing result type of ${method.id}`).toContain(`Promise<${methodReturnType(method)}>`);
     }
     expect(declaration).toContain("export const ui:");
     expect(declaration).toContain("export const mcp:");
@@ -130,6 +130,34 @@ describe("generated Dext TypeScript surface", () => {
     expect(types).toContain("images?: Array<{");
     expect(types).toContain("imageError?: string;");
   });
+
+  it("type-checks recursive read-only UI nodes and a void render result", async () => {
+    const root = await tempWorkspace(), directory = join(root, ".dext");
+    for (const file of dextFiles()) {
+      const target = join(directory, ...file.path.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, file.content);
+    }
+    const declaration = dextModuleDeclaration();
+    expect(declaration).toContain("render(options: { nodes: UiNode[] }): Promise<void>;");
+    expect(declaration).toContain("export type UiNode = ");
+    expect(declaration).toContain("children: UiTraceLineChild[];");
+    expect(declaration).not.toContain("ViewResult");
+    await writeFile(join(directory, "api", "view.ts"), [
+      'import { ui, type UiNode } from "dext";',
+      'const nodes: UiNode[] = [{ type: "Trace", children: [{ type: "TraceLine", children: [{ type: "Trace", children: [] }] }] }];',
+      'const result: void = await ui.render({ nodes });',
+      '// @ts-expect-error a result is never returned to the script',
+      'result.nodes;',
+      '// @ts-expect-error Trace accepts TraceLine only',
+      'await ui.render({ nodes: [{ type: "Trace", children: [{ type: "Text", text: "bad" }] }] });',
+      '// @ts-expect-error reserved blocks have no callable representation',
+      'await ui.render({ nodes: [{ type: "Table" }] });',
+      '// @ts-expect-error a script cannot attach arbitrary DOM fields',
+      'await ui.render({ nodes: [{ type: "Text", text: "node", class: "class" }] });'
+    ].join("\n"));
+    await expect(typecheckWorkspace(root)).resolves.toBeUndefined();
+  }, 60000);
 
   it("writes api/dext.d.ts, tsconfig.json and the ESM marker", () => {
     const files = dextFiles();

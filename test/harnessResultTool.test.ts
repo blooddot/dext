@@ -23,7 +23,7 @@ describe("Harness result tool", () => {
     for (const method of BUILTIN_METHODS) {
       const contract = adapter.compile({ ...method, source: "builtin" } as never);
       const tool = harnessResultTool(contract.outputJsonSchema);
-      if (method.id.startsWith("ui.")) {
+      if (method.output.kind === "ui") {
         // A `ui` contract is a root `oneOf` (value or cancellation); a
         // function-calling tool needs one object, so it keeps the prompt form.
         expect(tool, method.id).toBeUndefined();

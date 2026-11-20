@@ -20,7 +20,7 @@
 import { BUILTIN_METHODS } from "./builtins.js";
 import { CLI_BUILTIN_IDS, specializeBuiltinCli } from "../../agents/domain/builtinCli.js";
 import { builtinTypeDefinition, type BuiltinTypeDefinition } from "./builtinTypeDefinitions.js";
-import { CONVERSATION_METHODS, methodResultType } from "./methodSignature.js";
+import { CONVERSATION_METHODS, methodReturnType } from "./methodSignature.js";
 import type { CallableDefinition, FieldDefinition } from "../../../shared/contracts/types.js";
 
 /** The bare module specifier user code imports. */
@@ -231,7 +231,7 @@ function collectFieldRoots(field: FieldDefinition, roots: string[]): void {
 function shapeRoots(): string[] {
   const roots: string[] = [];
   for (const method of BUILTIN_METHODS) {
-    roots.push(methodResultType(method));
+    roots.push(methodReturnType(method));
     for (const field of method.input) collectFieldRoots(field, roots);
     for (const field of method.output.fields ?? []) collectFieldRoots(field, roots);
   }
@@ -249,13 +249,17 @@ function collectCatalogTypes(roots: readonly string[]): BuiltinTypeDefinition[] 
     const definition = builtinTypeDefinition(name);
     if (!definition) continue;
     found.set(name, definition);
+    if (definition.alias) queue.push(...extractTypeNames(definition.alias));
     for (const field of definition.fields) queue.push(...extractTypeNames(field.type));
   }
   return [...found.values()];
 }
 
-function renderInterface(definition: BuiltinTypeDefinition): string {
+function renderBuiltinType(definition: BuiltinTypeDefinition): string {
   const name = dextTypeName(definition.name);
+  if (definition.alias) {
+    return `/** ${commentText(definition.description)} */\nexport type ${name} = ${dextTsType(definition.alias)};`;
+  }
   const members = definition.fields.map((field) => {
     const description = field.description ? ` // ${commentText(field.description)}` : "";
     return `  ${field.name}${field.optional ? "?" : ""}: ${dextTsType(field.type)};${description}`;
@@ -272,7 +276,8 @@ function renderInterface(definition: BuiltinTypeDefinition): string {
 const MANUAL_TYPE_NAMES = ["PatchResult", "McpRawResult", "DirectoryReference", "DirRef", "ContextReference", "DextResult"] as const;
 
 function renderManualTypes(extraResultTypes: readonly string[]): string[] {
-  const resultTypes = [...new Set([...BUILTIN_METHODS.map((method) => methodResultType(method)), ...extraResultTypes])];
+  const builtinResults = BUILTIN_METHODS.map(methodReturnType).filter((name) => name !== "void");
+  const resultTypes = [...new Set([...builtinResults, ...extraResultTypes])];
   return [
     [
       "/** One applicable patch. No API returns one directly: this is the shape of",
@@ -357,7 +362,7 @@ function extraMethods(methods: readonly CallableDefinition[]): CallableDefinitio
   return [...byId.values()];
 }
 
-/** Render one generated interface the same way `renderInterface` renders a catalog one. */
+/** Render an MCP result interface using the same layout as built-in interfaces. */
 function renderGeneratedInterface(definition: GeneratedType): string {
   const members = definition.fields.map((field) => {
     const description = field.description ? ` // ${commentText(field.description)}` : "";
@@ -442,7 +447,7 @@ function generatedTypes(methods: readonly CallableDefinition[], reserved: Readon
 function declaredTypeNames(): Set<string> {
   return new Set([
     ...collectCatalogTypes(shapeRoots()).map((definition) => dextTypeName(definition.name)),
-    ...BUILTIN_METHODS.map((method) => methodResultType(method)),
+    ...BUILTIN_METHODS.map(methodReturnType),
     ...MANUAL_TYPE_NAMES
   ]);
 }
@@ -580,7 +585,7 @@ function renderTypesDocument(generated: GeneratedTypes): string {
     .sort((left, right) => dextTypeName(left.name).localeCompare(dextTypeName(right.name)));
   const blocks = [
     ...renderManualTypes(generated.types.map((type) => type.name)),
-    ...definitions.map(renderInterface),
+    ...definitions.map(renderBuiltinType),
     ...generated.types.map(renderGeneratedInterface)
   ];
   return `${blocks.join("\n\n")}\n`;
@@ -588,17 +593,17 @@ function renderTypesDocument(generated: GeneratedTypes): string {
 
 function renderFunction(method: CallableDefinition): string {
   const documentation = `/** ${commentText(method.title)} — ${commentText(method.description)} */`;
-  return `${documentation}\nexport function ${method.id}(options: ${dextOptionsType(method)}): Promise<${methodResultType(method)}>;`;
+  return `${documentation}\nexport function ${method.id}(options: ${dextOptionsType(method)}): Promise<${methodReturnType(method)}>;`;
 }
 
 function renderUiGroup(): string {
   const methods = BUILTIN_METHODS.filter((method) => method.id.startsWith("ui."));
   const members = methods.map((method) => {
     const action = method.id.slice("ui.".length);
-    return `  /** ${method.id} — ${commentText(method.description)} */\n  ${action}(options: ${dextOptionsType(method)}): Promise<${methodResultType(method)}>;`;
+    return `  /** ${method.id} — ${commentText(method.description)} */\n  ${action}(options: ${dextOptionsType(method)}): Promise<${methodReturnType(method)}>;`;
   });
   return [
-    "/** Interactive questions. The run waits here until the user answers. */",
+    "/** Interactive questions and read-only output for the current turn. */",
     "export const ui: {",
     ...members,
     "};"

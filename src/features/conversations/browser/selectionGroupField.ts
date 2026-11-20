@@ -1,4 +1,7 @@
 import type { UiFieldAnswer, UiSelectionField } from "../../../shared/contracts/uiForm.js";
+import { Button, Checkbox, Label, Radio } from "../../../shared/lib/ui/nativeControls.js";
+import { interactionOptionDescription, interactionTextInput } from "./interactionControls.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 export interface FieldControl {
   element: HTMLElement;
@@ -9,33 +12,27 @@ export interface FieldControl {
 }
 let groupId = 0;
 export function selectionGroupField(field: UiSelectionField, draft: UiFieldAnswer | undefined, change: () => void): FieldControl {
-  const element = document.createElement("div");
-  element.className = "interaction-options";
+  const adapter = domUiAdapter(document);
+  const element = adapter.element("div", { class: "interaction-options" }, []);
   const name = `interaction-group-${++groupId}`;
   const selected = draft && draft.type !== "input" ? draft.selected : field.default ?? [];
   const inputs: HTMLInputElement[] = [];
-  const custom = document.createElement("input");
-  custom.type = field.secret ? "password" : "text";
-  custom.autocomplete = "off"; custom.maxLength = 20000;
-  custom.value = draft && "custom" in draft ? draft.custom ?? "" : "";
-  custom.placeholder = field.custom_placeholder || "Your own answer";
-  custom.setAttribute("aria-label", `${field.label} — Your answer`);
+  const custom = interactionTextInput(`${field.label} — Your answer`, draft && "custom" in draft ? draft.custom ?? "" : "",
+    field.custom_placeholder || "Your own answer", { type: field.secret ? "password" : "text" });
   for (const option of field.options) {
-    const label = document.createElement("label"); label.className = "interaction-option";
-    const input = document.createElement("input"); input.type = field.type === "checkbox" ? "checkbox" : "radio";
-    input.name = name; input.value = option.value; input.checked = selected.includes(option.value);
-    const copy = document.createElement("span"); copy.textContent = option.label;
-    if (option.description) { const detail = document.createElement("small"); detail.textContent = option.description; copy.append(detail); }
+    const attributes = { name, value: option.value };
+    const input = (field.type === "checkbox" ? Checkbox(adapter, attributes) : Radio(adapter, attributes)) as HTMLInputElement;
+    input.checked = selected.includes(option.value);
+    const copy = adapter.element("span", {}, [option.label, ...interactionOptionDescription(option.description)]);
     input.addEventListener("change", () => { if (field.type === "radio") custom.value = ""; change(); });
-    inputs.push(input); label.append(input, copy); element.append(label);
+    inputs.push(input); element.append(Label(adapter, { class: "interaction-option" }, [input, copy]));
   }
   if (field.allow_custom) {
     custom.addEventListener("input", () => { if (field.type === "radio") for (const input of inputs) input.checked = false; change(); });
     element.append(custom);
   }
   if (field.type === "radio" && !field.required) {
-    const clear = document.createElement("button"); clear.type = "button"; clear.textContent = "Clear";
-    clear.setAttribute("aria-label", `Clear ${field.label}`);
+    const clear = Button(adapter, { "aria-label": `Clear ${field.label}` }, ["Clear"]);
     clear.addEventListener("click", () => { for (const input of inputs) input.checked = false; custom.value = ""; change(); });
     element.append(clear);
   }

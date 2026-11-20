@@ -25,7 +25,8 @@ import {
 } from "../presentation/turnPresentation.js";
 import { renderTurnMode, renderTurnOutput, renderTurnSection } from "../presentation/turnComponents.js";
 import { TurnTitle } from "./turnTitle.js";
-import { turnDomAdapter } from "./turnDomAdapter.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
+import { TraceDescription, TraceTitle } from "../../../shared/lib/ui/traceComponents.js";
 
 export interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
@@ -161,6 +162,7 @@ export class TranscriptView {
     options: TranscriptTurnOptions = {}
   ): OutputTurnElements {
     const { document } = this.host;
+    const adapter = domUiAdapter(document);
     source = normalizeInputReferenceSource(source);
     const lazy = options.lazy === true;
     const turnPresentation = presentTurn({});
@@ -180,11 +182,8 @@ export class TranscriptView {
     const time = document.createElement("span");
     time.className = "output-turn-time";
     time.textContent = new Date(createdAt).toLocaleTimeString();
-    const title = document.createElement("span");
-    title.className = "output-turn-title";
-    const titleName = document.createElement("span");
-    titleName.className = "output-turn-title-name";
-    title.append(titleName);
+    const titleName = TraceTitle(adapter, [], { class: "output-turn-title-name" });
+    const title = TraceTitle(adapter, [titleName], { class: "output-turn-title" });
     const sourceLabel = inputReferenceDisplayText(source);
     const defaultTitle = options.executePlan
       ? `Plan: ${options.planPath?.split("/").pop() ?? ""}`.trim() || "Dext turn"
@@ -266,12 +265,9 @@ export class TranscriptView {
     }
     // Keep the turn title as the primary row label, matching the history view;
     // metadata belongs at the trailing edge of the row rather than before it.
-    const planExecutionStatus = document.createElement("span");
-    planExecutionStatus.className = "plan-status";
-    planExecutionStatus.hidden = !options.executePlan;
-    planExecutionStatus.textContent = "Running";
+    const planExecutionStatus = TraceDescription(adapter, ["Running"], { class: "plan-status", hidden: !options.executePlan });
     summary.append(runningIcon, chevron, title,
-      ...(options.executePlan ? [] : [renderTurnMode(turnDomAdapter(document), presentTurnMode(options.mode))]),
+      ...(options.executePlan ? [] : [renderTurnMode(adapter, presentTurnMode(options.mode))]),
       planExecutionStatus, time);
     // Process and Output fill in as events stream, so their copy payloads are
     // read when clicked instead of being fixed at row creation.
@@ -286,7 +282,7 @@ export class TranscriptView {
     const process = this.section(turnPresentation.process, false, processCopy);
     const todos = this.host.createTodos();
     const questions = this.host.createQuestions(turnId, this.host.activeSessionId());
-    const output = renderTurnOutput(turnDomAdapter(document), [], outputCopy);
+    const output = renderTurnOutput(domUiAdapter(document), [], outputCopy);
     const changes = this.changesTable();
     // The changed-file table closes the turn with what it did; a live turn keeps
     // it hidden until it ends and the record says which files it touched.
@@ -333,7 +329,7 @@ export class TranscriptView {
     meta: HTMLElement;
     summary: HTMLElement;
   } {
-    const view = renderTurnSection(turnDomAdapter(this.host.document), section, [], open, action);
+    const view = renderTurnSection(domUiAdapter(this.host.document), section, [], open, action);
     // Legacy hooks still identify cached turns.
     view.disclosure.classList.add("output-turn-section");
     return { ...view, disclosure: view.disclosure as HTMLDetailsElement };
@@ -418,6 +414,7 @@ export class TranscriptView {
     });
     turn.changes.querySelector("tbody")?.replaceChildren(...rows);
     for (const code of turn.output.querySelectorAll("code")) {
+      if (code.closest("[data-script-view]")) continue;
       const path = code.textContent ?? "";
       // A path named by its tail counts too: that is how answers abbreviate it.
       const hits = files.filter((file) => file.path === path || file.path.endsWith(`/${path}`));

@@ -31,6 +31,7 @@ import type {
 } from "../shared/contracts/types.js";
 import type { DextHostMessage, DextKernelMessage, DextWireStep } from "./dextProtocol.js";
 import { DEXT_KERNEL_PROTOCOL } from "./dextProtocol.js";
+import serializationLimits from "../shared/contracts/dextSerializationLimits.json";
 
 /** How many kernel requests may be in flight at once. User code can call
  * `Promise.all`, so the limit belongs here rather than in the language. */
@@ -337,7 +338,8 @@ export class DextKernelHost {
       if (!isCurrent()) return;
       // The kernel receives JSON, so a result that cannot cross that boundary is
       // refused here with a readable message instead of degrading silently.
-      const boundaryResponse = toBoundaryJson(response, `The result of ${method}()`);
+      const maxDepth = method === "ui.render" ? serializationLimits.uiRenderDepth : undefined;
+      const boundaryResponse = toBoundaryJson(response, `The result of ${method}()`, maxDepth);
       log?.record(method, args, boundaryResponse);
       reply = {
         type: "response",

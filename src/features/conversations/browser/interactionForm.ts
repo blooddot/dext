@@ -3,6 +3,9 @@ import { droppedFilePaths, fileSelectionDropEffect, findImageItem, isFileDrag, r
 import { selectionGroupField, type FieldControl } from "./selectionGroupField.js";
 import { selectField } from "./selectField.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
+import { interactionField, interactionTextInput } from "./interactionControls.js";
+import { Alert, Button } from "../../../shared/lib/ui/nativeControls.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 /** Dropped files and pasted images reach a form field as the same `@path` text
  * the Input uses, because a field answer is only a string. */
@@ -32,7 +35,7 @@ export interface InteractionReferenceField {
 }
 
 export class InteractionForm {
-  readonly element = document.createElement("form");
+  readonly element: HTMLFormElement;
   private sent = false;
   private inactive = false;
   private refresh = (): void => {};
@@ -40,13 +43,14 @@ export class InteractionForm {
   constructor(readonly definition: UiFormDefinition, private readonly respond: (result: UiFormResult) => void,
     draft: UiFormAnswers = {}, private readonly saveDraft: (draft: UiFormAnswers) => void = () => {},
     private readonly files?: InteractionFileHost) {
-    this.element.className = "interaction-form";
-    this.element.noValidate = true;
-    const head = document.createElement("div"); head.className = "interaction-head";
-    const title = document.createElement("h3"); title.textContent = definition.title; head.append(title);
-    if (definition.description) head.append(interactionMarkdown(definition.description));
-    this.element.append(head);
-    const error = document.createElement("p"); error.className = "interaction-error"; error.setAttribute("role", "alert");
+    const adapter = domUiAdapter(document);
+    const { element } = adapter;
+    const title = element("h3", {}, [definition.title]);
+    const head = element("div", { class: "interaction-head" }, [
+      title, ...(definition.description ? [interactionMarkdown(definition.description)] : [])
+    ]);
+    this.element = element("form", { class: "interaction-form", novalidate: true }, [head]) as HTMLFormElement;
+    const error = Alert(adapter, "", { class: "interaction-error" });
     // The error only reports on the action the user actually pressed: showing every
     // unmet requirement up front made an untouched form look broken.
     let attempted: string | undefined;
@@ -71,10 +75,7 @@ export class InteractionForm {
       catch (cause) { error.textContent = reason(cause); }
     };
     for (const field of definition.fields) {
-      const fieldset = document.createElement("fieldset"); fieldset.className = "interaction-field";
-      const legend = document.createElement("legend"); legend.textContent = `${field.label}${field.required ? " *" : ""}`;
-      fieldset.append(legend);
-      if (field.description) { const description = document.createElement("p"); description.textContent = field.description; fieldset.append(description); }
+      const fieldset = interactionField(field.label, field.required, field.description);
       let control: FieldControl;
       if (field.type === "input") {
         const answer = draft[field.id];
@@ -88,22 +89,20 @@ export class InteractionForm {
           control = { element: reference.element, read: () => ({ type: "input", value: reference.value() }), clearSecret: () => {},
             disable: () => reference.disable() };
         } else {
-          const input = field.multiline && !field.secret ? document.createElement("textarea") : document.createElement("input");
-          if (input instanceof HTMLInputElement) input.type = field.secret ? "password" : "text";
-          input.autocomplete = "off"; input.maxLength = 20000;
-          input.setAttribute("aria-label", field.label); input.setAttribute("aria-required", String(field.required));
-          input.value = initial;
-          input.placeholder = field.placeholder ?? ""; input.addEventListener("input", refresh);
+          const multiline = Boolean(field.multiline && !field.secret);
+          const input = interactionTextInput(field.label, initial, field.placeholder ?? "", {
+            type: !multiline && (field.secret ? "password" : "text"), "aria-required": String(field.required)
+          }, multiline);
+          input.addEventListener("input", refresh);
           if (!field.secret) this.bindFiles(input, refresh);
           control = { element: input, read: () => ({ type: "input", value: input.value }), clearSecret: () => { if (field.secret) input.value = ""; } };
         }
       } else control = field.type === "select" ? selectField(field, draft[field.id], refresh) : selectionGroupField(field, draft[field.id], refresh);
       this.controls.set(field.id, control); fieldset.append(control.element); this.element.append(fieldset);
     }
-    const actions = document.createElement("div"); actions.className = "interaction-actions";
+    const actions = element("div", { class: "interaction-actions" }, []);
     if (definition.show_cancel) {
-      const cancel = document.createElement("button"); cancel.type = "button";
-      cancel.className = "interaction-button interaction-cancel"; cancel.textContent = definition.cancel_label;
+      const cancel = Button(adapter, { class: "interaction-button interaction-cancel" }, [definition.cancel_label]);
       cancel.addEventListener("click", () => this.cancel()); actions.append(cancel);
     }
     // Primary last so it reads as the rightmost choice, and the only submit button
@@ -112,11 +111,10 @@ export class InteractionForm {
     for (const action of [...definition.actions].sort((left, right) => Number(left.primary) - Number(right.primary))) {
       const promoted = action.primary && primary === undefined;
       if (promoted) primary = action.id;
-      const button = document.createElement("button");
-      button.type = promoted ? "submit" : "button";
-      button.className = `interaction-button${promoted ? " interaction-primary" : ""}`;
-      button.textContent = action.label;
-      if (action.description) button.title = action.description;
+      const button = Button(adapter, {
+        type: promoted ? "submit" : "button", class: `interaction-button${promoted ? " interaction-primary" : ""}`,
+        title: action.description || false
+      }, [action.label]) as HTMLButtonElement;
       if (!promoted) button.addEventListener("click", () => submit(action.id));
       actionButtons.set(action.id, button);
       actions.append(button);

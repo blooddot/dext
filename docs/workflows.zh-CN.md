@@ -68,7 +68,7 @@ Dext 把文件放在每个工作区一个长期存活的 Node 子进程中运行
 
 `Math`、`JSON`、`Number`、`String`、`Array`、`Object`、`Date` 都是标准内置对象，Dext 不再维护自己的字符串方法或纯函数清单。旧语言的部分写法没有直接对应：f-string 和 `%` 格式化改用模板字符串，`//` 改用 `Math.floor`，元组改用数组，`int(value)` / `float(value)` 改用 `Number(value)`。
 
-普通赋值不是工作流步骤。`ask`、`plan`、`agent`、`template`、`skill` 接受 `echo`：未传 `echo: true` 时该步骤不进入 Output，结果仍返回给调用方。其他调用——`ui.*`、`terminal`、`apply`、`mcp.*`——没有 `echo` 字段，因此不会产生 Output 卡片。`console.log`、`console.error` 会额外产生进程输出步骤，只携带文本，没有调用信息，也没有耗时。
+普通赋值不是工作流步骤。`ask`、`plan`、`agent`、`template`、`skill` 接受 `echo`：未传 `echo: true` 时该步骤不进入 Output，结果仍返回给调用方。`ui.render` 默认将只读组件树追加到 Output。交互式 UI 调用、`terminal`、`apply` 和 `mcp.*` 的结果保留给调用方。`console.log`、`console.error` 会额外产生进程输出步骤，只携带文本，没有调用信息，也没有耗时。
 
 旧解释器的资源上限（`while` 迭代次数、`range` 大小、折叠元素数量、导入深度）随解释器一起移除，改用 Node 和 TypeScript 自身的限制。
 
@@ -236,7 +236,7 @@ if (confirmation.confirmed) {
 
 交互完成后，所选值、确认状态或输入文本也会出现在 Output 和 History 中。
 
-所有 API 输出都实现统一的 `Result` 契约。结果类型恰好九种——`ask`、`plan`、`agent`、`template`、`apply`、`terminal`、`skill`、`ui` 和 `mcpRaw`——外加结构化 MCP 工具生成的 `mcp.<server>.<tool>`。`ask`、`skill`、`template` 是同一种 `{ kind, text }` 形状的三个名字；`PatchResult` 不是结果类型，而是 `AgentResult.patch` 的形状。结果变量和字段（如 `AgentResult.patch`）由生成的声明提供类型，因此补全和悬停说明在输入区与 `.dext/api/*.ts` 中都能工作。Agent CLI 接收的前序结果是带版本号的 `dext-result` JSON 数据，而不是直接插入字符串。
+返回结果的 API 使用统一的 `Result` 契约。公开结果类型包括 `ask`、`plan`、`agent`、`template`、`apply`、`terminal`、`skill`、`ui`、`mcpRaw` 和结构化 MCP 工具生成的 `mcp.<server>.<tool>`。`ask`、`skill`、`template` 是同一种 `{ kind, text }` 形状的三个名字；`PatchResult` 不是结果类型，而是 `AgentResult.patch` 的形状。结果变量和字段（如 `AgentResult.patch`）由生成的声明提供类型，因此补全和悬停说明在输入区与 `.dext/api/*.ts` 中都能工作。Agent CLI 接收的前序结果是带版本号的 `dext-result` JSON 数据，而不是直接插入字符串。
 
 `ask` 始终只读。`skill` 默认只读，传入 `apply: true` 时与 `agent` 同档——因为命令执行能力只随写档发放。`agent` 和 `plan` 使用输入区域选择的写入范围；在受信任的本地工作区中，`Workspace write` 将编辑限制在所选工作区。Code 模式没有权限选择器，因此其中的 `agent({ apply: true })` 调用默认使用 `Full access`。Dext 可以在自身管理的全局存储中保存计划文档。两者的 `workspace` 都默认为当前项目根目录。
 
@@ -405,7 +405,7 @@ API、Rule、MCP 的删除按钮只移除对应文件；内置和只读参考资
 
 Import 不支持私有仓库、凭据、端口、查询串、GitLab/Bitbucket、npm 包、二进制附带文件（会跳过并警告）、可执行 hook。只有命令、没有 Skill 的仓库，或直接指向命令文件的 URL，都不是 Skill，会被拒绝。
 
-规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`——`await agent({ input: "…", rules: ["review.md"] })`。它们是 `internal`，因为从不作为控制字段转发给提供方；而生成的声明恰好会在这四个 API 上列出它们，因为这是调用方自己写的选项。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令。`ui.*` 等待用户回答后继续同一个工作流。
+规则是 `.dext/rules/` 下的有序策略文件，规则路径只会在该目录下解析。`.dext/rules/plan.md` 会替换 Plan 模式默认的计划文档指令。`agent`、`ask`、`plan`、`template` 也可以为单次调用指定 `skills` 和 `rules`——`await agent({ input: "…", rules: ["review.md"] })`。它们是 `internal`，因为从不作为控制字段转发给提供方；而生成的声明恰好会在这四个 API 上列出它们，因为这是调用方自己写的选项。Dext 先加载所选 Skills，再按顺序加载规则，因此调用的窄规则会约束通用的 Skill 流程；这些内容注入 Agent 指令。交互式 UI 调用等待用户回答后继续同一个工作流。
 
 ## 自定义结果类型
 
@@ -445,7 +445,9 @@ Code 运行会在 Node 内核中立即执行。每次 Dext API 调用都会派�
 
 ## UI 交互与表单
 
-所有 UI API 都等待用户回答，每次调用只记录一个工作流步骤。`presentation: "inline"` 在所属对话的 Process 上方展示卡片，`"dialog"` 使用弹窗；除 `ui.form` 默认 `"inline"` 外，各 API 默认 `"dialog"`。等待只暂停所属工作流，停止任务会中断等待并跳过后续步骤。
+交互式 UI 调用等待用户回答，每次调用记录一个工作流步骤。`presentation: "inline"` 在所属对话的 Process 上方展示卡片，`"dialog"` 使用弹窗。`ui.form` 默认使用 `"inline"`，其余交互调用默认使用 `"dialog"`。等待只暂停所属工作流，停止任务会中断等待并跳过后续步骤。
+
+`await ui.render({ nodes })` 将只读 `UiNode[]` 记录到当前回合的 Output，随后返回 `void`。节点按数组顺序展示，并可在 History 回放。树最多有 32 层、1,000 个节点，UTF-8 JSON 大小上限为 256 KiB。
 
 ```ts
 ui.select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>

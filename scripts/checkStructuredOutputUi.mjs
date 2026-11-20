@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
-import { runLabChecks } from './monaco-ref-lab/check.mjs';
+import { runWebviewChecks } from './monaco-ref-lab/check.mjs';
+import { readSidebarBody } from './monaco-ref-lab/serve.mjs';
 
 // Run after npm run build. Production Conversation bundle and History renderer,
 // with a mocked VS Code message bridge; this is not a VS Code host acceptance test.
@@ -24,13 +25,14 @@ const response = { kind: 'workflow', executions: [execution({ kind: 'ask', text:
   execution({ kind: 'ask', text: '{invalid JSON}' })] };
 const usageEvents = [{ phase: 'status', text: '', usage: { totalTokens: 900 } },
   { phase: 'status', text: '', usage: { inputTokens: 1000, cachedInputTokens: 800, outputTokens: 234 } }];
-const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: [...usageEvents, { phase: 'message', text: 'Historical trace' }], output: JSON.stringify(response) };
+const commandEvent = { phase: 'tool', id: 'three', solo: true, text: command };
+const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: [
+  ...usageEvents, { phase: 'message', text: 'Historical trace' }, commandEvent
+], output: JSON.stringify(response) };
 
-await runLabChecks(async ({ evaluate, settle, send, click }) => {
-  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
-  const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
-  await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
-    document.body.innerHTML=${JSON.stringify(body)};
+await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
+  const body = await readSidebarBody();
+  await evaluate(`document.body.innerHTML=${JSON.stringify(body)};
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}
     window.messages=[];
     window.acquireVsCodeApi=()=>({postMessage:m=>{messages.push(m);if(m.type==='clipboardWrite')queueMicrotask(()=>host({type:'clipboardWriteResult',requestId:m.requestId,success:true}));},getState:()=>({}),setState:()=>{}});
@@ -53,6 +55,34 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   await evaluate(`host({type:'agentEvents',sessionId:'active',events:[{phase:'message',id:'final',text:${JSON.stringify('```mermaid\nflowchart TD\n A[过程] --> B[完成]\n```')},replace:true,done:true}]});`);
   assert.equal(await evaluate(`new Promise(resolve=>{const deadline=Date.now()+15000;const check=()=>{if(document.querySelector('.agent-stream-item [data-diagram-state=ready] svg'))resolve(true);else if(Date.now()>deadline)resolve(false);else setTimeout(check,50);};check();})`), true, 'a finished Process message renders its diagram');
   assert.equal(await evaluate(`document.querySelector('.agent-stream-item [data-diagram-state=ready] svg').textContent.includes('过程')`), true);
+  await evaluate(`host({type:'agentEvents',sessionId:'active',events:[
+    {phase:'tool',id:'one',groupId:'tools',groupLabel:'Tools',title:'First',text:'start'},
+    {phase:'tool',id:'two',groupId:'tools',title:'Second',text:'other'},
+    {phase:'message',id:'between',text:'Following the group',done:true},
+    ${JSON.stringify(commandEvent)}
+  ]});`);
+  await settle();
+  const commandState = await evaluate(`(() => {
+    document.querySelector('[data-turn-section="process"]').open=true;
+    const group=document.querySelector('.agent-trace-tool');
+    group.open=true;
+    window.firstCommand=group.querySelector('.agent-trace-command');
+    firstCommand.open=true;
+    firstCommand.querySelector('summary').focus();
+    return {title:group.querySelector('.agent-stream-summary-label').textContent,
+      grouped:group.querySelectorAll('.agent-trace-command').length,
+      standalone:document.querySelectorAll('.agent-stream-panel > .agent-trace-command').length};
+  })()`);
+  assert.deepEqual(commandState, { title: 'Tools', grouped: 2, standalone: 1 });
+  await evaluate(`host({type:'agentEvents',sessionId:'active',events:[{phase:'tool',id:'one',groupId:'tools',text:' + more'}]});`);
+  await settle();
+  assert.deepEqual(await evaluate(`({
+    same: document.querySelector('.agent-trace-tool .agent-trace-command')===firstCommand,
+    open: firstCommand.open,
+    focused: document.activeElement===firstCommand.querySelector('summary'),
+    text: firstCommand.querySelector('code').textContent
+  })`), { same: true, open: true, focused: true, text: 'start + more' });
+  console.log('PASS live trace grouping, streaming append, disclosure identity and keyboard focus');
   await evaluate(`host({type:'execution',sessionId:'active',turnId:'t1',response:${JSON.stringify(response)}});
     host({type:'executing',value:false,sessionId:'active',turnId:'t1'});`);
   await settle();
@@ -75,9 +105,11 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   await click('.json-disclosure > summary');
   assert.equal(await evaluate(`document.querySelector('.json-disclosure').open`), false);
   await click('.json-disclosure > summary');
-  await click('.terminal-disclosure > summary');
-  assert.equal(await evaluate(`document.querySelector('.terminal-command').textContent`), command);
-  assert.ok((await evaluate(`document.querySelector('.terminal-command-summary').textContent`)).length < 200);
+  assert.equal(await evaluate(`document.querySelector('[data-turn-section=output]').textContent.includes('EncodedCommand')`), false, 'terminal API results stay out of Output');
+  const solo = '.agent-stream-panel > .agent-trace-command';
+  await click(`${solo} > summary`);
+  assert.equal(await evaluate(`document.querySelector('${solo} code').textContent`), command);
+  assert.ok((await evaluate(`document.querySelector('${solo} summary').textContent`)).length <= 180);
 
   const checkWidths = async (selector) => {
     for (const width of [760, 480, 320]) {
@@ -88,7 +120,7 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
       assert.ok(sizes.every(s=>s.scroll<=s.width+1), `${width}px overflow: ${JSON.stringify(sizes)}`);
     }
   };
-  await checkWidths('#result-body,.json-output,.terminal-disclosure');
+  await checkWidths('#result-body,.json-output,.agent-trace-command');
   console.log('PASS live JSON folding, literal strings, exact copy, full command and 760/480/320px layout');
 
   // Re-open the persisted workflow through Conversation's actual hydration path.
@@ -100,6 +132,93 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
   assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
   await click('.json-output .output-copy');
   assert.equal(await evaluate(`messages.findLast(m=>m.type==='clipboardWrite').text`), raw);
+
+  const planPath = 'plans/build.plan.md';
+  const acceptance = { id: 'accept-abc', text: '**Review** the output', checked: false };
+  const plan = { ...record, id: 'latest-plan', mode: 'plan', executePlan: true, planPath,
+    planOutcome: { status: 'completed', reason: 'fixture', rounds: 1 }, process: [
+      { phase: 'todo', text: '', todos: [{ id: 'plan-1', status: 'completed', text: 'Implement' }] }
+    ] };
+  const planSession = { id: 'active', createdAt: 1, updatedAt: 3,
+    turns: [{ ...plan, id: 'older-plan' }, plan], planProgress: { path: planPath, acceptance: [acceptance] } };
+  await evaluate(`host({type:'outputSession',hostInitiated:true,session:${JSON.stringify(planSession)}})`);
+  await settle();
+  const check = '[data-turn-id="latest-plan"] input[data-acceptance-id]';
+  await evaluate(`window.acceptanceBefore = document.querySelector(${JSON.stringify(check)});`);
+  await click('[data-turn-id="latest-plan"] label[for="acceptance-accept-abc"]');
+  assert.deepEqual(await evaluate(`messages.filter(m=>m.type==='togglePlanAcceptance')`), [
+    { type: 'togglePlanAcceptance', planPath, itemId: acceptance.id, checked: true }
+  ]);
+  await evaluate(`host({type:'planAcceptance',sessionId:'unrelated',planPath:${JSON.stringify(planPath)},items:[${JSON.stringify(acceptance)}]})`);
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(check)})===acceptanceBefore`), true);
+  await evaluate(`host({type:'planAcceptance',sessionId:'active',planPath:${JSON.stringify(planPath)},items:[${JSON.stringify({ ...acceptance, checked: true })}]})`);
+  assert.deepEqual(await evaluate(`(() => {
+    const box=document.querySelector(${JSON.stringify(check)});
+    return { changed:box!==acceptanceBefore, checked:box.checked, focused:document.activeElement===box,
+      rows:document.querySelectorAll('input[data-acceptance-id]').length,
+      progress:box.closest('.agent-acceptance').querySelector('.turn-section-meta').textContent };
+  })()`), { changed: true, checked: true, focused: true, rows: 1, progress: '1/1 accepted' });
+  const staticPlan = renderHistoryRecord(plan, 'active', [{ ...acceptance, checked: true }]);
+  assert.deepEqual(await evaluate(`(() => {
+    const historyDocument=document.implementation.createHTMLDocument();
+    historyDocument.body.innerHTML=${JSON.stringify(staticPlan)};
+    const box=historyDocument.querySelector('input[data-acceptance-id]');
+    return { checked:box.checked, disabled:box.disabled, label:box.labels[0]?.textContent.trim() };
+  })()`), { checked: true, disabled: true, label: 'Review the output' });
+  console.log('PASS live acceptance delegation, host confirmation, focus and disabled History checkbox');
+
+  const viewOne = execution({ kind: 'view', nodes: [
+    { type: 'Markdown', source: '**Display first** [link](https://example.com/path) `src/view.ts`\n\n```mermaid\ngraph TD; A-->B\n```' },
+    { type: 'CodeBlock', code: 'src/view.ts' }
+  ] });
+  const viewTwo = execution({ kind: 'view', nodes: [{ type: 'Text', text: 'Display second' }] });
+  const ordinary = execution({ kind: 'ask', text: 'Ordinary answer `src/view.ts`' });
+  const viewResponse = { kind: 'workflow', executions: [viewOne, viewTwo, ordinary], steps: [
+    { method: 'ui.render', state: 'success', response: viewOne },
+    { method: 'stdout', state: 'success', stream: { channel: 'stdout', text: 'between displays' } },
+    { method: 'ui.render', state: 'success', response: viewTwo },
+    { method: 'ask', state: 'success', response: ordinary }
+  ] };
+  await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'display-view',source:'ui.render()',mode:'code',startedAt:Date.now()});`);
+  for (let redraw = 0; redraw < 2; redraw++) {
+    await evaluate(`host({type:'execution',sessionId:'active',turnId:'display-view',response:${JSON.stringify(viewResponse)}})`);
+    await settle();
+    assert.deepEqual(await evaluate(`[...document.querySelectorAll('[data-turn-id=display-view] .turn-output-body > .execution-result')].map(row=>({
+      text:(row.querySelector('strong')??row.querySelector('.process-output,[data-script-view],p'))?.textContent.trim(),
+      tree:row.querySelectorAll('[data-script-view]').length,
+      copies:[...row.querySelectorAll('[data-script-view] button')].map(button=>button.disabled),
+      links:row.querySelectorAll('[data-script-view] a,[data-script-view] img').length
+    }))`), [
+      { text: 'Display first', tree: 1, copies: [true], links: 0 },
+      { text: 'between displays', tree: 0, copies: [], links: 0 },
+      { text: 'Display second', tree: 1, copies: [], links: 0 },
+      { text: 'Ordinary answer src/view.ts', tree: 0, copies: [], links: 0 }
+    ]);
+  }
+  await evaluate(`host({type:'executing',value:false,sessionId:'active',turnId:'display-view',
+    changes:[{path:'src/view.ts',reason:'fixture change'}]});`);
+  assert.deepEqual(await evaluate(`(() => {
+    const turn = document.querySelector('[data-turn-id=display-view]');
+    return {
+      scriptLinks: turn.querySelectorAll('[data-script-view] a').length,
+      answerLinks: [...turn.querySelectorAll('.output-turn-change-link')].map(link=>link.textContent),
+      changes: turn.querySelector('.output-turn-change-path code')?.textContent
+    };
+  })()`), { scriptLinks: 0, answerLinks: ['src/view.ts'], changes: 'src/view.ts' });
+  console.log('PASS two read-only displays stay ordered and their code stays inert after Changes arrive');
+
+  const partialView = { ...viewResponse, executions: [viewOne, viewTwo], steps: [viewResponse.steps[0], viewResponse.steps[2]] };
+  const savedFailure = { ...record, id: 'failed-view', mode: 'code', output: '', response: partialView, error: 'Script stopped' };
+  await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'failed-view',source:'ui.render()',mode:'code',startedAt:Date.now()});
+    host({type:'executionFailed',sessionId:'active',turnId:'failed-view',message:${JSON.stringify(savedFailure.error)},response:${JSON.stringify(partialView)}});
+    host({type:'executing',value:false,sessionId:'active',turnId:'failed-view'});`);
+  const failureOutput = `[...document.querySelectorAll('[data-turn-id=failed-view] .turn-output-body > :is(.execution-result,.error-output)')]
+    .map(row=>(row.querySelector('[data-script-view] strong') ?? row).textContent.trim())`;
+  assert.deepEqual(await evaluate(failureOutput), ['Display first', 'Display second', 'Script stopped']);
+  await evaluate(`host({type:'outputSession',hostInitiated:true,session:{id:'active',createdAt:1,updatedAt:2,turns:[${JSON.stringify(savedFailure)}]}});`);
+  await settle();
+  assert.deepEqual(await evaluate(failureOutput), ['Display first', 'Display second', 'Script stopped']);
+  console.log('PASS failed live turn and reopened Conversation both show the displays before the error');
 
   // History's HTML adapter and the shipped delegated copy handler.
   const historyProvider = await readFile('src/features/conversations/host/historyEditorProvider.ts', 'utf8');
@@ -117,13 +236,24 @@ await runLabChecks(async ({ evaluate, settle, send, click }) => {
     assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
     await click('.json-output [data-copy]');
     assert.equal(await evaluate(`messages.findLast(m=>m.type==='copy').text`), raw, 'history HTML parsing preserves CRLF copy payload');
-    await checkWidths('.history-content,.json-output,.terminal-disclosure');
+    assert.equal(await evaluate(`document.querySelector('.process-command-solo pre').textContent`), command);
+    await checkWidths('.history-content,.json-output,.process-command-solo');
   }
   console.log('PASS Conversation re-open and History replay including legacy raw JSON, exact CRLF copy and narrow layout');
+
+  const savedView = { ...record, id: 'saved-view', output: JSON.stringify(viewResponse), changedFiles: ['src/view.ts'] };
+  await evaluate(`document.getElementById('history-fixture').innerHTML=${JSON.stringify(renderHistoryRecord(savedView, 's1'))};
+    window.dextRenderDiagrams(document.getElementById('history-fixture'));`);
+  assert.deepEqual(await evaluate(`({
+    trees:document.querySelectorAll('[data-script-view]').length,
+    inert:document.querySelectorAll('[data-script-view] a,[data-script-view] img,[data-script-view] .markdown-diagram').length,
+    disabled:document.querySelector('[data-script-view] button').disabled,
+    path:document.querySelector('[data-script-view] code').textContent
+  })`), { trees: 2, inert: 0, disabled: true, path: 'src/view.ts' });
 
   // A lazily loaded History session arrives as HTML; the provider's inline script
   // must hand it to the shared diagram renderer.
   await evaluate(`document.body.insertAdjacentHTML('beforeend','<details class="history-session" data-history-session-id="s1"><summary>x</summary><div class="history-session-body" id="history-diagram-body"></div></details>');
     window.dispatchEvent(new MessageEvent('message',{data:{type:'historySessionBody',sessionId:'s1',html:${JSON.stringify(renderHistoryRecord(JSON.parse(JSON.stringify(record))))}}}));`);
   assert.equal(await evaluate(`new Promise(resolve=>{const deadline=Date.now()+15000;const check=()=>{if(document.querySelector('#history-diagram-body [data-diagram-state=ready] svg'))resolve(true);else if(Date.now()>deadline)resolve(false);else setTimeout(check,50);};check();})`), true, 'History renders a Mermaid fence in a lazily loaded session');
-}, false);
+});

@@ -1,4 +1,5 @@
 import { uiFormResultSchema } from "./uiForm.js";
+import { uiViewResultSchema } from "./uiView.js";
 import { z } from "zod";
 
 const positionSchema = z.object({
@@ -107,6 +108,7 @@ const builtinDextResultSchema = z.discriminatedUnion("kind", [
   terminalResultSchema,
   skillResultSchema,
   uiResultSchema,
+  uiViewResultSchema,
   mcpRawResultSchema
 ]);
 

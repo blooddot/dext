@@ -42,6 +42,10 @@ import "monaco-editor/editor/contrib/multicursor/browser/multicursor.js";
 import "monaco-editor/editor/contrib/placeholderText/browser/placeholderText.contribution.js";
 import "monaco-editor/editor/contrib/tokenization/browser/tokenization.js";
 import "monaco-editor/editor/contrib/comment/browser/comment.js";
+// A form can create a second standalone editor after the composer has already
+// initialized services. Register these dependencies before the first editor.
+import "monaco-editor/editor/contrib/codelens/browser/codeLensCache.js";
+import "monaco-editor/editor/common/services/treeViewsDndService.js";
 
 export { monaco };
 /** VS Code webviews load workers from a blob containing the bundled worker.

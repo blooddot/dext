@@ -152,12 +152,13 @@ async function invoke(method, options) {
   if (typeof args !== "object" || Array.isArray(args)) {
     throw new Error(`${method}() takes one object of named arguments, for example ${method}({ input: "..." }).`);
   }
-  const converted = toDextJson(args, `The arguments of ${method}()`);
+  const display = method === "ui.render";
+  const converted = toDextJson(args, `The arguments of ${method}()`, "", { plain: display });
   const recorded = replay(method, converted);
   // A call reaches Output only when it asked for `echo: true`; otherwise the step is
   // marked quiet, which hides its result from Output while the caller, resume and
   // history keep the full record.
-  const quiet = args.echo === true ? {} : { quiet: true };
+  const quiet = display || args.echo === true ? {} : { quiet: true };
   if (recorded !== undefined) {
     flushStreams();
     process.send({ type: "step", step: { method, state: "success", response: recorded, ...quiet } });
@@ -234,7 +235,7 @@ export async function template(options) {
   return invoke("template", options);
 }
 
-/** Interactive questions. The run waits here until the user answers. */
+/** Interactive questions and read-only output for the current turn. */
 export const ui = {
   select: (options) => invoke("ui.select", options),
   radio: (options) => invoke("ui.radio", options),
@@ -242,7 +243,8 @@ export const ui = {
   input: (options) => invoke("ui.input", options),
   confirm: (options) => invoke("ui.confirm", options),
   alert: (options) => invoke("ui.alert", options),
-  form: (options) => invoke("ui.form", options)
+  form: (options) => invoke("ui.form", options),
+  render: async (options) => { await invoke("ui.render", options); }
 };
 
 const MCP_PROXY_MARKER = Symbol("dext.mcp");

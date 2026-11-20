@@ -232,6 +232,9 @@ declare module "dext" {
     value?: string;
   }
 
+  /** A public read-only display node accepted by ui.render. */
+  export type UiNode = { type: "Trace"; ordered?: boolean; children: UiTraceLine[] } | UiTraceLine | { type: "TraceIcon"; icon: "check" | "terminal" | "diff" | "file-media" | "circle-small-filled" | "chevron-right" | "checklist" | "debug-pause" | "circle-large-outline" | "info" | "warning" | "error" } | { type: "TraceTitle"; text: string } | { type: "TraceDescription"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Text"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Markdown"; source: string } | { type: "Code"; text: string } | { type: "CodeBlock"; code: string } | { type: "Separator" } | { type: "Badge"; text: string; status?: "pending" | "in_progress" | "completed" } | { type: "Spinner"; label: string } | { type: "Alert"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" };
+
   /** A labelled option accepted by a selection field. */
   export interface UiOption {
     value: string;
@@ -254,6 +257,17 @@ declare module "dext" {
     selected: string[];
   }
 
+  /** A row of display nodes within a trace. */
+  export interface UiTraceLine {
+    type: "TraceLine";
+    status?: "pending" | "in_progress" | "completed";
+    tone?: "normal" | "muted" | "info" | "warning" | "error";
+    children: UiTraceLineChild[];
+  }
+
+  /** A read-only node that can appear inside a trace line. */
+  export type UiTraceLineChild = { type: "Trace"; ordered?: boolean; children: UiTraceLine[] } | { type: "TraceIcon"; icon: "check" | "terminal" | "diff" | "file-media" | "circle-small-filled" | "chevron-right" | "checklist" | "debug-pause" | "circle-large-outline" | "info" | "warning" | "error" } | { type: "TraceTitle"; text: string } | { type: "TraceDescription"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Text"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Markdown"; source: string } | { type: "Code"; text: string } | { type: "CodeBlock"; code: string } | { type: "Separator" } | { type: "Badge"; text: string; status?: "pending" | "in_progress" | "completed" } | { type: "Spinner"; label: string } | { type: "Alert"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" };
+
   /** Ask — Hold a read-only conversation about a string input with optional inline Dext references. */
   export function ask(options: { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli?: undefined; model?: "sonnet" | "opus" | AgentModelOptions | AgentPiModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "codex"; model?: AgentModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "claude"; model?: "sonnet" | "opus" } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "deepseek-harness"; model?: { model: string; reasoning?: string } } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "pi"; model?: AgentPiModelOptions }): Promise<AskResult>;
 
@@ -272,7 +286,7 @@ declare module "dext" {
   /** Run Terminal Command — Run a command in a trusted local workspace and return captured output. The command runs without a confirmation prompt, so a workflow decides what is safe to run. */
   export function terminal(options: { command: string; cwd?: string; env?: Record<string, unknown>; timeout_ms?: number }): Promise<TerminalResult>;
 
-  /** Interactive questions. The run waits here until the user answers. */
+  /** Interactive questions and read-only output for the current turn. */
   export const ui: {
     /** ui.select — Request select interaction and wait for the user's response. */
     select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>;
@@ -288,6 +302,8 @@ declare module "dext" {
     alert(options: { message: string; acknowledge_label?: string; presentation?: "inline" | "dialog" }): Promise<UiAlertResult>;
     /** ui.form — Request form interaction and wait for the user's response. */
     form(options: { title: string; fields: UiField[]; description?: string; submit_label?: string; cancel_label?: string; show_cancel?: boolean; actions?: UiAction[]; on_cancel?: "return" | "abort"; presentation?: "inline" | "dialog" }): Promise<UiFormResult>;
+    /** ui.render — Append an ordered, read-only tree of display components to this turn's Output. The call completes after Dext records it. */
+    render(options: { nodes: UiNode[] }): Promise<void>;
   };
 
   /** Run Skill — Load and execute a standard SKILL.md from the configured project skill directories. Skill calls are read-only by default. */

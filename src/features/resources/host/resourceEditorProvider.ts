@@ -1,5 +1,5 @@
 import type { ApiReferenceCatalog, ApiReferenceModule } from "../../workflow/contracts/apiReference.js";
-import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodResultType } from "../../workflow/domain/methodSignature.js";
+import { CONVERSATION_METHODS, formatFieldType, formatMethodParameter, methodReturnType } from "../../workflow/domain/methodSignature.js";
 import { editorTabKey } from "../../../platform/editor-tabs/editorTabTypes.js";
 import type { ApiCallable, ApiDataSourceOptions, FileResourceDataSourceOptions, ResourceEditorDataSource, ResourceEditorProviderOptions, ResourceEditorShowResult, ResourceEntry } from "../contracts/resourceDocuments.js";
 import { RESOURCE_DIRECTORIES, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
@@ -76,7 +76,7 @@ export function apiEntry(method: ApiCallable): ResourceEntry {
   const path = `${method.id.replaceAll(".", "/")}.ts`;
   const input = method.input ?? [];
   const fields = input.filter((field) => !field.internal || CONVERSATION_METHODS.has(method.id));
-  const returnType = method.output ? methodResultType(method) : "Result";
+  const returnType = method.output ? methodReturnType(method) : "Result";
   return {
     id: resourceEntryId({ kind: "api", scope, path }),
     kind: "api",
@@ -201,15 +201,20 @@ export function createFileResourceDataSource(options: FileResourceDataSourceOpti
 
 /** The built-in callable APIs and language references Dext ships its own page from. */
 export function createApiDataSource(options: ApiDataSourceOptions): ResourceEditorDataSource {
-  const catalog = async (): Promise<ResourceEntry[]> => [
+  const entries = (reference: ApiReferenceCatalog | undefined): ResourceEntry[] => [
     ...options.methods().filter((method) => method.source === "builtin").map(apiEntry),
-    ...apiReferenceEntries(await options.reference?.())
+    ...apiReferenceEntries(reference)
   ];
   return {
-    list: async (kinds, query) => kinds.includes("api") ? filterResourceEntries(await catalog(), query) : [],
+    list: async (kinds, query) => kinds.includes("api") ? filterResourceEntries(entries(await options.reference?.()), query) : [],
     definition: async (id) => {
-      const entry = (await catalog()).find(candidate => candidate.id === id);
-      return entry ? { entry, content: "" } : undefined;
+      const reference = await options.reference?.();
+      const entry = entries(reference).find(candidate => candidate.id === id);
+      if (!entry) return undefined;
+      const apiTypes = entry.name === "ui.render"
+        ? reference?.dext?.filter(({ name }) => /^Ui(?:Node|TraceLine|TraceLineChild)$/.test(name))
+        : undefined;
+      return { entry: apiTypes?.length ? { ...entry, apiTypes } : entry, content: "" };
     }
   };
 }

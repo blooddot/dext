@@ -5,10 +5,14 @@ import { skillEntryId, type ResourceDefinitionDocument, type ResourceEntry, type
 import { RESOURCE_LABELS, RESOURCE_PAGE_LABELS, resourceDirectorySegments, type ResourceKind, type ResourcePage } from "../contracts/resourceSession.js";
 import { renderApiFlow } from "./apiFlowDiagram.js";
 import { escapeHtml as escapeResourceHtml } from "../../../shared/lib/html.js";
+import { htmlUiAdapter, type HtmlFragment } from "../../../shared/lib/ui/htmlUiAdapter.js";
+import { Alert, Button, Checkbox } from "../../../shared/lib/ui/nativeControls.js";
+import type { ComponentAttributes } from "../../../shared/lib/ui/renderAdapter.js";
+import { Trace, TraceCollapsible, TraceCollapsibleTrigger, TraceIcon, TraceLine } from "../../../shared/lib/ui/traceComponents.js";
 
 
 /** Toolbar glyphs are codicons; the editor tab document links their stylesheet once. */
-function resourceIcon(name: string): string { return `<i class="codicon codicon-${name}" aria-hidden="true"></i>`; }
+function resourceIcon(name: string): string { return TraceIcon(htmlUiAdapter, name).html; }
 
 
 export function resourceEntryId(entry: Pick<ResourceEntry, "kind" | "scope" | "path">): string {
@@ -101,14 +105,22 @@ export { escapeResourceHtml };
 export function renderResourceNavigation(options: ResourcePanelOptions): string {
   const navigation = options.navigation;
   if (!navigation) return "";
+  const adapter = htmlUiAdapter;
   const scope = options.scope && options.availableScopes?.length
-    ? `<span class="resource-scope-switch" role="group" aria-label="Resource scope">${options.availableScopes.map((value) => `<button type="button" data-resource-scope="${value}" class="${value === options.scope ? "is-active" : ""}">${RESOURCE_PAGE_LABELS[value]}</button>`).join("")}</span>` : "";
-  return `<nav class="resource-navigation" aria-label="Resource navigation" data-resource-scroll="${navigation.scrollTop}">`
-    + `<button type="button" data-resource-navigate="back" aria-label="Back" title="Back"${navigation.canGoBack ? "" : " disabled"}>←</button>`
-    + `<button type="button" data-resource-navigate="forward" aria-label="Forward" title="Forward"${navigation.canGoForward ? "" : " disabled"}>→</button>`
-    + `<button type="button" class="resource-navigation-home" data-resource-navigate="home">${options.title === "Resources" ? "Resources" : "APIs"}</button>`
-    + (navigation.label ? `<span aria-hidden="true">/</span><span class="resource-navigation-current" aria-current="page">${escapeResourceHtml(navigation.label)}</span>` : "")
-    + scope + `</nav>`;
+    ? [adapter.element("span", { class: "resource-scope-switch", role: "group", "aria-label": "Resource scope" },
+      options.availableScopes.map((value) => Button(adapter, {
+        "data-resource-scope": value, class: value === options.scope ? "is-active" : ""
+      }, [RESOURCE_PAGE_LABELS[value]])))] : [];
+  return adapter.element("nav", {
+    class: "resource-navigation", "aria-label": "Resource navigation", "data-resource-scroll": String(navigation.scrollTop)
+  }, [
+    Button(adapter, { "data-resource-navigate": "back", "aria-label": "Back", title: "Back", disabled: !navigation.canGoBack }, ["←"]),
+    Button(adapter, { "data-resource-navigate": "forward", "aria-label": "Forward", title: "Forward", disabled: !navigation.canGoForward }, ["→"]),
+    Button(adapter, { class: "resource-navigation-home", "data-resource-navigate": "home" }, [options.title === "Resources" ? "Resources" : "APIs"]),
+    ...(navigation.label ? [adapter.element("span", { "aria-hidden": "true" }, ["/"]),
+      adapter.element("span", { class: "resource-navigation-current", "aria-current": "page" }, [navigation.label])] : []),
+    ...scope
+  ]).html;
 }
 
 
@@ -165,23 +177,32 @@ export function renderApiSignature(entry: ResourceEntry, shortName = false): str
 }
 
 
-export function resourceToggleButton(attributes: string, label: string, expanded: boolean): string {
+function resourceToggleButton(attributes: ComponentAttributes, label: string, expanded: boolean): string {
   const title = `${expanded ? "Collapse" : "Expand"} ${label}`;
-  return `<button type="button" class="resource-icon-button" ${attributes} data-resource-toggle-label="${escapeResourceHtml(label)}" title="${escapeResourceHtml(title)}" aria-label="${escapeResourceHtml(title)}" aria-expanded="${expanded}">`
-    + `<span data-resource-icon="collapse-all"${expanded ? "" : " hidden"}>${resourceIcon("collapse-all")}</span>`
-    + `<span data-resource-icon="expand-all"${expanded ? " hidden" : ""}>${resourceIcon("expand-all")}</span></button>`;
+  return Button(htmlUiAdapter, {
+    class: "resource-icon-button", ...attributes, "data-resource-toggle-label": label, title, "aria-label": title, "aria-expanded": String(expanded)
+  }, [
+    htmlUiAdapter.element("span", { "data-resource-icon": "collapse-all", hidden: !expanded }, [TraceIcon(htmlUiAdapter, "collapse-all")]),
+    htmlUiAdapter.element("span", { "data-resource-icon": "expand-all", hidden: expanded }, [TraceIcon(htmlUiAdapter, "expand-all")])
+  ]).html;
 }
 
 
 export function resourceRefreshButton(prefix: string): string {
-  return `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.reloadMethods" title="Refresh" aria-label="Refresh">${resourceIcon("refresh")}</button>`;
+  return resourceIconButton(`${prefix}.reloadMethods`, "Refresh", "refresh");
 }
 
 
 /** Opens the resource directory for the scope the page is currently showing. */
 export function resourceDirectoryButton(prefix: string, scope?: ResourcePage): string {
   const label = scope === "project" ? "Open project resources folder" : scope === "global" ? "Open global resources folder" : "Open resources folder";
-  return `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.openResourceDirectory" title="${label}" aria-label="${label}">${resourceIcon("folder-opened")}</button>`;
+  return resourceIconButton(`${prefix}.openResourceDirectory`, label, "folder-opened");
+}
+
+function resourceIconButton(command: string, label: string, icon: string, attributes: ComponentAttributes = {}): string {
+  return Button(htmlUiAdapter, {
+    class: "resource-icon-button", "data-resource-command": command, ...attributes, title: label, "aria-label": label
+  }, [TraceIcon(htmlUiAdapter, icon)]).html;
 }
 
 
@@ -197,7 +218,7 @@ function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[
   const node = `Skill/${pack.id}`;
   const version = resourcePackVersion(pack);
   const iconButton = (command: string, icon: string, title: string) =>
-    `<button type="button" class="resource-icon-button" data-resource-command="${prefix}.${command}" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="${escapeResourceHtml(title)}" aria-label="${escapeResourceHtml(title)}">${resourceIcon(icon)}</button>`;
+    resourceIconButton(`${prefix}.${command}`, title, icon, { "data-resource-pack": pack.id, "data-resource-kind": "skill" });
   const buttons = [
     ...(pack.updatable ? [iconButton("upgradeSkillPack", "cloud-download", `Update ${pack.name} to the latest GitHub version`)] : []),
     ...(pack.install ? [iconButton("installSkillPack", "play", `Run install.mjs for ${pack.name}`)] : []),
@@ -206,7 +227,13 @@ function renderSkillPack(pack: ResourcePackRef, entries: readonly ResourceEntry[
   const action = buttons ? `<span class="resource-group-actions">${buttons}</span>` : "";
   const skills = entries.flatMap((entry) => (skillEntryId(entry) ? [entry] : []));
   const shown = skills.filter((entry) => !entry.hidden).length;
-  const visibility = `<input type="checkbox" class="resource-pack-visibility" data-resource-command="${prefix}.toggleSkillPackVisibility" data-resource-pack="${escapeResourceHtml(pack.id)}" data-resource-kind="skill" title="Show this pack's Skills in the Input skills menu" aria-label="Show this pack's Skills in the Input skills menu"${shown === skills.length && skills.length ? " checked" : ""}${skills.length ? "" : " disabled"}${shown > 0 && shown < skills.length ? ' data-resource-indeterminate="1"' : ""}>`;
+  const visibility = Checkbox(htmlUiAdapter, {
+    class: "resource-pack-visibility", "data-resource-command": `${prefix}.toggleSkillPackVisibility`,
+    "data-resource-pack": pack.id, "data-resource-kind": "skill",
+    title: "Show this pack's Skills in the Input skills menu", "aria-label": "Show this pack's Skills in the Input skills menu",
+    checked: skills.length > 0 && shown === skills.length, disabled: !skills.length,
+    "data-resource-indeterminate": shown > 0 && shown < skills.length ? "1" : false
+  }).html;
   return `<details class="resource-group resource-pack" data-resource-group="Skill" data-resource-node="${escapeResourceHtml(node)}" data-resource-type="skill" data-resource-pack="${escapeResourceHtml(pack.id)}"${collapsed.has(node) ? "" : " open"}>`
     + `<summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node)}">${escapeResourceHtml(pack.name)}</span>`
     + (version ? `<span class="resource-pack-version">${escapeResourceHtml(version)}</span>` : "")
@@ -273,7 +300,9 @@ export function renderResourceActions(entry: ResourceEntry, prefix: string): str
     ["deleteResource", "Delete resource", "trash"]
   ] as const;
   return `<span class="resource-entry-actions" role="group" aria-label="Resource actions">${actions.map(([command, label, icon]) =>
-    `<button type="button" class="resource-icon-button${command === "deleteResource" ? " resource-delete" : ""}" data-resource-command="${escapeResourceHtml(prefix)}.${command}" data-resource-id="${escapeResourceHtml(entry.id)}" title="${label}" aria-label="${label}">${resourceIcon(icon)}</button>`
+    resourceIconButton(`${prefix}.${command}`, label, icon, {
+      class: `resource-icon-button${command === "deleteResource" ? " resource-delete" : ""}`, "data-resource-id": entry.id
+    })
   ).join("")}</span>`;
 }
 
@@ -299,7 +328,16 @@ export function renderTreeEntry(entry: ResourceEntry, prefix = "dext"): string {
   const signatures = entry.api ? apiEntries(entry).map(item => renderApiSignature(item, true))
     : entry.reference ? referenceSignatures(entry.reference).map((signature) => highlightResourceSource(signature, true))
     : [];
-  return `<li class="resource-entry" data-resource-search-text="${escapeResourceHtml(resourceSearchText(entry))}" data-resource-id="${escapeResourceHtml(entry.id)}"><button type="button" data-resource-open="${escapeResourceHtml(entry.id)}"><span class="resource-entry-heading"><span class="resource-name">${escapeResourceHtml(apiDisplayName(entry))}</span></span>${signatures.length ? `<code class="resource-entry-signature">${signatures.join("<br>")}</code>` : ""}${entry.description ? `<span class="resource-description">${escapeResourceHtml(entry.description)}</span>` : ""}</button>${renderSkillVisibility(entry, prefix)}${renderResourceActions(entry, prefix)}</li>`;
+  const adapter = htmlUiAdapter;
+  const name = adapter.element("span", { class: "resource-name" }, [apiDisplayName(entry)]);
+  const open = Button(adapter, { "data-resource-open": entry.id }, [
+    adapter.element("span", { class: "resource-entry-heading" }, [name]),
+    ...(signatures.length ? [adapter.markup("code", { class: "resource-entry-signature" }, signatures.join("<br>"), [])] : []),
+    ...(entry.description ? [adapter.element("span", { class: "resource-description" }, [entry.description])] : [])
+  ]);
+  return TraceLine(adapter, [open, { html: renderSkillVisibility(entry, prefix) }, { html: renderResourceActions(entry, prefix) }], {
+    class: "resource-entry", "data-resource-search-text": resourceSearchText(entry), "data-resource-id": entry.id
+  }).html;
 }
 
 
@@ -310,7 +348,21 @@ export function renderTreeContents(node: ResourceTreeNode, collapsed: Set<string
 
 
 export function renderTreeNode(node: ResourceTreeNode, collapsed: Set<string>, type: string, prefix = "dext"): string {
-  return `<details class="resource-group resource-api-node" data-resource-group="${escapeResourceHtml(node.path)}" data-resource-node="${escapeResourceHtml(node.path)}" data-resource-type="${escapeResourceHtml(type)}"${collapsed.has(node.path) ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle="${escapeResourceHtml(node.path)}">${escapeResourceHtml(node.label)}</span><span class="resource-count">${countTreeNodeEntries(node)}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${renderTreeContents(node, collapsed, type, prefix)}</ul></details>`;
+  return renderResourceGroup(node.path, node.label, type, countTreeNodeEntries(node), !collapsed.has(node.path), {
+    html: renderTreeContents(node, collapsed, type, prefix)
+  });
+}
+
+function renderResourceGroup(path: string, label: string, type: string, count: number, open: boolean, body: HtmlFragment): string {
+  const adapter = htmlUiAdapter;
+  const summary = TraceCollapsibleTrigger(adapter, [
+    adapter.element("span", { class: "resource-group-toggle", "data-resource-toggle": path }, [label]),
+    adapter.element("span", { class: "resource-count" }, [String(count)]),
+    adapter.element("span", { class: "resource-group-chevron", "aria-hidden": "true" }, [TraceIcon(adapter, "chevron-down")])
+  ]);
+  return TraceCollapsible(adapter, summary, [Trace(adapter, [body])], {
+    class: "resource-group resource-api-node", "data-resource-group": path, "data-resource-node": path, "data-resource-type": type, open
+  }).html;
 }
 
 
@@ -319,7 +371,9 @@ export function renderApiTree(document: ResourceListDocument, collapsed: Set<str
     document.groups.flatMap((group) => group.entries.map((entry) => ({ entry, parts: group.label === "." ? [] : group.label.split(".") }))));
   // Keep the synthetic Top level group limited to APIs without a namespace. Namespace
   // groups such as node and ui are siblings of it, rather than nested beneath it.
-  const topLevel = `<details class="resource-group resource-api-node" data-resource-group="." data-resource-node="." data-resource-type="api"${collapsed.has(".") ? "" : " open"}><summary><span class="resource-group-toggle" data-resource-toggle=".">Top level</span><span class="resource-count">${root.entries.length}</span><span class="resource-group-chevron" aria-hidden="true">${resourceIcon("chevron-down")}</span></summary><ul>${root.entries.sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")}</ul></details>`;
+  const topLevel = renderResourceGroup(".", "Top level", "api", root.entries.length, !collapsed.has("."), {
+    html: root.entries.sort((left, right) => left.name.localeCompare(right.name)).map((entry) => renderTreeEntry(entry, prefix)).join("")
+  });
   return topLevel + [...root.children.values()].sort((left, right) => left.label.localeCompare(right.label)).map((node) => renderTreeNode(node, collapsed, "api", prefix)).join("");
 }
 
@@ -480,7 +534,7 @@ export function renderResourceList(document: ResourceListDocument, options: Reso
     + `<input type="search" data-resource-search value="${escapeResourceHtml(document.query)}" placeholder="Search by name or description" aria-label="Search resources">`
     + resourceRefreshButton(prefix)
     + (options.openResourceDirectory ? resourceDirectoryButton(prefix, document.scope) : "")
-    + (options.createKinds ? "" : `<span class="resource-tree-actions">${resourceToggleButton('data-resource-toggle-all="toggle"', "all", true)}</span>`)
+    + (options.createKinds ? "" : `<span class="resource-tree-actions">${resourceToggleButton({ "data-resource-toggle-all": "toggle" }, "all", true)}</span>`)
     + (options.createKinds?.map((kind) => `<button type="button" class="resource-create" data-resource-command="${prefix}.newResource" data-resource-kind="${kind}" data-resource-type="${kind}">New ${RESOURCE_LABELS[kind]}</button>`).join("") ?? "")
     + `</header>`
     + (groups || `<p class="resource-empty">No ${escapeResourceHtml(RESOURCE_LABELS[document.kind])} resources found.</p>`)
@@ -494,7 +548,7 @@ export function renderResourceError(id: string, message: string, options: Resour
   const prefix = options.commandPrefix ?? "dext";
   return `<div class="resource-panel resource-error" data-resource-id="${escapeResourceHtml(id)}" data-resource-error="1">`
     + renderResourceNavigation(options)
-    + `<p>${escapeResourceHtml(message)}</p>`
+    + Alert(htmlUiAdapter, message, { role: false }).html
     + resourceRefreshButton(prefix) + `</div>${resourceClientScript(options.tabState)}`;
 }
 
@@ -548,7 +602,7 @@ export function renderReferenceModule(module: ApiReferenceModule): string {
     ? `<div class="resource-api-documentation">${escapeResourceHtml(module.documentation)}</div>` : "";
   return `<section class="resource-api-reference">`
     + `<p class="resource-api-specifier"><code>${escapeResourceHtml(module.id)}</code>`
-    + `<button type="button" class="resource-api-copy" data-resource-copy="${escapeResourceHtml(module.id)}">Copy</button></p>`
+    + Button(htmlUiAdapter, { class: "resource-api-copy", "data-resource-copy": module.id }, ["Copy"]).html + `</p>`
     + documentation + members + `</section>`;
 }
 
@@ -567,6 +621,9 @@ export function renderResourceDefinition(document: ResourceDefinitionDocument, o
         : `<p>${escapeResourceHtml(parameter.description ?? "")}</p>`).join("")}</dl><h3>Returns</h3><p><code class="resource-result-type"${resultTitle}>${highlightApiType(api.returnType)}</code></p></section>`
       : "";
   }).join("");
+  const apiTypes = entry.apiTypes?.length
+    ? `<section class="resource-api-reference"><h3>Types</h3><ul class="resource-api-members">${entry.apiTypes.map(renderReferenceMember).join("")}</ul></section>`
+    : "";
   const referenceDetails = entry.reference ? renderReferenceModule(entry.reference) : "";
   // A flow without source (a built-in or a reference entry) has no module to analyse.
   const flow = entry.apiFlow ? renderApiFlow(entry.apiFlow, entry.name) : "";
@@ -585,7 +642,7 @@ export function renderResourceDefinition(document: ResourceDefinitionDocument, o
     + renderResourceNavigation(options)
     + `<header class="resource-toolbar"><h2>${escapeResourceHtml(entry.name)}</h2>`
     + actions
-    + `</header>${apiDetails}${flow}${referenceDetails}${source}</div>${resourceClientScript(options.tabState)}`;
+    + `</header>${apiDetails}${apiTypes}${flow}${referenceDetails}${source}</div>${resourceClientScript(options.tabState)}`;
 }
 
 

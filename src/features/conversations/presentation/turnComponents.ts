@@ -3,32 +3,35 @@ import type { TurnModePresentation, TurnRenderModel } from "./turnPresentation.j
 import { uiResultText } from "./uiInteractionPresentation.js";
 import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
 import { formatJsonOutput } from "../../../shared/lib/jsonOutput.js";
-import { escapeHtml as escapeTurnHtml } from "../../../shared/lib/html.js";
-
-/** Only the output medium differs: text is escaped by HTML and appended as text by DOM. */
-export interface TurnRenderAdapter<E> {
-  element(this: void, tag: string, attributes: Record<string, string | boolean>, children: readonly (E | string)[]): E;
-}
+import { renderUiView } from "../../../shared/lib/ui/uiViewPresentation.js";
+import type { MarkupAdapter, UiRenderAdapter } from "../../../shared/lib/ui/renderAdapter.js";
+import {
+  CodeBlock, Text, TraceChevron, TraceCollapsible, TraceCollapsibleContent,
+  TraceCollapsibleTrigger, TraceDescription, TraceLine, TraceTitle
+} from "../../../shared/lib/ui/traceComponents.js";
 
 /** The process line: one light `Worked …` row that unfolds into the timeline.
  * It never renders a section label of its own. */
 export function renderTurnSection<E>(
-  adapter: TurnRenderAdapter<E>, process: TurnRenderModel["process"], children: readonly E[] = [],
+  adapter: UiRenderAdapter<E>, process: TurnRenderModel["process"], children: readonly E[] = [],
   open = false, action?: E
 ): { disclosure: E; body: E; meta: E; summary: E } {
   const el = adapter.element;
-  const meta = el("span", { class: "turn-section-meta disclosure-meta" }, [process.detail ?? ""]);
-  const summary = el("summary", {}, [
-    el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []),
+  const meta = TraceDescription(adapter, [process.detail ?? ""], { class: "turn-section-meta disclosure-meta" });
+  const summary = TraceCollapsibleTrigger(adapter, [
+    TraceChevron(adapter),
     meta,
     ...(action ? [el("span", { class: "turn-section-actions" }, [action])] : [])
   ]);
-  const body = el("div", { class: "turn-section-body" }, children);
-  return { disclosure: el("details", { class: "turn-section", "data-turn-section": "process", open }, [summary, body]), body, meta, summary };
+  const content = TraceCollapsibleContent(adapter, children, { class: "turn-section-body" }, "div");
+  return {
+    disclosure: TraceCollapsible(adapter, summary, content, { class: "turn-section", "data-turn-section": "process", open }),
+    body: content[0]!, meta, summary
+  };
 }
 
 /** The answer is never a fold target: one divider separates it from the timeline. */
-export function renderTurnOutput<E>(adapter: TurnRenderAdapter<E>, children: readonly E[], copy?: E): { section: E; body: E } {
+export function renderTurnOutput<E>(adapter: UiRenderAdapter<E>, children: readonly E[], copy?: E): { section: E; body: E } {
   const el = adapter.element;
   const body = el("div", { class: "turn-output-body" }, children);
   return {
@@ -38,34 +41,37 @@ export function renderTurnOutput<E>(adapter: TurnRenderAdapter<E>, children: rea
 }
 
 /** The submitted mode is plain metadata beside the prompt, not a pill. */
-export function renderTurnMode<E>(adapter: TurnRenderAdapter<E>, mode: TurnModePresentation): E {
+export function renderTurnMode<E>(adapter: UiRenderAdapter<E>, mode: TurnModePresentation): E {
   return adapter.element("span", { class: "turn-mode", "data-mode": mode.value, title: mode.title }, [mode.label]);
 }
 
 /** Copy controls belong to the section title bar, not to the content they copy. */
-export function renderTurnMarkdown<E>(adapter: TurnRenderAdapter<E>, body: E): E {
+export function renderTurnMarkdown<E>(adapter: UiRenderAdapter<E>, body: E): E {
   return adapter.element("div", { class: "output-text-copyable" }, [body]);
 }
 
 /** A literal JSON view shared by both hosts. Copy always receives the raw source
  * and sits in the JSON title bar, so it stays exact even when Output has more
  * than one result. */
-export function renderTurnJson<E>(adapter: TurnRenderAdapter<E>, text: string, copy?: E): E | undefined {
+export function renderTurnJson<E>(adapter: UiRenderAdapter<E>, text: string, copy?: E): E | undefined {
   const formatted = formatJsonOutput(text);
   if (formatted === undefined) return undefined;
-  const el = adapter.element;
-  return el("div", { class: "output-text-copyable json-output" }, [
-    el("details", { class: "execution-disclosure json-disclosure", open: true }, [
-      el("summary", {}, [
-        el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []), "JSON",
-        ...(copy ? [copy] : [])
-      ]),
-      el("pre", { class: "json-output-text" }, [el("code", {}, [formatted])])
-    ])
+  const summary = TraceCollapsibleTrigger(adapter, [TraceChevron(adapter), Text("JSON"), ...(copy ? [copy] : [])]);
+  const content = TraceCollapsibleContent(adapter, [CodeBlock(adapter, formatted, { class: "json-output-text" })]);
+  return adapter.element("div", { class: "output-text-copyable json-output" }, [
+    TraceCollapsible(adapter, summary, content, { class: "execution-disclosure json-disclosure", open: true })
   ]);
 }
 
-export interface TurnResultAdapter<E> extends TurnRenderAdapter<E> {
+export function renderTurnDisclosureSummary<E>(
+  adapter: UiRenderAdapter<E>, label: string, detail: string, detailClass = "disclosure-meta"
+): E {
+  return TraceCollapsibleTrigger(adapter, [
+    TraceChevron(adapter), TraceTitle(adapter, [label]), TraceDescription(adapter, [detail], { class: detailClass })
+  ]);
+}
+
+export interface TurnResultAdapter<E> extends MarkupAdapter<E> {
   markdown(text: string): E;
   json(text: string): E;
   plan(path: string): E;
@@ -93,14 +99,16 @@ export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextR
   // terminal 的返回值是给 API 读的，不进 Output；要给人看就由 API 自己 console.log。
   if (result.kind === "terminal") return [];
   if (result.kind === "ui") return [adapter.markdown(uiResultText(result))];
+  if (result.kind === "view") {
+    const tree = renderUiView(adapter, result);
+    return tree === undefined ? [] : [tree];
+  }
   // 没有 kind 的普通返回值同样不进 Output：要给人看就由 API 自己 console.log。
   const declared = typeof (result as { kind?: unknown }).kind === "string";
   return declared ? [adapter.json(JSON.stringify(result, null, 2))] : [];
 }
 
-export interface TurnHtml { readonly html: string }
-
-export interface TurnMessageAdapter<E> extends TurnRenderAdapter<E> {
+export interface TurnMessageAdapter<E> extends UiRenderAdapter<E> {
   prose(text: string): E;
   code(text: string): E;
 }
@@ -109,19 +117,18 @@ export interface TurnMessageAdapter<E> extends TurnRenderAdapter<E> {
 export function renderTurnMessage<E>(adapter: TurnMessageAdapter<E>, message: AgentMessagePresentation): E[] {
   if (!message.structured) return [adapter.prose(message.text)];
   const el = adapter.element;
-  const disclosure = (label: string, detail: string, className: string, children: E[]): E => el("details", { class: className }, [
-    el("summary", {}, [el("i", { class: "disclosure-chevron codicon codicon-chevron-right" }, []),
-      el("span", {}, [label]), el("span", { class: "disclosure-meta" }, [detail])]), ...children
-  ]);
+  const disclosure = (label: string, detail: string, className: string, children: E[]): E =>
+    TraceCollapsible(adapter, renderTurnDisclosureSummary(adapter, label, detail),
+      TraceCollapsibleContent(adapter, children), { class: className });
   return [el("section", { class: `agent-result process-result-${message.kind}` }, [
     el("div", { class: "agent-result-heading" }, [
-      el("span", { class: "agent-result-title" }, [message.title]),
-      ...(message.meta.length ? [el("span", { class: "agent-result-meta" }, [message.meta.join(" · ")])] : [])
+      TraceTitle(adapter, [message.title], { class: "agent-result-title" }),
+      ...(message.meta.length ? [TraceDescription(adapter, [message.meta.join(" · ")], { class: "agent-result-meta" })] : [])
     ]),
     ...(message.text ? [adapter.prose(message.text)] : []),
-    ...message.details.map((detail) => el("div", { class: `agent-result-detail ${detail.tone}` }, [
-      ...(detail.meta ? [el("span", { class: "agent-result-detail-meta" }, [detail.meta])] : []), detail.text
-    ])),
+    ...message.details.map((detail) => TraceLine(adapter, [
+      ...(detail.meta ? [TraceDescription(adapter, [detail.meta], { class: "agent-result-detail-meta" })] : []), Text(detail.text)
+    ], { class: `agent-result-detail ${detail.tone}`, role: false }, "div")),
     ...message.references.map((reference) => disclosure(reference.uri.replaceAll("\\", "/").split("/").pop() ?? reference.uri,
       [reference.location, reference.symbol].filter(Boolean).join(" · "), "agent-result-reference", [
         el("div", { class: "agent-file-path" }, [reference.uri]),
@@ -133,12 +140,3 @@ export function renderTurnMessage<E>(adapter: TurnMessageAdapter<E>, message: Ag
   ])];
 }
 
-export { escapeTurnHtml };
-
-export const turnHtmlAdapter: TurnRenderAdapter<TurnHtml> = {
-  element: (tag, attributes, children) => ({
-    html: `<${tag}${Object.entries(attributes).filter(([, value]) => value !== false).map(([key, value]) =>
-      value === true ? ` ${key}` : ` ${key}="${escapeTurnHtml(String(value))}"`).join("")}>${children.map((child) =>
-      typeof child === "string" ? escapeTurnHtml(child) : child.html).join("")}</${tag}>`
-  })
-};

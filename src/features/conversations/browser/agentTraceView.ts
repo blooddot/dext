@@ -1,8 +1,12 @@
 import type { AgentStreamEvent, AgentToolKind, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { agentMessageCopyText, presentAgentMessage } from "../presentation/agentMessagePresentation.js";
 import { renderTurnMessage } from "../presentation/turnComponents.js";
+import {
+  CodeBlock, Markdown, Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
+  TraceDescription, TraceIcon, TraceLine, TraceTitle
+} from "../../../shared/lib/ui/traceComponents.js";
 import { renderMarkdownDiagrams } from "../../../platform/browser/markdownDiagrams.js";
-import { turnDomAdapter } from "./turnDomAdapter.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 export interface AgentToolCommand {
   body: HTMLElement;
@@ -22,7 +26,6 @@ export interface AgentToolGroup {
 
 export interface AgentTraceHost {
   document: Document;
-  markdown(text: string): string;
   /** Colors a finished Markdown body's fenced code; a missing implementation
    * leaves it plain. */
   colorizeCode?(root: HTMLElement): void;
@@ -240,12 +243,10 @@ export class AgentTraceView {
 
   private createEventItem(event: AgentStreamEvent): HTMLElement {
     const kind = this.eventKind(event);
-    const message = this.host.document.createElement("section");
-    message.className = `agent-stream-item agent-trace-message agent-trace-${kind}`;
-    const body = this.host.document.createElement("div");
-    body.className = "agent-stream-text";
-    message.append(body);
-    return message;
+    const adapter = domUiAdapter(this.host.document);
+    return TraceLine(adapter, [adapter.element("div", { class: "agent-stream-text" }, [])], {
+      class: `agent-stream-item agent-trace-message agent-trace-${kind}`, role: false
+    }, "section");
   }
 
   private toolLabel(event: AgentStreamEvent): string {
@@ -263,30 +264,25 @@ export class AgentTraceView {
 
   private toolGlyph(kind: AgentToolKind = "command"): HTMLElement {
     const glyphs: Record<AgentToolKind, string> = {
-      command: "codicon-terminal",
-      file: "codicon-diff",
-      image: "codicon-file-media",
-      step: "codicon-circle-small-filled"
+      command: "terminal",
+      file: "diff",
+      image: "file-media",
+      step: "circle-small-filled"
     };
-    const icon = this.host.document.createElement("i");
-    icon.className = `agent-trace-glyph codicon ${glyphs[kind]}`;
-    return icon;
+    const icon = glyphs[kind];
+    return TraceIcon(domUiAdapter(this.host.document), icon, { class: `agent-trace-glyph codicon codicon-${icon}` });
   }
 
   private createToolGroup(parent: HTMLElement): AgentToolGroup {
-    const { document } = this.host;
-    const disclosure = document.createElement("details");
-    disclosure.className = "agent-stream-item agent-trace-event agent-trace-tool";
-    disclosure.open = false;
-    const summary = document.createElement("summary");
-    const chevron = document.createElement("i");
-    chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-    const label = document.createElement("span");
-    label.className = "agent-stream-summary-label";
-    const body = document.createElement("div");
-    body.className = "agent-trace-tool-body";
-    summary.append(this.toolGlyph(), label, chevron);
-    disclosure.append(summary, body);
+    const adapter = domUiAdapter(this.host.document);
+    const label = TraceDescription(adapter, [], { class: "agent-stream-summary-label" });
+    const summary = TraceCollapsibleTrigger(adapter, [this.toolGlyph(), label, TraceChevron(adapter)]);
+    // Command disclosures keep their native semantics as direct children.
+    const body = Trace(adapter, [], { class: "agent-trace-tool-body", role: false }, "div");
+    const content = TraceCollapsibleContent(adapter, [body]);
+    const disclosure = TraceCollapsible(adapter, summary, content, {
+      class: "agent-stream-item agent-trace-event agent-trace-tool"
+    }) as HTMLDetailsElement;
     parent.append(disclosure);
     return { disclosure, label, body, commands: [] };
   }
@@ -296,33 +292,20 @@ export class AgentTraceView {
     container: HTMLElement,
     group?: AgentToolGroup
   ): AgentToolCommand {
-    const { document } = this.host;
-    const command = document.createElement("details");
-    command.className = "agent-trace-command";
-    command.open = false;
-    const summary = document.createElement("summary");
-    const chevron = document.createElement("i");
-    chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-    const summaryLabel = document.createElement("span");
-    summaryLabel.className = "agent-trace-command-label";
-    summary.append(this.toolGlyph(event.toolKind), summaryLabel, chevron);
-    command.append(summary);
-    const body = document.createElement("pre");
-    body.className = "terminal-output agent-trace-command-body";
-    const code = document.createElement("code");
-    body.append(code);
-    const content = document.createElement("div");
-    content.className = "agent-trace-command-content";
-    content.append(body);
-    command.append(content);
+    const adapter = domUiAdapter(this.host.document);
+    const label = this.toolLabel(event);
+    const summaryLabel = TraceTitle(adapter, [label], { class: "agent-trace-command-label" });
+    const summary = TraceCollapsibleTrigger(adapter, [this.toolGlyph(event.toolKind), summaryLabel, TraceChevron(adapter)]);
+    const body = CodeBlock(adapter, "", { class: "terminal-output agent-trace-command-body" });
+    const content = TraceCollapsibleContent(adapter, [body], { class: "agent-trace-command-content" }, "div");
+    const command = TraceCollapsible(adapter, summary, content, { class: "agent-trace-command" });
     container.append(command);
     const item: AgentToolCommand = {
       body,
-      label: this.toolLabel(event),
+      label,
       summaryLabel,
       ...(group ? { group } : {})
     };
-    summaryLabel.textContent = item.label;
     if (group) {
       group.commands.push(item);
       this.updateGroupLabel(group);
@@ -361,12 +344,11 @@ export class AgentTraceView {
     if (!body.isConnected) return;
     const presentation = presentAgentMessage(body.dataset.raw ?? "");
     body.classList.toggle("agent-stream-result", presentation.structured);
+    const adapter = domUiAdapter(this.host.document);
     body.replaceChildren(...renderTurnMessage({
-      ...turnDomAdapter(this.host.document),
+      ...adapter,
       prose: (text) => {
-        const content = this.host.document.createElement("div");
-        content.className = "markdown-body";
-        content.innerHTML = this.host.markdown(text);
+        const content = Markdown(adapter, text, { trustedLinks: true, copyCode: true });
         // A streaming row is rewritten every frame; a half-written fence would
         // queue a diagram render and a tokenize per frame, so only a finished row
         // renders either.

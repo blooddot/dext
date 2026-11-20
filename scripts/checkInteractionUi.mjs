@@ -68,6 +68,7 @@ try {
   const theme = async (background, foreground, accent) => evaluate(`document.getElementById('theme').textContent=${JSON.stringify(`:root{--vscode-font-family:Segoe UI,sans-serif;--vscode-font-size:13px;--vscode-editor-background:${background};--vscode-sideBar-background:${background};--vscode-foreground:${foreground};--vscode-input-background:${background};--vscode-input-foreground:${foreground};--vscode-descriptionForeground:${foreground};--vscode-widget-border:${foreground};--vscode-focusBorder:${accent};--vscode-button-background:${accent};--vscode-button-foreground:${background};--vscode-list-inactiveSelectionBackground:${background};--vscode-errorForeground:${foreground}} body{background:${background};color:${foreground};padding:8px} main{min-width:0}`)}`);
   await theme("#181818", "#dddddd", "#66aaff");
   await evaluate(`window.mixed=InteractionUI.parseUiForm({title:'Settings',fields:[{id:'env',type:'select',label:'Environment',options:[{value:'dev',label:'Development',description:'Local environment'},'Production']},{id:'run',type:'radio',label:'Run checks?',options:['yes','no']},{id:'checks',type:'checkbox',label:'Checks',options:['types','tests'],allow_custom:true,required:false},{id:'text',type:'input',label:'Details',multiline:true,required:false}]}); view.updateUi(state('mixed',mixed));`);
+  await evaluate(`window.mixedSubmit=view.element.querySelector('button[type=submit]');`);
   assert.equal(await evaluate(`view.element.querySelector('button[type=submit]').disabled`), true);
   await evaluate(`view.element.querySelector('.interaction-select > button').click()`);
   assert.equal(await evaluate(`document.querySelectorAll(':popover-open').length`), 1);
@@ -77,6 +78,7 @@ try {
   await evaluate(`view.element.querySelector('input[type=checkbox]').focus()`); await key(" ", 32);
   await fillField(`view.element.querySelector('.interaction-reference-field textarea')`, "  notes", true);
   assert.equal(await evaluate(`view.element.querySelector('button[type=submit]').disabled`), false);
+  assert.equal(await evaluate(`view.element.querySelector('button[type=submit]')===mixedSubmit`), true, "validation refresh retains the original action button");
   await evaluate(`view.element.querySelector('.interaction-select > button').click();view.suspend();`);
   assert.equal(await evaluate(`document.querySelectorAll(':popover-open').length`), 0);
   await evaluate(`view.element.remove();view=createView();view.updateUi(state('mixed',mixed));`);
@@ -98,6 +100,15 @@ try {
   assert.equal(await evaluate(`view.element.querySelectorAll('form').length`), 0, "replayed waiting state cannot revive a submitted form");
   assert.equal(await evaluate(`view.element.textContent.includes('Submitted')`), true);
   await evaluate(`document.getElementById('previous').focus();window.dropdown=InteractionUI.uiCallForm('select',{label:'Targets',options:['one','two'],multiple:true});view.updateUi(state('dropdown',dropdown));`);
+  await evaluate(`window.modal=document.querySelector('dialog[open]');document.getElementById('previous').focus();`);
+  assert.equal(await evaluate(`modal.contains(document.activeElement)`), true, "native modality prevents focusing the background");
+  for (const modifiers of [0, 8]) {
+    for (let i = 0; i < 7; i++) {
+      await key("Tab", 9, modifiers);
+      assert.equal(await evaluate(`document.activeElement===document.body || modal.contains(document.activeElement)`), true,
+        "Tab and Shift+Tab leave background controls inert");
+    }
+  }
   await evaluate(`document.querySelector('dialog[open] .interaction-select > button').click()`);
   await key(" ", 32); await key("ArrowDown", 40); await key(" ", 32);
   assert.equal(await evaluate(`document.querySelectorAll('[role=option][aria-selected=true]').length`), 2);
@@ -105,6 +116,14 @@ try {
   const box = JSON.parse(bounds); assert.ok(box.left >= 0 && box.right <= 320 && box.top >= 0 && box.bottom <= 640);
   await key("Escape", 27);
   assert.equal(await evaluate(`document.querySelectorAll('dialog[open]').length`), 1);
+  assert.equal(await evaluate(`document.activeElement===modal.querySelector('.interaction-select > button')&&document.activeElement.getAttribute('aria-expanded')==='false'`), true);
+  await evaluate(`modal.querySelector('.interaction-fullscreen-toggle').click();modal.querySelector('.interaction-select > button').click();`);
+  const beforeEscape = await evaluate(`replies.length`);
+  await key("Escape", 27);
+  assert.equal(await evaluate(`modal.open&&modal.classList.contains('interaction-fullscreen')&&!modal.querySelector(':popover-open')`), true, "Select dismisses before fullscreen");
+  await key("Escape", 27);
+  assert.equal(await evaluate(`modal.open&&!modal.classList.contains('interaction-fullscreen')`), true, "fullscreen dismisses before the modal");
+  assert.equal(await evaluate(`replies.length`), beforeEscape);
   await key("Escape", 27);
   assert.equal(await evaluate(`replies.at(-1).result.status`), "cancelled");
   assert.equal(await evaluate(`document.activeElement.id`), "previous");

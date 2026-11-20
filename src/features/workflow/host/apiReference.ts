@@ -97,10 +97,14 @@ export function parseApiReference(text: string): ApiReferenceCatalog | undefined
   if (!isRecord(value) || value.version !== API_REFERENCE_VERSION || !Array.isArray(value.modules)) return undefined;
   const modules = value.modules.map(parseModule).filter((module): module is ApiReferenceModule => module !== undefined);
   if (!modules.length) return undefined;
+  const dext = Array.isArray(value.dext)
+    ? value.dext.map(parseMember).filter((member): member is ApiReferenceMember => member !== undefined)
+    : [];
   return {
     version: API_REFERENCE_VERSION,
     typescript: typeof value.typescript === "string" ? value.typescript : "",
-    modules
+    modules,
+    ...(dext.length ? { dext } : {})
   };
 }
 

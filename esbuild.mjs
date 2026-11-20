@@ -1,8 +1,8 @@
 import * as esbuild from "esbuild";
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { buildMarkdownStyles } from "./scripts/buildMarkdownStyles.mjs";
-import { writeShippedDeclaration } from "./scripts/generateDextTypes.mjs";
-import { writeApiReference } from "./scripts/generateApiReference.mjs";
+import { buildDeclaration, writeShippedDeclaration } from "./scripts/generateDextTypes.mjs";
+import { buildApiReferenceText, writeApiReference } from "./scripts/generateApiReference.mjs";
 import { buildStructureIndexAssets } from "./scripts/buildStructureIndexAssets.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -14,11 +14,12 @@ await buildStructureIndexAssets();
 // The generated `dext` declaration ships with the extension as `dist/dext.d.ts`,
 // so a workspace never carries its own copy of the API surface; `npm run check`
 // proves the shipped file still matches the registry.
-await writeShippedDeclaration();
-// The Node and JavaScript reference the APIs page lists is generated from the
+const dextDeclaration = await buildDeclaration();
+await writeShippedDeclaration(dextDeclaration);
+// The API reference is generated from the
 // declaration files themselves, so its signatures and descriptions stay the ones
 // the editor resolves; `npm run check` proves the shipped file matches them too.
-await writeApiReference();
+await writeApiReference(await buildApiReferenceText(dextDeclaration));
 const contexts = await Promise.all([
   esbuild.context({
     entryPoints: {

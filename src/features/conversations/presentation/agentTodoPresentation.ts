@@ -1,9 +1,12 @@
 import type { AgentStreamEvent, AgentTodoItem, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
-import { escapeHtml } from "../../../shared/lib/html.js";
-import { dextMarkdown } from "../../../shared/lib/markdown.js";
+import {
+  Badge, Markdown, Spinner, Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent,
+  TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle
+} from "../../../shared/lib/ui/traceComponents.js";
+import type { MarkupAdapter } from "../../../shared/lib/ui/renderAdapter.js";
+import { htmlUiAdapter } from "../../../shared/lib/ui/htmlUiAdapter.js";
+import { Checkbox } from "../../../shared/lib/ui/nativeControls.js";
 
-// Live Todo rows and restored history use the same Markdown interpretation.
-const todoMarkdown = dextMarkdown();
 // Plan tasks end with `verify: <check>`. Splitting on the last marker keeps the
 // task readable as a task instead of one long line.
 // shortcut: a task whose prose mentions `verify:` also splits there, until
@@ -51,51 +54,95 @@ export function agentTodoProgress(items: readonly AgentTodoItem[], running: bool
 }
 
 export function agentTodoRows(items: readonly AgentTodoItem[], running: boolean): string {
-  const rows: string[] = [];
+  return buildAgentTodoRows(htmlUiAdapter, items, running).map((row) => row.html).join("");
+}
+
+export function buildAgentTodoRows<E>(
+  adapter: MarkupAdapter<E>, items: readonly AgentTodoItem[], running: boolean
+): E[] {
+  const rows: E[] = [];
   for (let index = 0; index < items.length;) {
     const group = items[index]!.group;
     if (group === undefined) {
-      rows.push(todoRow(items[index]!, running));
+      rows.push(todoRow(adapter, items[index]!, running));
       index++;
       continue;
     }
     let end = index + 1;
     while (end < items.length && items[end]!.group === group) end++;
-    rows.push(phaseRow(group, items.slice(index, end), running));
+    rows.push(phaseRow(adapter, group, items.slice(index, end), running));
     index = end;
   }
-  return rows.join("");
+  return rows;
 }
 
 /** A plan phase shows how many of its steps are done and keeps the steps one
  * click away, so a failure is visible without scanning every task up front. */
-function phaseRow(group: string, steps: readonly AgentTodoItem[], running: boolean): string {
+function phaseRow<E>(adapter: MarkupAdapter<E>, group: string, steps: readonly AgentTodoItem[], running: boolean): E {
   const done = steps.filter((step) => step.status === "completed").length;
   const state = done === steps.length ? "completed" : steps.some((step) => step.status === "in_progress") ? "in_progress" : "pending";
   const active = state === "in_progress" && running;
-  return `<li class="agent-todo-group" data-status="${state}"><details><summary class="agent-todo-item${active ? " active" : ""}" data-status="${state}"><i class="disclosure-chevron codicon codicon-chevron-right" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(group)}</div><span class="agent-todo-status">${done}/${steps.length}</span></summary><ul class="agent-todo-list">${steps.map((step) => todoRow(step, running)).join("")}</ul></details></li>`;
+  const summary = TraceCollapsibleTrigger(adapter, [
+    TraceChevron(adapter),
+    Markdown(adapter, group, { trustedLinks: true, attributes: { class: "agent-todo-text markdown-body" } }),
+    TraceDescription(adapter, [`${done}/${steps.length}`], { class: "agent-todo-status" })
+  ], { class: `agent-todo-item${active ? " active" : ""}`, "data-status": state });
+  const content = TraceCollapsibleContent(adapter, [
+    Trace(adapter, steps.map((step) => todoRow(adapter, step, running)), { class: "agent-todo-list" })
+  ]);
+  return TraceLine(adapter, [TraceCollapsible(adapter, summary, content)], { class: "agent-todo-group", "data-status": state });
 }
 
-function todoRow(item: AgentTodoItem, running: boolean): string {
+function todoRow<E>(adapter: MarkupAdapter<E>, item: AgentTodoItem, running: boolean): E {
   const verify = TASK_VERIFY.exec(item.text);
   const task = verify?.[1] ?? item.text;
   const active = item.status === "in_progress" && running;
   const label = item.status === "completed" ? "Completed" : active ? "In progress"
     : item.status === "in_progress" ? "Paused" : "Pending";
-  const icon = item.status === "completed" ? "check" : active ? "loading codicon-modifier-spin"
+  const icon = item.status === "completed" ? "check"
     : item.status === "in_progress" ? "debug-pause" : "circle-large-outline";
-  return `<li class="agent-todo-item${active ? " active" : ""}" data-status="${item.status}"><i class="codicon codicon-${icon}" aria-hidden="true"></i><div class="agent-todo-text markdown-body">${todoMarkdown.render(task)}${verify ? `<div class="agent-todo-verify">verify: ${escapeHtml(verify[2]!)}</div>` : ""}</div><span class="agent-todo-status">${label}</span></li>`;
+  const verification = verify ? [TraceDescription(adapter, [`verify: ${verify[2]}`], { class: "agent-todo-verify" }, "div")] : [];
+  return TraceLine(adapter, [
+    active ? Spinner(adapter) : TraceIcon(adapter, icon),
+    Markdown(adapter, task, { trustedLinks: true, attributes: { class: "agent-todo-text markdown-body" } }, verification),
+    Badge(adapter, label, { class: "agent-todo-status" })
+  ], { class: `agent-todo-item${active ? " active" : ""}`, "data-status": item.status });
 }
 
 export function renderAgentTodos(items: readonly AgentTodoItem[], acceptance: readonly PlanAcceptanceItem[] = []): string {
   if (!items.length && !acceptance.length) return "";
+  return buildAgentTodoSection(htmlUiAdapter, items, acceptance, { interactive: false }).element.html;
+}
+
+export function buildAgentTodoSection<E>(
+  adapter: MarkupAdapter<E>, items: readonly AgentTodoItem[], acceptance: readonly PlanAcceptanceItem[],
+  options: { interactive: boolean }
+): { element: E; meta: E; list: E; acceptanceSection: E; acceptanceMeta: E; acceptanceList: E } {
+  const { interactive } = options;
   const progress = agentTodoProgress(items, false);
-  // History is read-only, so its checkboxes are rendered disabled rather than
-  // dropped: the confirmed state stays visible without a control to click.
-  const acceptanceHtml = acceptance.length
-    ? `<section class="agent-acceptance" data-acceptance-progress="${escapeHtml(agentAcceptanceProgressLabel(acceptance))}"><div class="agent-acceptance-header"><i class="codicon codicon-checklist" aria-hidden="true"></i><span>Acceptance</span><span class="turn-section-meta">${escapeHtml(agentAcceptanceProgressLabel(acceptance))}</span></div><ul class="agent-acceptance-list">${agentAcceptanceRows(acceptance, { interactive: false })}</ul></section>`
-    : "";
-  return `<details class="turn-section agent-todos"${progress.complete && acceptance.every((item) => item.checked) ? "" : " open"}><summary><i class="disclosure-chevron codicon codicon-chevron-right"></i><span>Todo</span><span class="turn-section-meta disclosure-meta">${progress.label}</span></summary><ul class="turn-section-body agent-todo-list">${agentTodoRows(items, false)}</ul>${acceptanceHtml}</details>`;
+  const acceptanceLabel = agentAcceptanceProgressLabel(acceptance);
+  const meta = TraceDescription(adapter, [progress.label], {
+    class: "turn-section-meta disclosure-meta", ...(interactive ? { role: "status", "aria-live": "polite" } : {})
+  });
+  const summary = TraceCollapsibleTrigger(adapter, [TraceChevron(adapter), TraceTitle(adapter, ["Todo"]), meta]);
+  const list = Trace(adapter, buildAgentTodoRows(adapter, items, false), { class: "turn-section-body agent-todo-list" });
+  const acceptanceMeta = TraceDescription(adapter, [acceptanceLabel], { class: "turn-section-meta" });
+  const acceptanceHeader = adapter.element("div", { class: "agent-acceptance-header" }, [
+    TraceIcon(adapter, "checklist"), TraceTitle(adapter, ["Acceptance"]), acceptanceMeta
+  ]);
+  const acceptanceList = Trace(adapter, buildAgentAcceptanceRows(adapter, acceptance, options), { class: "agent-acceptance-list" });
+  const acceptanceSection = adapter.element("section", {
+    class: "agent-acceptance",
+    ...(interactive ? { hidden: !acceptance.length } : { "data-acceptance-progress": acceptanceLabel })
+  }, [acceptanceHeader, acceptanceList]);
+  const visible = items.length > 0 || acceptance.length > 0;
+  const content = TraceCollapsibleContent(adapter, interactive || acceptance.length ? [list, acceptanceSection] : [list]);
+  const element = TraceCollapsible(adapter, summary, content, {
+    class: `${interactive ? "output-turn-section " : ""}turn-section agent-todos`,
+    hidden: interactive && !visible,
+    open: visible && (!progress.complete || acceptance.some((item) => !item.checked))
+  });
+  return { element, meta, list, acceptanceSection, acceptanceMeta, acceptanceList };
 }
 
 /** Each acceptance row pairs a native checkbox with its own label; the `for`
@@ -105,11 +152,24 @@ export function agentAcceptanceRows(
   items: readonly PlanAcceptanceItem[],
   options: { interactive: boolean }
 ): string {
+  return buildAgentAcceptanceRows(htmlUiAdapter, items, options).map((row) => row.html).join("");
+}
+
+export function buildAgentAcceptanceRows<E>(
+  adapter: MarkupAdapter<E>, items: readonly PlanAcceptanceItem[], options: { interactive: boolean }
+): E[] {
   return items.map((item) => {
     const elementId = `acceptance-${item.id}`;
-    const disabled = options.interactive ? "" : " disabled";
-    return `<li class="agent-acceptance-item" data-status="${item.checked ? "completed" : "pending"}"><input class="agent-acceptance-check" type="checkbox" id="${escapeHtml(elementId)}" data-acceptance-id="${escapeHtml(item.id)}"${item.checked ? " checked" : ""}${disabled}><label class="agent-acceptance-text markdown-body" for="${escapeHtml(elementId)}">${todoMarkdown.render(item.text)}</label></li>`;
-  }).join("");
+    return TraceLine(adapter, [
+      Checkbox(adapter, {
+        class: "agent-acceptance-check", id: elementId,
+        "data-acceptance-id": item.id, checked: item.checked, disabled: !options.interactive
+      }),
+      Markdown(adapter, item.text, {
+        trustedLinks: true, tag: "label", attributes: { class: "agent-acceptance-text markdown-body", for: elementId }
+      })
+    ], { class: "agent-acceptance-item", "data-status": item.checked ? "completed" : "pending" });
+  });
 }
 
 /** The acceptance header count is its own denominator: it never moves the

@@ -77,7 +77,7 @@ Expressions are ordinary TypeScript. Dext is not involved: the kernel evaluates 
 
 `Math`, `JSON`, `Number`, `String`, `Array`, `Object` and `Date` are the standard built-ins, and there is no Dext-specific list of methods or helpers to learn. A few forms from the removed language have no direct equivalent: use a template literal instead of an f-string or `%` formatting, `Math.floor` instead of `//`, an array instead of a tuple, and `Number(value)` instead of `int(value)` or `float(value)`.
 
-A plain assignment is not a workflow step. `ask`, `plan`, `agent`, `template` and `skill` accept `echo`: without `echo: true` their step stays out of Output, while the caller still receives the result. The other calls — `ui.*`, `terminal`, `apply` and `mcp.*` — declare no `echo` field, so they never produce an Output card. `console.log` and `console.error` add process-output steps that carry text only, with no invocation and no duration.
+A plain assignment is not a workflow step. `ask`, `plan`, `agent`, `template` and `skill` accept `echo`: without `echo: true` their step stays out of Output, while the caller still receives the result. `ui.render` appends its read-only component tree to Output by default. Interactive UI calls, `terminal`, `apply` and `mcp.*` keep their results out of Output. `console.log` and `console.error` add process-output steps that carry text only, with no invocation and no duration.
 
 The old interpreter's resource limits (`while` iteration count, `range` size, folded items, import depth) went with the interpreter. Standard Node and TypeScript limits apply.
 
@@ -243,7 +243,7 @@ if (confirmation.confirmed) {
 
 The selected value, confirmation state, or input text is also rendered in Output and History after the interaction completes.
 
-Every API output implements the shared `Result` contract. The result kinds are exactly nine — `ask`, `plan`, `agent`, `template`, `apply`, `terminal`, `skill`, `ui` and `mcpRaw` — plus the generated `mcp.<server>.<tool>` kind for structured MCP tools. `ask`, `skill` and `template` are three names for the same `{ kind, text }` shape, and `PatchResult` is not a result kind: it is the shape of `AgentResult.patch`. Result variables and fields such as `AgentResult.patch` are typed by the generated declaration, so completion and hover work in the composer and in `.dext/api/*.ts`. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings.
+APIs that return a result use the shared `Result` contract. The public result kinds are `ask`, `plan`, `agent`, `template`, `apply`, `terminal`, `skill`, `ui` and `mcpRaw`, plus the generated `mcp.<server>.<tool>` kind for structured MCP tools. `ask`, `skill` and `template` are three names for the same `{ kind, text }` shape, and `PatchResult` is not a result kind: it is the shape of `AgentResult.patch`. Result variables and fields such as `AgentResult.patch` are typed by the generated declaration, so completion and hover work in the composer and in `.dext/api/*.ts`. Agent CLIs receive prior results as versioned `dext-result` JSON envelopes instead of interpolated strings.
 
 `ask` is always read-only. `skill` is read-only by default and takes the same scope as `agent` when it is called with `apply: true`, because command execution is only granted by the write scopes. `agent` and `plan` use the composer's `Workspace write` or `Full access` scope; in a trusted local workspace, `Workspace write` limits edits to the selected workspace. Code mode has no permission picker, so typed `agent({ apply: true })` calls use `Full access` by default. Dext itself can always persist Plan documents in its managed global storage. Both APIs default `workspace` to the current project root.
 
@@ -417,7 +417,7 @@ API, Rule, and MCP deletion removes only the selected file. Built-in and read-on
 
 Import does not support private repositories, credentials, ports, query strings, GitLab or Bitbucket, npm packages, binary support files (they are skipped with a warning), or executable hooks. A command-only repository or a direct command-file URL is not a Skill and is rejected.
 
-Rules are ordered policy files under `.dext/rules/`, and a rule path is resolved only below that directory. `.dext/rules/plan.md` replaces the default plan-document instruction used by Plan mode. `agent`, `ask`, `plan` and `template` can also be scoped with `skills` and `rules` for a single call — `await agent({ input: "…", rules: ["review.md"] })`. They are `internal` because they are never forwarded to a provider as control fields, and the generated declaration still lists them on exactly these four APIs, because a caller writes them. Dext loads selected skills first and rules last, so the call's narrow rules constrain the general skill workflow, and their contents are injected into the Agent instruction. `ui.*` waits for a semantic user answer and resumes the same workflow.
+Rules are ordered policy files under `.dext/rules/`, and a rule path is resolved only below that directory. `.dext/rules/plan.md` replaces the default plan-document instruction used by Plan mode. `agent`, `ask`, `plan` and `template` can also be scoped with `skills` and `rules` for a single call — `await agent({ input: "…", rules: ["review.md"] })`. They are `internal` because they are never forwarded to a provider as control fields, and the generated declaration still lists them on exactly these four APIs, because a caller writes them. Dext loads selected skills first and rules last, so the call's narrow rules constrain the general skill workflow, and their contents are injected into the Agent instruction. Interactive UI calls wait for a semantic user answer and resume the same workflow.
 
 ## Custom result types
 
@@ -457,7 +457,9 @@ Old `.dx` checkpoints from earlier versions are not read and cannot be resumed; 
 
 ## UI interactions and forms
 
-All UI calls wait for the user's answer and produce one workflow step. `presentation: "inline"` places the interaction above Process in its conversation; `"dialog"` uses a dialog. Every API defaults to `"dialog"` except `ui.form`, which defaults to `"inline"`. Waiting pauses only the calling workflow. Stopping the task interrupts the wait and skips subsequent steps.
+Interactive UI calls wait for the user's answer and produce one workflow step. `presentation: "inline"` places the interaction above Process in its conversation and `"dialog"` uses a dialog. `ui.form` defaults to `"inline"`. The other interactive calls default to `"dialog"`. Waiting pauses only the calling workflow. Stopping the task interrupts the wait and skips subsequent steps.
+
+`await ui.render({ nodes })` records a read-only `UiNode[]` in the current turn's Output and resolves to `void`. Nodes display in array order and replay in History. The tree supports up to 32 levels, 1,000 nodes and 256 KiB of UTF-8 JSON.
 
 ```ts
 ui.select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>

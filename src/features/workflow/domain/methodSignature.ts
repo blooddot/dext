@@ -47,6 +47,11 @@ export function methodResultType(method: Pick<RegisteredCallable, "id" | "output
     ?? `${method.output.kind.slice(0, 1).toUpperCase()}${method.output.kind.slice(1)}Result`;
 }
 
+/** Display calls record a result in the turn and resolve without returning it. */
+export function methodReturnType(method: Pick<RegisteredCallable, "id" | "output">): string {
+  return method.output.kind === "view" ? "void" : methodResultType(method);
+}
+
 /**
  * The methods that take free-form conversation input plus the `skills` and `rules` that
  * scope a single call.

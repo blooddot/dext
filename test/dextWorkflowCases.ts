@@ -6,6 +6,7 @@ import { ExecutionCancelledError } from "../src/shared/protocol/executionErrors.
 import type { InvocationAst, RuntimeResponse } from "../src/shared/contracts/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
 import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
+import { uiViewResultSchema } from "../src/shared/contracts/uiView.js";
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -44,6 +45,42 @@ export function workflowCases(runnerDirectory: string): void {
       hosts.push(kernel);
       return { root, api, kernel };
     }
+
+    it("records two read-only display calls in stream order and replays them once on Continue", { timeout: 30000 }, async () => {
+      const calls: string[] = [];
+      let fail = true;
+      const { kernel } = await setup("", async (call) => {
+        calls.push(call.method);
+        if (call.method === "ui.render") return {
+          ...response(call), result: uiViewResultSchema.parse({ kind: "view", nodes: call.arguments[0]?.value })
+        };
+        if (fail) throw new Error("resume after displays");
+        return response(call);
+      });
+      const source = [
+        'import { ask, ui } from "dext";',
+        'const first = await ui.render({ nodes: [{ type: "Text", text: "one" }] });',
+        'console.log("between", first);',
+        'const second = await ui.render({ nodes: [{ type: "Code", text: "two" }] });',
+        'if (second !== undefined) throw new Error("ui.render must resolve void");',
+        'await ask({ input: "continue here" });'
+      ].join("\n");
+      let log: readonly DextReplayEntry[] = [];
+      await expect(kernel.runSource(source, { onCallLog: (entries) => { log = entries; } })).rejects.toThrow("resume after displays");
+      expect(log.map(({ method }) => method)).toEqual(["ui.render", "ui.render"]);
+      fail = false;
+      kernel.kill();
+      const continued = await kernel.runSource(source, { resume: log });
+      expect(calls).toEqual(["ui.render", "ui.render", "ask", "ask"]);
+      expect(continued.steps?.map((step) => step.method)).toEqual(["ui.render", "stdout", "ui.render", "ask"]);
+      expect(continued.steps?.[1]?.stream?.text).toBe("between undefined\n");
+      expect(continued.steps?.filter((step) => step.method === "ui.render").map((step) => ({
+        visible: step.quiet !== true, result: step.response?.result
+      }))).toEqual([
+        { visible: true, result: { kind: "view", nodes: [{ type: "Text", text: "one" }] } },
+        { visible: true, result: { kind: "view", nodes: [{ type: "Code", text: "two" }] } }
+      ]);
+    });
 
     it.each(["stdout", "stderr"] as const)(
       "drains large %s writes before subsequent API calls in an un-awaited workflow", { timeout: 30000 }, async (channel) => {

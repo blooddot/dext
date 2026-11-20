@@ -1,18 +1,17 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runLabChecks } from './monaco-ref-lab/check.mjs';
+import { runWebviewChecks } from './monaco-ref-lab/check.mjs';
+import { readSidebarBody } from './monaco-ref-lab/serve.mjs';
 
 // Regression coverage for the conversation scroll port. A streamed batch can
 // grow #result-body in the same frame a reader drags its scrollbar, so the
 // position has to be re-measured instead of remembering the end from an earlier
 // frame, and no scroll event the app did not ask for may cancel that
 // correction.
-await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => {
-  const template = await readFile('src/app/sidebarProvider.ts', 'utf8');
-  const body = template.slice(template.indexOf('<body>') + 6, template.lastIndexOf('</body>')).replace(/<script[\s\S]*?<\/script>/g, '');
-  await evaluate(`lab.production.destroy();document.querySelectorAll('link[rel="stylesheet"],style').forEach(el=>el.remove());
-    document.body.innerHTML=${JSON.stringify(body)};
+await runWebviewChecks(async ({ evaluate, settle, send, click, key, artifacts }) => {
+  const body = await readSidebarBody();
+  await evaluate(`document.body.innerHTML=${JSON.stringify(body)};
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}
     window.acquireVsCodeApi=()=>({postMessage:()=>{},getState:()=>({}),setState:()=>{}});
     window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
@@ -31,7 +30,7 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
         overflowAnchor:getComputedStyle(b).overflowAnchor};};
     window.track=()=>{const b=document.getElementById('result-body');const r=b.getBoundingClientRect();
       const bar=b.offsetWidth-b.clientWidth;const h=b.clientHeight;const thumb=Math.max(20,h*b.clientHeight/Math.max(1,b.scrollHeight));
-      return {x:r.right-bar/2,right:r.right,bottom:r.bottom,bar,h,
+      return {x:r.right-bar/2,left:r.left,right:r.right,bottom:r.bottom,bar,h,
         thumbTop:r.top+(h-thumb)*b.scrollTop/Math.max(1,b.scrollHeight-b.clientHeight),thumbHeight:thumb};};`);
   await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 900, deviceScaleFactor: 1, mobile: false });
   await settle();
@@ -60,7 +59,8 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
   };
   const wheel = async (deltaY) => {
     const geometry = await evaluate('track()');
-    await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: geometry.right - 40, y: geometry.bottom - 40, deltaX: 0, deltaY });
+    // The right side can be covered by the sibling jump control while parked.
+    await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: geometry.left + 4, y: geometry.bottom - 40, deltaX: 0, deltaY });
     await settle();
     await settle();
   };
@@ -328,7 +328,7 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
     if(!row)return 'no-row';
     return JSON.stringify({inputSection:Boolean(row.querySelector('[data-turn-section="input"]')),
       nameHidden:row.querySelector('.output-turn-title-name')?.hidden,
-      prompt:row.querySelector('.output-turn-prompt')?.textContent});})()`);
+      prompt:row.querySelector('.output-turn-prompt')?.innerText});})()`);
   const codeTurn = JSON.parse(turnRow);
   assert.equal(codeTurn.inputSection, false, 'the turn repeats no Input section: ' + turnRow);
   assert.equal(codeTurn.nameHidden, true, 'the prompt itself is the row label: ' + turnRow);
@@ -350,4 +350,4 @@ await runLabChecks(async ({ evaluate, settle, send, click, key, artifacts }) => 
 
   const shot = await send('Page.captureScreenshot');
   await writeFile(join(artifacts, 'conversation-scroll.png'), Buffer.from(shot.data, 'base64'));
-}, false);
+});
