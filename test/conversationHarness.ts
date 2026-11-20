@@ -160,8 +160,9 @@ export function createConversationHarness(options: ConversationHarnessOptions = 
       executed: async (sessionId, turnId, response) => {
         messages.push({ type: "execution", sessionId, turnId, response });
       },
-      failed: async (sessionId, turnId, message, planOutcome) => {
-        messages.push({ type: "executionFailed", sessionId, turnId, message, ...(planOutcome ? { planOutcome } : {}) });
+      failed: async (sessionId, turnId, message, planOutcome, response) => {
+        messages.push({ type: "executionFailed", sessionId, turnId, message,
+          ...(planOutcome ? { planOutcome } : {}), ...(response ? { response } : {}) });
       },
       finished: async (sessionId, turnId) => {
         messages.push({ type: "executing", sessionId, value: false, turnId });

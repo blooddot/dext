@@ -12,6 +12,8 @@ import { DextRuntime } from "../src/features/workflow/host/runtime.js";
 import type { ExecutionMetadata, InvocationAst, RuntimeResponse } from "../src/shared/contracts/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
 import { workflowCases } from "./dextWorkflowCases.js";
+import { conversation, createConversationHarness } from "./conversationHarness.js";
+import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 import { UI_VIEW_MAX_BYTES, UI_VIEW_MAX_NODES } from "../src/shared/contracts/uiView.js";
 
 const runnerDirectory = resolve("src", "runner");
@@ -270,6 +272,84 @@ describe("Dext kernel host", () => {
     const diagnostics = result.steps?.flatMap((step) => step.stream ? [step.stream.text] : []).join("");
     expect(diagnostics?.match(new RegExp(`UI tree exceeds ${UI_VIEW_MAX_NODES} nodes`, "g"))).toHaveLength(1);
     expect(diagnostics?.match(new RegExp(`UI tree exceeds ${UI_VIEW_MAX_BYTES} UTF-8 bytes`, "g"))).toHaveLength(3);
+  });
+
+  it("persists displays in script order when the kernel reports a later failure", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const runtime = builtinRuntime(root);
+    const kernel = host(root, (invocation, metadata) => runtime.execute(invocation, [], metadata));
+    const h = createConversationHarness({
+      executeInput: (source, execution, run) => kernel.runSource(source, { ...run, execution })
+    });
+    try {
+      const session = conversation("display-failure");
+      await h.seed([session]);
+      await h.coordinator.execute(h.controller.active(), "code", [
+        'import { ui } from "dext";',
+        'await ui.render({ nodes: [{ type: "Text", text: "First display" }] });',
+        'console.log("Between displays (stdout)");',
+        'console.error("Between displays (stderr)");',
+        'await ui.render({ nodes: [{ type: "Text", text: "Second display" }] });',
+        'throw new Error("Script stopped <here>");'
+      ].join("\n"));
+      const record = (await h.history.session(session.id))!.turns[0]!;
+      expect(record.error).toContain("Script stopped <here>");
+      expect(record.response?.steps?.map((step) => step.method)).toEqual(["ui.render", "stdout", "stderr", "ui.render"]);
+      expect(h.messages).toContainEqual(expect.objectContaining({
+        type: "executionFailed", sessionId: session.id, response: record.response
+      }));
+      const html = renderHistoryRecord(record, session.id);
+      expect(html).toMatch(/data-script-view[^]*First display[^]*Between displays \(stdout\)[^]*Between displays \(stderr\)[^]*data-script-view[^]*Second display[^]*<pre class="error">[^]*Script stopped &lt;here&gt;/);
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("keeps recorded output when a stopped Code turn is reopened", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    const runtime = builtinRuntime(root);
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => { started = resolve; });
+    const kernel = host(root, (invocation, metadata) => {
+      if (invocation.method === "ask") {
+        const signal = metadata.signal!;
+        return new Promise((_, reject) => {
+          signal.addEventListener("abort", () => reject(new ExecutionCancelledError()), { once: true });
+          started();
+        });
+      }
+      return runtime.execute(invocation, [], metadata);
+    });
+    const h = createConversationHarness({
+      executeInput: (source, execution, run) => kernel.runSource(source, { ...run, execution, signal: execution.signal! })
+    });
+    const reopened = createConversationHarness();
+    try {
+      const session = conversation("display-cancelled");
+      await h.seed([session]);
+      const running = h.coordinator.execute(h.controller.active(), "code", [
+        'import { ask, ui } from "dext";',
+        'await ui.render({ nodes: [{ type: "Text", text: "Display before Stop" }] });',
+        'await ask({ input: "Wait for Stop" });'
+      ].join("\n"));
+      await Promise.race([waiting, running.then(() => { throw new Error("The turn finished before Stop."); })]);
+      expect(h.coordinator.abort(session.id)).toBe(true);
+      await running;
+      const saved = (await h.history.session(session.id))!;
+      const record = saved.turns[0]!;
+      expect(record.error).toBe("Execution was cancelled.");
+      expect(record.response?.steps?.map((step) => step.method)).toEqual(["ui.render"]);
+      expect(h.coordinator.takeContinuation(session.id, record.id)).toBeUndefined();
+      expect(h.messages).toContainEqual(expect.objectContaining({
+        type: "executionFailed", sessionId: session.id, message: record.error, response: record.response
+      }));
+      await reopened.seed([saved]);
+      const restored = reopened.controller.active().turns[0]!;
+      expect(renderHistoryRecord(restored, session.id)).toMatch(/data-script-view[^]*Display before Stop[^]*<pre class="error">[^]*Execution was cancelled\./);
+    } finally {
+      reopened.dispose();
+      h.dispose();
+    }
   });
 
   it("resolves dext/api/<id> against .dext/api and any configured root", { timeout: 30000 }, async () => {

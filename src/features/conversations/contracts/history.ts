@@ -225,6 +225,7 @@ export interface ConversationHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    turnContext?: TurnRecordContext
+    turnContext?: TurnRecordContext,
+    response?: InputExecutionResponse
   ): Promise<DextHistoryRecord>;
 }

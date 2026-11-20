@@ -1678,15 +1678,18 @@ function renderInputError(message: unknown): void {
   elements.inputError.hidden = false;
 }
 
-function renderOutputError(message: unknown): void {
+function renderOutputError(message: unknown, response?: InputExecutionResponse): void {
   const text = message instanceof Error ? message.message : String(message);
   const target = transcript.active?.output ?? elements.result;
-  target.replaceChildren();
+  if (response) renderResult(response);
+  else {
+    target.replaceChildren();
+    transcript.active?.setOutputCopy?.("");
+  }
   const summary = document.createElement("pre");
   summary.className = "error-output";
   summary.textContent = text;
   target.append(summary);
-  transcript.active?.setOutputCopy?.("");
   elements.resultSection.classList.remove("hidden");
 }
 
@@ -2013,7 +2016,7 @@ function renderStoredTurn(record: DextHistoryRecord, turn: OutputTurnElements, s
   // pass an empty list so the same requirement is not offered twice.
   turn.todos.setAcceptance(acceptanceForTurn(sessionId, turn));
   turn.processDisclosure.open = false;
-  if (record.error) renderOutputError(record.error);
+  if (record.error) renderOutputError(record.error, response);
   else if (response) renderResult(response);
   else if (record.output) {
     turn.output.append(jsonOutput(record.output));
@@ -2673,7 +2676,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     if (transcript.active?.planExecutionStatus && !transcript.active.planExecutionStatus.hidden) {
       setPlanLabel(transcript.active, message.sessionId, [], message.message, message.planOutcome);
     }
-    renderOutputError(message.message);
+    renderOutputError(message.message, message.response);
   }
   if (message.type === "agentEvent" && message.sessionId === browser.activeId) {
     renderAgentEvent(message.event);

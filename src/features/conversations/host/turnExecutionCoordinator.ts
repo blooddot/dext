@@ -11,6 +11,7 @@ import type {
   UiInteraction
 } from "../../../shared/contracts/types.js";
 import type { DextReplayEntry } from "../../../runner/dextResumeCache.js";
+import { DextRunError, ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
 import type {
   ConversationHistoryStore,
   DextHistoryRecord,
@@ -486,7 +487,8 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         planExecution.planOutcome = { status: "cancelled", reason: "Stopped by user. Plan progress is preserved.", rounds: planRun?.rounds ?? 0 };
         outcome = planExecution.planOutcome;
       }
-      const turn = await this.options.history.addFailure(source, events, error, sessionId, mode, turnId, await recordContext());
+      const response = error instanceof DextRunError || error instanceof ExecutionCancelledError ? error.response : undefined;
+      const turn = await this.options.history.addFailure(source, events, error, sessionId, mode, turnId, await recordContext(), response);
       saved = turn;
       // A failed Code turn keeps the calls it managed to make, so Continue replays
       // them instead of repeating work that already succeeded. A stop is not a
@@ -500,7 +502,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       await this.options.sessions.saveProviderSessions(session);
       this.options.sessions.recordTurn(sessionId, turn);
       await this.options.sessions.postConversationState();
-      await this.options.notifier.failed(sessionId, turnId, error instanceof Error ? error.message : String(error), planExecution?.planOutcome);
+      await this.options.notifier.failed(sessionId, turnId, error instanceof Error ? error.message : String(error), planExecution?.planOutcome, response);
     } finally {
       this.options.events.flush();
       const active = this.activeExecutions.get(sessionId);

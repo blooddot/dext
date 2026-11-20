@@ -81,7 +81,7 @@ describe("stored Plan turn hydration", () => {
 
   it.each(["Cancelled", "Agent failed"])("keeps the Plan label when the Plan has no response (%s)", (error) => {
     const view = hydrate({ ...base, executePlan: true, planPath: "plans/build.plan.md", error });
-    expect(view.renderOutputError).toHaveBeenCalledWith(error);
+    expect(view.renderOutputError).toHaveBeenCalledWith(error, undefined);
     expect(view.turn.planExecutionStatus).toEqual({ hidden: false, textContent: "Failed" });
   });
 

@@ -155,7 +155,7 @@ export type ConversationWebviewResponse =
     hostInitiated?: true;
   }
   | { type: "execution"; sessionId: string; turnId: string; response: InputExecutionResponse }
-  | { type: "executionFailed"; sessionId: string; turnId: string; message: string; planOutcome?: PlanExecutionOutcome }
+  | { type: "executionFailed"; sessionId: string; turnId: string; message: string; planOutcome?: PlanExecutionOutcome; response?: InputExecutionResponse }
   | { type: "agentEvent"; sessionId: string; event: AgentStreamEvent }
   | { type: "focusAgentInput"; sessionId: string; turnId: string; requestId: string; kind: "agent" | "ui" }
   | { type: "agentEvents"; sessionId: string; events: AgentStreamEvent[]; switchId?: number }

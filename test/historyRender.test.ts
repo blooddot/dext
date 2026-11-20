@@ -20,6 +20,44 @@ function processBody(html: string): string {
 }
 
 describe("Dext history rendering", () => {
+  it("replays ordered display trees without linkifying URLs or changed paths in a script tree", () => {
+    const execution = (result: RuntimeResponse["result"]): RuntimeResponse => ({
+      invocation: { kind: "invocation", method: "ui.render", source: "code", arguments: [] },
+      method: { id: "ui.render", title: "UI", kind: "command", source: "builtin" },
+      result, durationMs: 1
+    });
+    const first = execution({ kind: "view", nodes: [
+      { type: "Markdown", source: "Display #1 [remote name](https://example.com/private) [local name](file:///src/view.ts) `src/view.ts`" },
+      { type: "Code", text: "src/view.ts" }, { type: "CodeBlock", code: "example" }
+    ] });
+    const second = execution({ kind: "view", nodes: [{ type: "Text", text: "Display #2" }] });
+    const ordinary = execution({ kind: "ask", text: "Ordinary answer `src/view.ts`" });
+    const response = { kind: "workflow", executions: [first, second, ordinary], steps: [
+      { method: "ui.render", state: "success", response: first },
+      { method: "stdout", state: "success", stream: { channel: "stdout", text: "Between displays" } },
+      { method: "ui.render", state: "success", response: second },
+      { method: "ask", state: "success", response: ordinary }
+    ] };
+    const record: DextHistoryRecord = {
+      id: "view", createdAt: 1, input: "show", output: JSON.stringify(response), process: [], changedFiles: ["src/view.ts"]
+    };
+    const html = renderHistoryRecord(record, "session");
+    const display = html.slice(html.indexOf("data-script-view"), html.indexOf("history-process-output"));
+    expect(display).toContain("remote name local name <code>src/view.ts</code>");
+    expect(display).toContain('title="Copy" disabled');
+    expect(display).not.toMatch(/<a\b|href=|data-copy=|file:\/\/|example\.com/);
+    expect(html.match(/data-script-view/g)).toHaveLength(2);
+    expect(html.match(/class="output-turn-change-link"/g)).toHaveLength(1);
+    const body = html.slice(html.indexOf('class="turn-output-body"'));
+    expect(body.indexOf("Display #1")).toBeLessThan(body.indexOf("Between displays"));
+    expect(body.indexOf("Between displays")).toBeLessThan(body.indexOf("Display #2"));
+    expect(historyTurnMarkdown(record)).toContain("Display #1 remote name local name src/view.ts");
+    expect(historyTurnMarkdown(record)).not.toContain("https://example.com/private");
+    const failed = { ...record, error: "Stopped <after> displays" };
+    const failedHtml = renderHistoryRecord(failed, "session");
+    expect(failedHtml).toMatch(/data-script-view[^]*Display #1[^]*data-script-view[^]*Display #2[^]*<pre class="error">Stopped &lt;after&gt; displays/);
+    expect(historyTurnMarkdown(failed)).toMatch(/### Output\n\nDisplay #1[^]*Display #2[^]*### Error\n\nStopped <after> displays/);
+  });
   it("restores JSON from old raw output and serialized workflows without changing copied source", () => {
     const text = ' \r\n' + JSON.stringify({ 中文: '换行\n"引号" C:\\path **bold** <script>bad</script>' }) + '\r\n ';
     const execution: RuntimeResponse = {

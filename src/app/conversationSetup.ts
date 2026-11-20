@@ -158,12 +158,13 @@ export function createConversationServices(dependencies: ConversationSetupDepend
           response
         });
       },
-      failed: async (sessionId, turnId, message, planOutcome) => {
+      failed: async (sessionId, turnId, message, planOutcome, response) => {
         await dependencies.post({
           type: "executionFailed",
           sessionId,
           turnId,
           ...(planOutcome ? { planOutcome } : {}),
+          ...(response ? { response } : {}),
           message
         });
       },

@@ -296,7 +296,8 @@ export class DextHistoryStore implements ConversationHistoryStore {
     sessionId?: string,
     mode?: DextHistoryRecord["mode"],
     turnId?: string,
-    turnContext?: TurnRecordContext
+    turnContext?: TurnRecordContext,
+    response?: InputExecutionResponse
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();
@@ -304,10 +305,11 @@ export class DextHistoryStore implements ConversationHistoryStore {
     return this.add({
       input: clipped(input, maxOutputLength, spill),
       process: storedProcess(process, maxOutputLength, spill),
-      output: "",
+      output: response ? serializeResponse(response, maxOutputLength, spill) : "",
       ...(mode ? { mode } : {}),
       ...turnContext,
-      error: bounded(message, maxOutputLength, spill)
+      error: bounded(message, maxOutputLength, spill),
+      ...(response ? { response } : {})
     }, sessionId, turnId, spill);
   }
 

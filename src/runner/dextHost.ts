@@ -16,7 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ExecutionCancelledError } from "../shared/protocol/executionErrors.js";
+import { DextRunError, ExecutionCancelledError } from "../shared/protocol/executionErrors.js";
 import { dextWireStepSchema } from "../shared/contracts/schemas.js";
 import { toBoundaryJson } from "../shared/protocol/resultSerialization.js";
 import { DextResumeCache, type DextReplayEntry } from "./dextResumeCache.js";
@@ -147,6 +147,25 @@ function toStep(wire: DextWireStep): WorkflowStepResponse {
   if (parsed.error) step.error = parsed.error;
   if (parsed.assignment) step.assignment = parsed.assignment;
   return step;
+}
+
+function workflowResponse(steps: WorkflowStepResponse[]): InputExecutionResponse {
+  return {
+    kind: "workflow",
+    executions: steps.flatMap((step) => step.response ? [step.response] : []),
+    steps
+  };
+}
+
+function recordedOutput(steps: readonly WorkflowStepResponse[]): InputExecutionResponse | undefined {
+  const visible = steps.filter((step) => !step.quiet && step.state === "success" &&
+    (step.stream || (step.method === "ui.render" && step.response?.result.kind === "view")));
+  return visible.length ? workflowResponse(visible) : undefined;
+}
+
+function runFailure(message: string, steps: readonly WorkflowStepResponse[]): Error {
+  const response = recordedOutput(steps);
+  return response ? new DextRunError(message, response) : new Error(message);
 }
 
 export class DextKernelHost {
@@ -287,7 +306,9 @@ export class DextKernelHost {
     const pending = this.pending;
     this.pending = undefined;
     this.dispatchState = { active: 0, waiting: [] };
-    pending?.reject(new Error(`The Dext kernel stopped (code ${code ?? "null"}${signal ? `, signal ${signal}` : ""}).`));
+    if (pending) {
+      pending.reject(runFailure(`The Dext kernel stopped (code ${code ?? "null"}${signal ? `, signal ${signal}` : ""}).`, pending.steps));
+    }
   }
 
   private async onMessage(message: DextKernelMessage): Promise<void> {
@@ -303,14 +324,10 @@ export class DextKernelHost {
         if (!pending || pending.id !== message.id) return;
         this.pending = undefined;
         if (!message.ok) {
-          pending.reject(new Error(message.error ?? "The Dext run failed."));
+          pending.reject(runFailure(message.error ?? "The Dext run failed.", pending.steps));
           return;
         }
-        pending.resolve({
-          kind: "workflow",
-          executions: pending.steps.flatMap((step) => (step.response ? [step.response] : [])),
-          steps: pending.steps
-        });
+        pending.resolve(workflowResponse(pending.steps));
         return;
       }
       case "fatal":
@@ -481,7 +498,7 @@ export class DextKernelHost {
     child?.kill();
     const pending = this.pending;
     this.pending = undefined;
-    pending?.reject(new ExecutionCancelledError());
+    if (pending) pending.reject(new ExecutionCancelledError(undefined, recordedOutput(pending.steps)));
   }
 
   dispose(): void {
