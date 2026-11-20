@@ -55,6 +55,20 @@ Files changed:
 
 ## 一轮
 
+```mermaid
+flowchart TD
+    explore["explore(input)<br/>只读了解代码和规格（可选）"] -.-> propose["propose(input)<br/>生成提案、增量规格、设计和任务"]
+    propose --> review{"方案可以开始实现？"}
+    review -->|需要修订| update["update(change, input?)<br/>修订规划中的变更"]
+    update --> review
+    review -->|可以实现| apply["apply(change)<br/>实现并勾选 tasks.md"]
+    apply -->|确认实现完成| archive["archive(change)<br/>按需合并增量规格并归档变更"]
+    archive --> archived["openspec/changes/archive/"]
+    archive -->|本次归档合并了规格| specs["openspec/specs/"]
+    apply -.->|需要单独合并规格时| sync["sync(change?)<br/>同步规格，保留活跃变更"]
+    sync --> specs
+```
+
 ```ts
 propose("给视频标注加导出按钮");
 // → openspec/changes/add-video-export/
