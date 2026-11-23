@@ -1,62 +1,72 @@
 import { agent, type AgentResult } from "dext";
-import { reviewState, type ReviewState } from "./review.ts";
+import { reviewState } from "./review.ts";
+import { findingList, FIX_DECISIONS, FIX_PATHS, readDecisions, readFixPaths, type ReviewFinding } from "./reviewFindings.ts";
 
-/** 没有历史报告时的退路：这时 fix 只能自己先审一遍，代价是一次完整的审查。 */
-const DEFAULT_TASK =
-  "先审查当前工作区变更，再按规则修复审查发现的问题。";
-
-/** 报告再长也只取这一段：fix 需要的是条目，不是被截断到全空的任务描述。 */
-const REPORT_CHAR_LIMIT = 24_000;
-
-function limitReport(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length <= REPORT_CHAR_LIMIT
-    ? trimmed
-    : `${trimmed.slice(0, REPORT_CHAR_LIMIT)}\n…（已截断，原文 ${trimmed.length} 字符；需要全部条目时用 review("workspace", true) 重新生成报告）`;
+function composeFindingsTask(findings: readonly ReviewFinding[]): string {
+  return [
+    "只修复下面列出的问题。先确认根因，按需修改相关代码和测试。不得扩大成一次新的工作区审查。",
+    findingList(findings),
+    `${FIX_PATHS}\n逐行列出你实际编辑的文件，格式为 - \`path\`，包括回归测试。没有改动时写（无）。`,
+    `${FIX_DECISIONS}\n每个 ID 恰好一行，格式为 - \`ID\` | \`fixed\` | 验证命令与通过结果，或 - \`ID\` | \`open\` | 未修复的原因。确认问题已不存在且验证通过也可报 fixed。未通过验证、无法验证或需要修改 spec 时保留 open。`
+  ].join("\n\n");
 }
 
-/** 把上一轮报告变成一次「只修这些」的任务，而不是让它从零再审一遍整份 diff。 */
-function composeReportTask(state: ReviewState): string {
-  const repeat = state.fixRuns === 0
-    ? ""
-    : `这份报告已经跑过 ${state.fixRuns} 次 fix：先看工作区里前几次留下的改动，已修好的不要重复改。`;
-  return [
-    `按规则处理下面这份 git.review 报告（第 ${state.round} 轮）里的问题。`,
-    "范围以报告为准：报告没点到的文件不要动，不要重新审查整个工作区。",
-    repeat,
-    `## 第 ${state.round} 轮审查报告（${state.mode === "full" ? "全量" : "增量"}，复审 ${state.reviewed.length} 个文件）`,
-    limitReport(state.report)
-  ].filter((part) => part !== "").join("\n\n");
+function stopFix(text: string): AgentResult {
+  console.log(text);
+  return { kind: "agent", text };
+}
+
+async function runFix(input: string): Promise<AgentResult> {
+  return await agent({ input, patch: false, rules: ["git/fix.md"], echo: true });
 }
 
 /**
  * Fix review findings within the scope set by `git/fix.md` or the caller's
  * explicit request. Code only: it never edits `openspec/` or `tasks.md`,
  * and reports instead when a fix would change a spec Requirement. Writes
- * directly, so a `git.review` afterwards is the check. With no input it consumes
- * the last `git.review` report instead of re-reviewing the whole workspace.
- * @param input A finding, a custom fix request, or `""` to use the last review report.
+ * directly, so `git.review` verifies the results. With no input it uses the
+ * outstanding blocking findings from the last workspace review.
+ * @param input A finding ID, custom fix request, or `""` to use outstanding findings.
  */
 async function fixFinding(input: string): Promise<AgentResult> {
-  const explicit = input.trim() !== "";
+  const request = input.trim();
+  const id = /^R-[0-9a-f]{12}$/u.test(request) ? request : undefined;
+  const managed = !request || Boolean(id);
   const previous = await reviewState.read();
-  const report = explicit === false && previous !== null && previous.report.trim() !== "" ? previous : null;
-  const before = await reviewState.snapshot().catch(() => null);
-
-  if (explicit === false) {
-    console.log(report === null
-      ? "git.fix：没有历史审查报告，本轮按「先审查再修复」执行；这次改动会被下一轮 review 记为基线。"
-      : `git.fix：读取第 ${report.round} 轮报告（复审 ${report.reviewed.length} 个文件，沿用 ${report.carried.length} 个），只修报告点到的问题。`);
+  const before = await reviewState.snapshot(managed).catch(() => null);
+  const current = previous && before?.head === previous.head ? previous : null;
+  let targets: ReviewFinding[] = [];
+  if (managed) {
+    if (!current?.findings || !before) {
+      return stopFix('git.fix：当前没有可用的逐条审查结果。先运行 review("workspace")。');
+    }
+    if (current.findings.some(({ status }) => status === "pending")) {
+      return stopFix('git.fix：已有一批问题待复核，运行 review("workspace") 后再决定是否继续修。');
+    }
+    const open = current.findings.filter(({ status }) => status === "open" || (id && status === "deferred"));
+    targets = open.filter((item) => id ? item.id === id : !item.explicitFix && !reviewState.wasTried(item, before));
+    if (!targets.length) {
+      if (id) return stopFix(`git.fix：当前没有可修复的 ${id}。`);
+      if (!open.length) return stopFix("git.fix：当前没有待修复的问题。");
+      const details = open.map((item) => `- ${item.id} ${item.title}${item.evidence ? ` — ${item.evidence}` : ""}`).join("\n");
+      return stopFix(`git.fix：默认修复已结束。以下问题需要明确选择后再修，可用 git.fix("问题 ID")。\n${details}`);
+    }
   }
 
-  const task = explicit ? input : report === null ? DEFAULT_TASK : composeReportTask(report);
-  const result = await agent({ input: task, patch: false, rules: ["git/fix.md"], echo: true });
-
-  await reviewState.markFixed(previous, before).catch((error: unknown) => {
-    const reason = error instanceof Error ? error.message : String(error);
-    console.log(`git.fix：没能把本轮改动记进基线（${reason}）；下一轮 review 会按内容哈希重新判定。`);
-  });
-  return result;
+  const task = managed ? composeFindingsTask(targets) : input;
+  let report = "";
+  try {
+    const result = await runFix(task);
+    report = result.text;
+    return result;
+  } finally {
+    const decisions = managed ? readDecisions(report, FIX_DECISIONS, targets, "fixed") : undefined;
+    if (managed && !decisions) console.log("git.fix：缺少有效的逐条修复结果，记录本次尝试并保留原状态。");
+    await reviewState.markFixed(current, before, targets, { decisions, claimedPaths: managed ? readFixPaths(report) : [] }).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.log(`git.fix：没能保存本次修复记录（${reason}）。请先核实当前审查状态。`);
+    });
+  }
 }
 
 export async function fix(input = ""): Promise<AgentResult> {

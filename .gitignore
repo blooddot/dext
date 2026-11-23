@@ -7,3 +7,4 @@ coverage/
 .npm-cache
 .tmp-* 
 .taste-skill
+.dext/state
