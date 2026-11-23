@@ -3639,10 +3639,13 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-section[data-t
 
 /* The answer is never a fold target. */
 .turn-output {
-  position: relative;
   margin-top: 14px;
   padding: 14px 0 16px;
   border-top: 1px solid color-mix(in srgb, var(--vscode-foreground) 16%, transparent);
+}
+
+.turn-output:has(> :is(.copy-button, .output-copy):not([hidden])) {
+  padding-top: 4px;
 }
 
 .turn-output > .turn-output-body > :first-child {
@@ -3929,30 +3932,26 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .markdown-body {
   outline-offset: -1px;
 }
 
-/* The answer's copy control floats over its top-right corner and appears on
-   hover or keyboard focus, like the rest of the row controls. z-index lifts it
-   over the answer's own positioned block, which otherwise covers the lower half
-   of the hit area and takes its clicks as text. */
-.turn-output > :is(.copy-button, .output-copy),
-.turn-output > .output-copy.icon-button {
-  position: absolute;
-  z-index: 1;
-  top: 4px;
-  right: 0;
-  width: 28px;
-  height: 28px;
+/* Reserve a row for the whole answer's copy control above Markdown and JSON. */
+.turn-output > :is(.copy-button, .output-copy) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0 0 4px auto;
   border-radius: 4px;
   opacity: 0;
   transition: opacity 120ms ease-out;
 }
 
+.turn-output > :is(.copy-button, .output-copy)[hidden] {
+  display: none;
+}
+
 .turn-output:hover > :is(.copy-button, .output-copy),
-.turn-output:hover > .output-copy.icon-button,
 .turn-output:focus-within > :is(.copy-button, .output-copy),
-.turn-output:focus-within > .output-copy.icon-button,
-.turn-output > :is(.copy-button, .output-copy):focus-visible,
-body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-output > :is(.copy-button, .output-copy),
-body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-output > .output-copy.icon-button {
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) .turn-output > :is(.copy-button, .output-copy) {
   opacity: 1;
 }
 

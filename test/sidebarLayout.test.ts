@@ -66,7 +66,11 @@ describe("sidebar panel layout", () => {
     // The prompt and timeline align with the row title; the answer is separated
     // by its own divider instead of a section header.
     expect(css).toMatch(/\.output-turn-body \{[\s\S]*?padding: 2px 4px 12px 22px;/);
-    expect(css).toMatch(/\.turn-output \{\s*position: relative;\s*margin-top: 14px;\s*padding: 14px 0 16px;/);
+    const outputRule = css.match(/(?:^|\n)\.turn-output\s*\{([^}]*)\}/)?.[1];
+    expect(outputRule).toMatch(/\bmargin-top:\s*14px;/);
+    expect(outputRule).toMatch(/\bpadding:\s*14px 0 16px;/);
+    expect(outputRule).toMatch(/\bborder-top:\s*1px solid\b/);
+    expect(css).toMatch(/\.turn-output:has\(> :is\(\.copy-button, \.output-copy\):not\(\[hidden\]\)\)\s*\{[^}]*padding-top:\s*4px;/);
     expect(css).toMatch(/\.turn-section-body > :first-child,\s*\.turn-section-body > \.execution-result:first-child > :first-child,\s*\.turn-section-body > \.agent-stream-panel > :first-child \{\s*margin-top: 0;/);
     expect(css).toMatch(/\.turn-section-body > \.agent-stream-panel \{\s*padding-top: 0;/);
   });

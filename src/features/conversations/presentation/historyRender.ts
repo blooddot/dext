@@ -47,10 +47,11 @@ function contextAttribute(context: Record<string, string | boolean>): string {
   return `data-vscode-context='${escapeHtml(JSON.stringify(context))}'`;
 }
 
-function copyButton(value: string): string {
+function copyButton(value: string, label = "Copy"): string {
   // Character references survive HTML's CRLF normalization on history reload.
   const payload = escapeHtml(value).replaceAll("\r", "&#13;").replaceAll("\n", "&#10;");
-  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${payload}" title="Copy" aria-label="Copy"></button>`;
+  const escapedLabel = escapeHtml(label);
+  return `<button class="copy-button codicon codicon-copy" type="button" data-copy="${payload}" title="${escapedLabel}" aria-label="${escapedLabel}"></button>`;
 }
 
 /** Thin host adapter; shared components own section structure and result dispatch. */
@@ -410,7 +411,7 @@ export function renderHistoryRecord(
     ...(processView.copyText ? { action: copyButton(processView.copyText) } : {})
   });
   const outputSection = renderTurnOutput(htmlUiAdapter, [{ html: outputHtml + errorHtml }],
-    outputCopy ? { html: copyButton(outputCopy) } : undefined).section.html;
+    outputCopy ? { html: copyButton(outputCopy, "Copy output") } : undefined).section.html;
   return `<details class="history-record"${target}${context}><summary${hint}>${chevron()}${title.html}${modeHtml}${planStatusHtml}<span class="history-meta history-record-time">${escapeHtml(dateLabel(record.createdAt))}</span>${sessionId ? historyTurnActions(sessionId, record.id, Boolean(record.spillPath), record.changedFiles !== undefined) : ""}</summary><div class="history-record-body">${todoHtml}${processSummary}${outputSection}${changedFiles(changes, sessionId, record.id)}</div></details>`;
 }
 

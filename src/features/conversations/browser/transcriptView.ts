@@ -271,6 +271,8 @@ export class TranscriptView {
     processCopy.hidden = true;
     const outputCopyText = { value: "" };
     const outputCopy = this.host.copyLive(() => outputCopyText.value);
+    outputCopy.title = "Copy output";
+    outputCopy.setAttribute("aria-label", outputCopy.title);
     outputCopy.hidden = true;
     // Process is a timeline the reader opens on demand, never the default view
     // of a new turn. Its single "Worked" line keeps updating while it runs.

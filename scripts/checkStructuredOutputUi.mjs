@@ -29,6 +29,11 @@ const commandEvent = { phase: 'tool', id: 'three', solo: true, text: command };
 const record = { id: 't1', createdAt: 1, input: 'structured output', mode: 'code', process: [
   ...usageEvents, { phase: 'message', text: 'Historical trace' }, commandEvent
 ], output: JSON.stringify(response) };
+const code = `const text = '${'x'.repeat(200)}';\n`;
+const markdown = '```typescript\n' + code + '```\n\n**More output**';
+const markdownResponse = { kind: 'workflow', executions: [execution({ kind: 'ask', text: markdown })] };
+const markdownRecord = { ...record, id: 'markdown', input: 'Markdown starting with code', mode: 'ask',
+  process: [], output: JSON.stringify(markdownResponse) };
 
 await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
   const body = await readSidebarBody();
@@ -41,6 +46,25 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
   await evaluate(diagramsBundle.outputFiles[0].text);
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(await readFile('dist/webview/main.css', 'utf8'))};document.head.append(style);}`);
   await evaluate(await readFile('dist/webview/main.js', 'utf8'));
+  const checkMarkdownCopy = async (section, outputButton, messageType) => {
+    const output = `${section} > ${outputButton}`;
+    const block = `${section} .markdown-code-copy`;
+    for (const width of [760, 320]) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
+      await settle();
+      assert.equal(await evaluate(`(() => {
+        const output = document.querySelector(${JSON.stringify(output)}).getBoundingClientRect();
+        const block = document.querySelector(${JSON.stringify(block)}).getBoundingClientRect();
+        return output.height > 0 && block.height > 0 && output.bottom <= block.top;
+      })()`), true, `Output and code copy occupy separate rows at ${width}px`);
+    }
+    for (const [selector, label, expected] of [[output, 'Copy output', markdown], [block, 'Copy code', code]]) {
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)}).getAttribute('aria-label')`), label);
+      await evaluate('messages.length = 0');
+      await click(selector);
+      assert.equal(await evaluate(`messages.findLast(m => m.type === ${JSON.stringify(messageType)})?.text`), expected);
+    }
+  };
   await evaluate(`window.selection={profileId:'codex',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:''};
     host({type:'state',state:{methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']}],agentSelection:selection}});
     host({type:'conversations',sessions:[{id:'active',title:'JSON',updatedAt:1,turnCount:0,pinned:false,running:false}],activeId:'active',selection,planStatus:'new',hostInitiated:true});
@@ -87,10 +111,9 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
     host({type:'executing',value:false,sessionId:'active',turnId:'t1'});`);
   await settle();
   assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /Worked .*1\.2k tokens/, 'completed usage');
-  // The prompt is the row body now, so only the process line keeps a title bar.
   assert.equal(await evaluate(`document.querySelector('[data-turn-section="input"]')`), null, 'no Input section');
   assert.ok(await evaluate(`document.querySelector('[data-turn-section="process"] > summary .output-copy') !== null`), 'process copy in the line');
-  assert.ok(await evaluate(`document.querySelector('[data-turn-section="output"] > .output-copy') !== null`), 'answer copy over the answer');
+  assert.ok(await evaluate(`document.querySelector('[data-turn-section="output"] > .output-copy') !== null`), 'answer copy above the answer');
   const displayed = await evaluate(`document.querySelector('pre.json-output-text > code').textContent`);
   assert.deepEqual(JSON.parse(displayed), JSON.parse(raw));
   assert.equal(await evaluate(`document.querySelectorAll('.json-output strong,.json-output img').length`), 0);
@@ -272,6 +295,15 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
   for (const turn of interruptedTurns) assert.deepEqual(await evaluate(interruptedOutput(turn.id)), expectedOutput(turn));
   console.log('PASS failed and stopped turns keep their outputs in order during execution and when reopened');
 
+  const liveMarkdown = '[data-turn-id="markdown"] [data-turn-section="output"]';
+  await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'markdown',source:'Markdown starting with code',mode:'ask',startedAt:Date.now()});`);
+  assert.equal(await evaluate(`getComputedStyle(document.querySelector('${liveMarkdown} > .output-copy')).display`), 'none');
+  await evaluate(`host({type:'execution',sessionId:'active',turnId:'markdown',response:${JSON.stringify(markdownResponse)}});
+    host({type:'executing',value:false,sessionId:'active',turnId:'markdown'});`);
+  await checkMarkdownCopy(liveMarkdown, '.output-copy', 'clipboardWrite');
+  await evaluate(`host({type:'outputSession',hostInitiated:true,session:{id:'active',createdAt:1,updatedAt:2,turns:[${JSON.stringify(markdownRecord)}]}});`);
+  await checkMarkdownCopy(liveMarkdown, '.output-copy', 'clipboardWrite');
+
   // History's HTML adapter and the shipped delegated copy handler.
   const historyProvider = await readFile('src/features/conversations/host/historyEditorProvider.ts', 'utf8');
   const historyScriptStart = historyProvider.indexOf('<script nonce="${nonce}">') + '<script nonce="${nonce}">'.length;
@@ -292,6 +324,11 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
     await checkWidths('.history-content,.json-output,.process-command-solo');
   }
   console.log('PASS Conversation re-open and History replay including legacy raw JSON, exact CRLF copy and narrow layout');
+
+  await evaluate(`document.getElementById('history-fixture').innerHTML=${JSON.stringify(renderHistoryRecord(markdownRecord))};
+    document.querySelector('.history-record').open=true;`);
+  await checkMarkdownCopy('[data-turn-section="output"]', '.copy-button', 'copy');
+  console.log('PASS separate Output and code copy rows and payloads in Conversation, reopened Conversation and History');
 
   const savedView = { ...record, id: 'saved-view', output: JSON.stringify(viewResponse), changedFiles: ['src/view.ts'] };
   await evaluate(`document.getElementById('history-fixture').innerHTML=${JSON.stringify(renderHistoryRecord(savedView, 's1'))};
