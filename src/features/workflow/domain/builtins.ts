@@ -31,7 +31,7 @@ const METHODS: readonly CallableDefinition[] = [
   {
     id: "plan",
     title: "Plan",
-    description: "Generate and execute an implementation plan with the selected Plan write scope.",
+    description: "Generate an implementation plan and optionally save it in Dext Plan storage.",
     kind: "command",
     version: "1.0.0",
     input: [
@@ -46,6 +46,19 @@ const METHODS: readonly CallableDefinition[] = [
     output: { kind: "plan" },
     context: [...CONTEXTS],
     executor: { kind: "deterministic", handler: "askRespond" }
+  },
+  {
+    id: "executePlan",
+    title: "Execute Plan",
+    description: "Queue one saved Plan for execution after the current Code turn succeeds. The result acknowledges the queue request. Follow the Plan turn for progress and completion.",
+    kind: "command",
+    version: "1.0.0",
+    input: [
+      { name: "planPath", type: "string", required: true, description: "Saved Plan path returned by plan(), or its Dext Plan reference." },
+      { name: "planHash", type: "string", required: true, description: "SHA-256 hash of the saved Plan bytes. Dext checks it again before starting the Plan turn." }
+    ],
+    output: { kind: "plan" },
+    executor: { kind: "deterministic", handler: "queuePlanExecution" }
   },
   {
     id: "agent",

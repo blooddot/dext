@@ -62,6 +62,7 @@ export interface PlanHostStub {
     context: readonly CodeRef[]
   ): Promise<RuntimeResponse>;
   planUri(reference: string): vscode.Uri | undefined;
+  validateQueuedPlan(planPath: string, expectedHash: string): Promise<string>;
   kernelHost(): DextKernelHost;
 }
 

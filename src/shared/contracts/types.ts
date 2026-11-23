@@ -318,6 +318,8 @@ export interface ExecutionMetadata {
   planPath?: string;
   /** Build an existing plan while keeping the turn in Plan mode. */
   executePlan?: boolean;
+  /** The conversation host can launch a queued Plan after this Code turn. */
+  canQueuePlanExecution?: boolean;
   agent?: string;
   model?: string;
   reasoningEffort?: string;

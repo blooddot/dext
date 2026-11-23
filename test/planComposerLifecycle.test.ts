@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { DextHistorySession } from "../src/features/conversations/contracts/history.js";
@@ -48,6 +49,14 @@ async function harness(error?: string, planText = planSource) {
   return { ...harness, session: active, run };
 }
 
+function queuedPlan(hash: string): InputExecutionResponse {
+  return { kind: "workflow", executions: [{
+    invocation: { kind: "invocation", method: "executePlan", arguments: [{ name: "planHash", value: hash }], source: "code" },
+    method: { id: "executePlan", title: "Execute Plan", kind: "command", source: "builtin" }, durationMs: 1,
+    result: { kind: "plan", planPath: "old.plan.md", text: "Queued" }
+  }] };
+}
+
 describe("Plan composer after execution", () => {
   it("resumes task completion saved for the same plan", () => {
     const h = createConversationHarness();
@@ -59,6 +68,28 @@ describe("Plan composer after execution", () => {
       .todoProgress?.snapshot()[0]?.status).toBe("pending");
     session.planProgress = { path: "b.plan.md", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] };
     expect(h.plans.startRun(session, planSource, true, "a.plan.md").todoProgress?.snapshot()[0]?.status).toBe("pending");
+  });
+  it("builds the Plan after the successful Code turn in the originating conversation", async () => {
+    const h = await harness();
+    const other: DextHistorySession = { id: "other", createdAt: 2, updatedAt: 2, turns: [], planStatus: "active", activePlanPath: "other.plan.md" };
+    h.executeInput.mockImplementation(async () => {
+      h.controller.activate(other);
+      return queuedPlan(createHash("sha256").update(planSource).digest("hex"));
+    });
+    await h.coordinator.execute(h.session, "code", "await executePlan(...)");
+    expect(h.executeInput.mock.calls[0]?.[1].canQueuePlanExecution).toBe(true);
+    expect(h.executeConversation.mock.calls[0]?.[2]).toMatchObject({ executePlan: true, planPath: "old.plan.md", agentSessionId: h.session.id });
+    expect(h.session.turns.map((turn) => turn.mode)).toEqual(["code", "plan"]);
+    expect(h.session.planStatus).toBe("new");
+    expect(other.planStatus).toBe("active");
+  });
+
+  it("rejects a Plan that changed after its Code request was queued", async () => {
+    const h = await harness();
+    h.executeInput.mockResolvedValue(queuedPlan(createHash("sha256").update("other plan revision").digest("hex")));
+    await expect(h.coordinator.execute(h.session, "code", "await executePlan(...)")).rejects.toThrow("changed after it was queued");
+    expect(h.executeConversation).not.toHaveBeenCalled();
+    expect(h.session.planStatus).toBe("active");
   });
   it("resumes a persisted task checkpoint with verification instead of implementing completed work again", async () => {
     const h = await harness();

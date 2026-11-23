@@ -1,7 +1,7 @@
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { join, relative as relativePath, resolve, sep } from "node:path";
+import { isAbsolute, join, relative as relativePath, resolve, sep } from "node:path";
 import * as vscode from "vscode";
 import type { AgentAssertionSnapshot } from "../features/agents/host/agentAssertions.js";
 import { DefaultAgentRunner } from "../features/agents/host/agentRouter.js";
@@ -58,7 +58,7 @@ import {
   SKILL_IMPORT_SELECTION_JSON_SCHEMA,
   type SkillImportAnalyzer
 } from "../features/resources/domain/skillImportAnalysis.js";
-import { insideRoot } from "../platform/node/insideRoot.js";
+import { insideRealRoot, insideRoot } from "../platform/node/insideRoot.js";
 
 /** How many API modules the composer's TypeScript worker is given, and how many
  * bytes of source, so a large workspace cannot flood the Webview channel. */
@@ -185,7 +185,15 @@ export class DextApplication {
     this.registry,
     this.contextResolver,
     undefined,
-    { terminalRun: terminalRunHandler, applyPatch: applyPatchHandler }
+    {
+      terminalRun: terminalRunHandler,
+      applyPatch: applyPatchHandler,
+      queuePlanExecution: async ({ arguments: args, metadata }) => {
+        if (!metadata.canQueuePlanExecution) throw new Error("executePlan requires a Dext Code conversation.");
+        const planPath = await this.validateQueuedPlan(args.planPath, args.planHash);
+        return { kind: "plan", planPath, text: "Plan queued for execution after this Code turn succeeds." };
+      }
+    }
   );
   /** The TypeScript kernels, one per concurrent Code conversation, created on first
    * use so a workspace without Code runs never pays for a child process. */
@@ -2066,6 +2074,26 @@ export class DextApplication {
     if (this.storage.location() !== "workspace" || !this.workspaceUri) return undefined;
     try { return vscode.Uri.joinPath(this.workspaceUri, ...planPathSegments(reference)); }
     catch { return undefined; }
+  }
+
+  private async validateQueuedPlan(planPath: unknown, expectedHash: unknown): Promise<string> {
+    if (!this.workspaceTrusted || !this.workspaceUri) throw new Error("Executing a Plan requires a trusted local workspace.");
+    if (typeof planPath !== "string" || typeof expectedHash !== "string"
+      || !/^[a-f0-9]{64}$/u.test(expectedHash) || !planPath.endsWith(".plan.md") || planPath.includes("\0")) {
+      throw new Error("executePlan requires a saved .plan.md path and its SHA-256 hash.");
+    }
+    const globalDirectory = this.storage.directory("plans", "global");
+    const target = isAbsolute(planPath) ? vscode.Uri.file(planPath) : this.storage.uriForReference("plans", planPath)
+      ?? vscode.Uri.joinPath(this.workspaceUri, ...planPathSegments(planPath));
+    const global = insideRoot(globalDirectory.fsPath, target.fsPath, { allowRoot: false });
+    const root = global ? globalDirectory : this.workspaceUri;
+    if (!insideRoot(root.fsPath, target.fsPath, { allowRoot: false }) || !await insideRealRoot(root.fsPath, target.fsPath, { allowRoot: false })) {
+      throw new Error("The saved Plan must stay inside the current workspace or Dext Plan storage.");
+    }
+    const reference = planPathSegments(relativePath(root.fsPath, target.fsPath)).join("/");
+    const bytes = await vscode.workspace.fs.readFile(target);
+    if (createHash("sha256").update(bytes).digest("hex") !== expectedHash) throw new Error("The saved Plan has changed. Synchronize it before executing.");
+    return global ? this.storage.reference("plans", reference, "global") : reference;
   }
 
   endAgentSession(sessionId: string): void {

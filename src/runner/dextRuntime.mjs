@@ -210,6 +210,11 @@ export async function plan(options) {
   return invoke("plan", options);
 }
 
+/** Queue a saved plan to build after this Code turn. */
+export async function executePlan(options) {
+  return invoke("executePlan", options);
+}
+
 /** Hand a task to the selected Agent CLI. */
 export async function agent(options) {
   return invoke("agent", options);

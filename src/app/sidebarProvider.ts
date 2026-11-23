@@ -341,7 +341,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     if (!folder) throw new Error("Building a plan requires a trusted local workspace.");
     const target = this.application.planUri(planPath)
       ?? vscode.Uri.joinPath(folder.uri, ...planPathSegments(planPath));
-    return new TextDecoder().decode(await vscode.workspace.fs.readFile(target));
+    return new TextDecoder("utf-8", { ignoreBOM: true }).decode(await vscode.workspace.fs.readFile(target));
   }
 
   private async persistResource(session: DextHistorySession): Promise<void> {

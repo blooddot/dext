@@ -1,4 +1,5 @@
 import { PlanExecution, resumePlanTodos } from "../domain/planExecution.js";
+import { createHash } from "node:crypto";
 import { planAcceptanceItems, planTodoItems, planTodoInstruction, type PlanTodoProgress } from "../domain/planTodoProgress.js";
 import { mergePlanAcceptance, togglePlanAcceptance } from "../domain/planAcceptance.js";
 import type { AgentTodoItem, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
@@ -80,7 +81,7 @@ export class PlanController {
   /** Handing a plan to the Agent re-reads the file rather than trusting the
    * text from the turn, so edits the user made in the editor are what gets
    * built. The path comes from the webview, so it is checked before any read. */
-  async build(planPath: string): Promise<void> {
+  async build(planPath: string, session = this.options.sessions.active(), expectedPlanHash?: string): Promise<void> {
     if (!this.options.host.isTrustedLocalWorkspace()) {
       throw new Error("Building a plan requires a trusted local workspace.");
     }
@@ -91,7 +92,9 @@ export class PlanController {
       throw new Error(`Plan '${planPath}' is no longer available.`);
     }
     if (!text.trim()) throw new Error(`Plan '${planPath}' is empty.`);
-    const session = this.options.sessions.active();
+    if (expectedPlanHash && createHash("sha256").update(text).digest("hex") !== expectedPlanHash) {
+      throw new Error("The saved Plan changed after it was queued. Synchronize it and execute again.");
+    }
     if (this.options.running(session.id)) throw new Error("Stop the running turn before building a plan.");
     const previousStatus = session.planStatus ?? "active";
     session.activePlanPath = planPath;
@@ -102,11 +105,11 @@ export class PlanController {
       // The turn starts in the conversation this Build was clicked in. The check
       // above awaits AI work, so a tab switch must not move the build elsewhere.
       await this.options.startTurn(session, "plan", [
-        `Implement the plan in ${planPath} exactly as written. Do not edit the plan file itself.`,
+        `Implement the saved revision of ${planPath} included below. Use this text as the plan. Do not edit the plan file itself.`,
         planTodoInstruction(planTodoItems(text)),
         "",
         text.trim()
-      ].join("\n"), undefined, true);
+      ].join("\n"), planPath, true);
     } catch (error) {
       // A start the coordinator rejected never took this plan; leaving the
       // status running would keep Build disabled with no turn behind it.

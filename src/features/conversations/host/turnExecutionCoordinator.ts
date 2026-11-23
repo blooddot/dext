@@ -330,6 +330,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     await this.options.notifier.started({ sessionId, turnId, mode, source, startedAt, ...(executionPlanPath ? { planPath: executionPlanPath } : {}), ...(executePlan ? { executePlan: true } : {}) });
     let failed = false;
     let cancelled = false;
+    let queuedPlan: { path: string; hash: string } | undefined;
     // Handed to `finished` so the live row can show its changed files.
     let saved: DextHistoryRecord | undefined;
     let outcome: PlanExecutionOutcome | undefined = planExecution?.planOutcome;
@@ -370,6 +371,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         ...(session.resource ? { resourceSource } : {}),
         agentPreset: harnessPresetOrDefault(selection.agentPreset),
         ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),
+        ...(mode === "code" ? { canQueuePlanExecution: true } : {}),
         ...(priorConversation ? { conversationContext: priorConversation } : {}),
         signal: controller.signal,
         ui: this.uiInteraction(sessionId, turnId, events),
@@ -473,6 +475,16 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         this.options.events.append(sessionId, events, notice);
         roundSource = planRun.prompt(taskSource, answers.join("\n"));
       }
+      if (mode === "code") {
+        const requests = response.executions.filter((execution) => execution.method.id === "executePlan");
+        if (requests.length > 1) throw new Error("Only one Plan can be queued in a Code turn.");
+        const request = requests[0];
+        if (request) {
+          const hash = request.invocation.arguments.find((argument) => argument.name === "planHash")?.value;
+          if (request.result.kind !== "plan" || !request.result.planPath || typeof hash !== "string") throw new Error("Invalid Plan execution request.");
+          queuedPlan = { path: request.result.planPath, hash };
+        }
+      }
       const turn = await this.options.history.addSuccess(source, events, response, sessionId, mode, turnId, await recordContext());
       saved = turn;
       await this.options.sessions.saveProviderSessions(session);
@@ -526,6 +538,9 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       } finally {
         await this.options.notifier.finished(sessionId, turnId, saved);
       }
+    }
+    if (!failed && !controller.signal.aborted && queuedPlan) {
+      await this.options.plans.build(queuedPlan.path, session, queuedPlan.hash);
     }
   }
 }

@@ -47,6 +47,22 @@ function application(): PlanHostStub {
 const goal = "Add a Redis cache";
 
 describe("shared plan file writer", () => {
+  it("resolves queued global and workspace Plans and checks the saved revision", async () => {
+    const app = application();
+    for (const location of ["global", "workspace"] as const) {
+      const written = (await app.writePlanFile(goal, "# Plan", location))!;
+      const hash = createHash("sha256").update(await readFile(written.filePath)).digest("hex");
+      await expect(app.validateQueuedPlan(location === "global" ? written.filePath : written.reference, hash))
+        .resolves.toBe(written.reference);
+      await writeFile(written.filePath, "# Changed Plan\n");
+      await expect(app.validateQueuedPlan(written.filePath, hash)).rejects.toThrow("saved Plan has changed");
+    }
+    const unrelated = join(globalRoot, "unrelated.plan.md");
+    await writeFile(unrelated, "# Unrelated\n");
+    await expect(app.validateQueuedPlan(unrelated, createHash("sha256").update("# Unrelated\n").digest("hex")))
+      .rejects.toThrow("inside the current workspace or Dext Plan storage");
+  });
+
   it("writes a global plan to Dext's storage and reports both reference and native path", async () => {
     state.settings.set("dext.storage.location", "global");
     const written = await application().writePlanFile(goal, "# Plan\n\nShip it.", "global");
