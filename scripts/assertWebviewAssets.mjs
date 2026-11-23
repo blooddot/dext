@@ -36,6 +36,7 @@ await checkStructureIndexRuntime();
 for (const required of [
   "media/pi-extension.mjs",
   "media/styles.css",
+  "media/ui.css",
   "media/editorTabs.css",
   "media/appearance.css",
   "dist/webview/main.css",
@@ -59,6 +60,14 @@ assert.ok(packagedFiles.has("dist/api-reference.json.br"), "Missing the packaged
 assert.ok(!packagedFiles.has("dist/api-reference.json"), "The uncompressed API reference must not be packaged; only the brotli copy ships.");
 assert.ok((await stat(resolve("dist", "api-reference.json.br"))).size > 0, "Missing the brotli API reference.");
 const historyStyles = await readFile(resolve("media", "styles.css"), "utf8");
+const editorStyles = await readFile(resolve("media", "editorTabs.css"), "utf8");
+const foundationStyles = await readFile(resolve("media", "ui.css"), "utf8");
+for (const [name, source] of [["styles.css", historyStyles], ["editorTabs.css", editorStyles]]) {
+  assert.ok(source.startsWith('@import "./ui.css";'), `${name} must load the local foundation before page styles.`);
+  assert.equal(source.match(/@import "\.\/ui\.css";/g)?.length, 1, `${name} must load a single copy of the foundation.`);
+}
+assert.equal(mainStyles.match(/--dext-ui-fg:/g)?.length, 1, "The sidebar and annotators must bundle one copy of the foundation.");
+assert.ok(foundationStyles.includes("vscode-high-contrast"), "Shared component tones must follow VS Code high contrast.");
 const markdownStyles = await readFile(resolve("dist", "markdown", "github-markdown.css"), "utf8");
 for (const theme of ["vscode-light", "vscode-dark", "vscode-high-contrast-light", "vscode-high-contrast"]) {
   assert.ok(markdownStyles.includes(`body.${theme}`), `Markdown is missing the '${theme}' scope.`);

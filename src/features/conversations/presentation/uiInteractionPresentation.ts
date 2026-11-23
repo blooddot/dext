@@ -1,5 +1,14 @@
 import type { AgentInputAnswers, AgentInputRequest } from "../../../shared/contracts/types.js";
 import type { UiField, UiFieldAnswer, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../shared/contracts/uiForm.js";
+import { Disclosure, DisclosureTrigger } from "../../../shared/lib/ui/content/disclosure.js";
+import { TraceChevron } from "../../../shared/lib/ui/content/traceComponents.js";
+import type { Children, UiRenderAdapter } from "../../../shared/lib/ui/renderAdapter.js";
+
+export function renderInteractionSummary<E>(adapter: UiRenderAdapter<E>, title: string, fields: Children<E>): E {
+  const summary = DisclosureTrigger(adapter, [TraceChevron(adapter), adapter.element("strong", {}, [title])]);
+  const body = adapter.element("div", { class: "agent-input-disclosure-body" }, fields);
+  return Disclosure(adapter, summary, [body], { class: "agent-input-disclosure" });
+}
 
 export function agentInputForm(request: AgentInputRequest): UiFormDefinition {
   return { title: "Question", description: request.blocking ? "Waiting for your answer" : "You can answer while the agent works",

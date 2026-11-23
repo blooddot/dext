@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ResourceBrowserProvider } from "../src/features/resources/host/resourceBrowserProvider.js";
 import { createApiDataSource } from "../src/features/resources/host/resourceEditorProvider.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { EditorTabManager, type EditorTabCallbacks, type EditorTabPanelHandle } from "../src/platform/editor-tabs/editorTabManager.js";
 import { EditorTabRestorer } from "../src/platform/editor-tabs/editorTabSerializer.js";
 import type { ResourceEditorDataSource, ResourceEntry } from "../src/features/resources/contracts/resourceDocuments.js";
@@ -152,6 +153,28 @@ describe("Resources editor tab", () => {
 });
 
 describe("Resources page scopes", () => {
+  it("opens the compatible ui.render example from the Dext list", async () => {
+    const { host, manager, restorer } = setup();
+    const builtinDataSource = createApiDataSource({
+      methods: () => BUILTIN_METHODS.map((method) => ({ ...method, source: "builtin" })),
+      reference: async () => ({
+        version: 1, typescript: "fixture", modules: [],
+        dext: [{ name: "UiNode", kind: "type", signature: 'type UiNode = { type: "Text"; text: string }' }]
+      })
+    });
+    const provider = new ResourceBrowserProvider({ manager, restorer, dataSource: dataSource(), builtinDataSource, scope: "project" });
+    await provider.showList();
+    await provider.handleMessage(provider.listTabKey, { type: "resourceScope", scope: "builtin" });
+    const panel = host.created[0]!.panel;
+    expect(panel.html).toContain('data-resource-open="api:global:ui/render.ts"');
+    await provider.handleMessage(provider.listTabKey, { type: "resourceOpen", id: "api:global:ui/render.ts" });
+    expect(panel.html).toContain('aria-current="page">ui.render');
+    expect(panel.html).toContain('<section data-ui="section" class="resource-api-reference"><h3>Types</h3>');
+    expect(panel.html).toContain('<h3>Example</h3><pre class="resource-api-example"><code>import { ui } from ');
+    expect(panel.html).toContain('schema: spec-driven');
+    expect(host.created).toHaveLength(1);
+  });
+
   it("keeps categories, refresh and the existing resource operations", async () => {
     const { host, manager, restorer } = setup();
     const provider = new ResourceBrowserProvider({ manager, restorer, dataSource: dataSource(), scope: "project" });
@@ -182,7 +205,7 @@ describe("Resources page scopes", () => {
     expect(host.created[0]!.panel.html).toContain('data-resource-open="api:project:git/commit.ts"');
     await provider.handleMessage(provider.listTabKey, { type: "resourceScope", scope: "builtin" });
     const html = host.created[0]!.panel.html;
-    expect(html).toContain('data-resource-scope="builtin" class="is-active">Dext</button>');
+    expect(html).toContain('data-resource-scope="builtin" class="is-active" aria-pressed="true">Dext</button>');
     expect(html).toContain("<h1>APIs</h1>");
     expect(html).toContain('data-resource-open="api:global:ask.ts"');
     expect(html).not.toContain("mcp.files.read");

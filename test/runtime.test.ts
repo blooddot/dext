@@ -120,7 +120,17 @@ describe("Dext runtime", () => {
         { type: "TraceDescription", text: "Description", tone: "muted" },
         leaf, { type: "Code", text: "file.ts" }, { type: "CodeBlock", code: "const x = 1" },
         { type: "Separator" }, { type: "Badge", text: "Queued", status: "pending" },
-        { type: "Spinner", label: "Waiting" }, { type: "Alert", text: "Notice", tone: "info" }
+        { type: "Spinner", label: "Waiting" }, { type: "Alert", text: "Notice", tone: "info" },
+        { type: "Stack", children: [
+          { type: "Section", title: "Checks", description: "Daily report", children: [
+            { type: "Inline", gap: "lg", wrap: false, children: [leaf, { type: "Badge", text: "OK", status: "completed", tone: "info" }] },
+            { type: "Trace", children: [{ type: "TraceLine", children: [leaf] }] },
+            { type: "Empty", text: "No failures" }
+          ] }
+        ] },
+        { type: "Section", title: "Summary", children: [] },
+        { type: "Inline", children: [] },
+        { type: "Empty", text: "No pending checks" }
       ];
       expect(nodes.map((node) => node.type).sort()).toEqual([...UI_VIEW_NODE_TYPES].sort());
       await expect(runtime.execute(call(nodes))).resolves.toMatchObject({ result: { kind: "view", nodes } });
@@ -133,25 +143,25 @@ describe("Dext runtime", () => {
       const { runtime } = setup();
       await expect(runtime.execute(invoke("ui.render"))).rejects.toThrow("nodes");
       await expect(runtime.execute(call(null))).rejects.toThrow("nodes");
-      await expect(runtime.execute(call([null]))).rejects.toThrow("nodes.0");
-      await expect(runtime.execute(call([{ type: "Text", text: null }]))).rejects.toThrow("nodes.0.text");
-      await expect(runtime.execute(call([{ type: "Text", text: new Date() }]))).rejects.toThrow("nodes.0.text");
-      await expect(runtime.execute(call([{ type: "Text", text: undefined }]))).rejects.toThrow("nodes.0.text");
-      await expect(runtime.execute(call([Object.assign(Object.create({}), leaf)]))).rejects.toThrow("nodes.0");
-      await expect(runtime.execute(call([{ type: "Spinner", label: " " }]))).rejects.toThrow("nodes.0.label");
-      await expect(runtime.execute(call([{ type: "TraceIcon", icon: "custom" }]))).rejects.toThrow("nodes.0.icon");
+      await expect(runtime.execute(call([null]))).rejects.toThrow("nodes[0]");
+      await expect(runtime.execute(call([{ type: "Text", text: null }]))).rejects.toThrow("nodes[0].text");
+      await expect(runtime.execute(call([{ type: "Text", text: new Date() }]))).rejects.toThrow("nodes[0].text");
+      await expect(runtime.execute(call([{ type: "Text", text: undefined }]))).rejects.toThrow("nodes[0].text");
+      await expect(runtime.execute(call([Object.assign(Object.create({}), leaf)]))).rejects.toThrow("nodes[0]");
+      await expect(runtime.execute(call([{ type: "Spinner", label: " " }]))).rejects.toThrow("nodes[0].label");
+      await expect(runtime.execute(call([{ type: "TraceIcon", icon: "custom" }]))).rejects.toThrow("nodes[0].icon");
     });
 
     it("rejects deep invalid children and every raw host field with its node path", async () => {
       const { runtime } = setup();
-      await expect(runtime.execute(call([{ type: "Trace", children: [leaf] }]))).rejects.toThrow("nodes.0.children.0.type");
-      await expect(runtime.execute(call([{ type: "TraceLine", children: [{ type: "TraceLine", children: [] }] }]))).rejects.toThrow("nodes.0.children.0.type");
+      await expect(runtime.execute(call([{ type: "Trace", children: [leaf] }]))).rejects.toThrow("nodes[0].children[0].type");
+      await expect(runtime.execute(call([{ type: "TraceLine", children: [{ type: "TraceLine", children: [] }] }]))).rejects.toThrow("nodes[0].children[0].type");
       for (const key of ["tag", "html", "class", "className", "style", "onClick", "handlerId", "id", "aria-label", "data-code", "__proto__"]) {
         const invalidLeaf = { ...leaf, [key]: "forbidden" };
-        await expect(runtime.execute(call([leaf, nested(3, invalidLeaf)]))).rejects.toThrow(`nodes.1.children.0.children.0: Unrecognized key: "${key}"`);
+        await expect(runtime.execute(call([leaf, nested(3, invalidLeaf)]))).rejects.toThrow(`nodes[1].children[0].children[0]: Unrecognized key: "${key}"`);
       }
       for (const type of ["Unknown", "TraceCollapsible", "Form", "Dialog", "Button", "Select", "Input", "Checkbox", "Table", "Tooltip"]) {
-        await expect(runtime.execute(call([leaf, nested(3, { type })]))).rejects.toThrow("nodes.1.children.0.children.0.type");
+        await expect(runtime.execute(call([leaf, nested(3, { type })]))).rejects.toThrow("nodes[1].children[0].children[0].type");
       }
     });
 
@@ -163,6 +173,27 @@ describe("Dext runtime", () => {
       await expect(runtime.execute(call([{ ...leaf, text: "中".repeat(Math.ceil(UI_VIEW_MAX_BYTES / 3)) }])))
         .rejects.toThrow(`nodes: UI tree exceeds ${UI_VIEW_MAX_BYTES} UTF-8 bytes`);
       expect(dextResultSchema.safeParse({ kind: "view", nodes: [{ ...leaf, html: "<b>x</b>" }] }).success).toBe(false);
+    });
+
+    it("validates layout depth, section names, and child and field discriminators", async () => {
+      const { runtime } = setup();
+      const layout = (depth: number): unknown => depth === 1 ? leaf : { type: "Stack", children: [layout(depth - 1)] };
+      await expect(runtime.execute(call([layout(UI_VIEW_MAX_DEPTH)]))).resolves.toHaveProperty("result.kind", "view");
+      await expect(runtime.execute(call([layout(UI_VIEW_MAX_DEPTH + 1)])))
+        .rejects.toThrow(`nodes[0]${".children[0]".repeat(UI_VIEW_MAX_DEPTH)}: UI tree exceeds ${UI_VIEW_MAX_DEPTH} levels`);
+      const invalidNodes = [
+        [{ type: "Stack", gap: "xl", children: [] }, "nodes[0].gap"],
+        [{ type: "Inline", wrap: "false", children: [] }, "nodes[0].wrap"],
+        [{ type: "Section", title: "  ", children: [] }, "nodes[0].title: A Section requires a visible title."],
+        [{ type: "Section", title: "Results", children: [{ type: "TraceLine", children: [] }] }, "nodes[0].children[0].type"],
+        [{ type: "Section", title: "Results", children: [{ type: "TraceTitle", text: "Loose title" }] }, "nodes[0].children[0].type"],
+        [{ type: "TraceLine", children: [{ type: "Stack", children: [] }] }, "nodes[0].children[0].type"],
+        [{ type: "Empty", text: " " }, "nodes[0].text: An Empty requires visible text."],
+        [{ type: "Badge", text: "Pending", tone: "pending" }, "nodes[0].tone"]
+      ] as const;
+      for (const [node, path] of invalidNodes) {
+        await expect(runtime.execute(call([node]))).rejects.toThrow(path);
+      }
     });
   });
   it("builds strict contracts for public builtins", () => {

@@ -1,3 +1,5 @@
+@import "./ui.css";
+
 :root {
   color-scheme: light dark;
   font-family: var(--vscode-font-family);
@@ -226,7 +228,6 @@ button.primary.plan-build.conflict:hover:not(:disabled) {
 .agent-todo-text.markdown-body > :not(:last-child) { margin-bottom: 6px; }
 /* Upstream sizes code at 85%, which is 11.9px on the todo row's 14px. */
 .agent-todo-text.markdown-body code { font-size: 12px; }
-.agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
 .agent-todo-item.active {
   --todo-accent: var(--vscode-progressBar-background, var(--vscode-focusBorder));
 }
@@ -1618,6 +1619,7 @@ body.vscode-high-contrast-light .monaco-editor .view-line .dext-ref-chip {
   max-height: 76px;
   min-height: 0;
   display: flex;
+  align-items: stretch;
   flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
@@ -4481,18 +4483,6 @@ button.method-row:hover {
   padding-left: 20px;
 }
 
-.disclosure-chevron {
-  flex: 0 0 12px;
-  width: 12px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-  transition: transform 60ms linear;
-}
-
-details[open] > summary > .disclosure-chevron {
-  transform: rotate(90deg);
-}
-
 .method-identity {
   min-width: 0;
   display: flex;
@@ -4533,31 +4523,6 @@ details[open] > summary > .disclosure-chevron {
 .method-token-literal { color: var(--vscode-debugTokenExpression-string, var(--vscode-charts-orange)); }
 .method-token-punctuation { color: var(--vscode-descriptionForeground); }
 
-.output-copyable,
-.output-text-copyable {
-  position: relative;
-}
-
-.output-copyable > pre {
-  padding-right: 34px;
-}
-
-.output-copyable > .output-copy,
-.output-text-copyable > .output-copy {
-  position: absolute;
-  right: 4px;
-  bottom: 7px;
-  color: var(--vscode-descriptionForeground);
-  opacity: 0;
-  transition: opacity 80ms ease;
-}
-
-.output-copyable:hover > .output-copy,
-.output-copyable:focus-within > .output-copy,
-.output-text-copyable:hover > .output-copy,
-.output-text-copyable:focus-within > .output-copy {
-  opacity: 1;
-}
 
 .json-output { min-width: 0; max-width: 100%; }
 .json-output-text { max-height: 480px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }

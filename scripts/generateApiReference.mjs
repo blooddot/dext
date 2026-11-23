@@ -376,12 +376,26 @@ function dextUiReference(declaration) {
   const ui = exports.find((symbol) => symbol.getName() === "ui");
   if (!ui) throw new Error("The Dext declaration is missing its ui object.");
   const type = checker.getTypeOfSymbolAtLocation(ui, ui.valueDeclaration ?? source);
-  const uiTypes = exports.filter((symbol) => /^Ui(?:Node|TraceLine|TraceLineChild)$/.test(symbol.getName())).map((symbol) => {
-    const node = symbol.declarations?.[0];
-    if (!node) throw new Error(`The Dext declaration is missing ${symbol.getName()}.`);
+  const exportedTypes = new Set(exports.filter((symbol) => symbol.flags & (ts.SymbolFlags.TypeAlias | ts.SymbolFlags.Interface)));
+  const rootType = exports.find((symbol) => symbol.getName() === "UiNode");
+  if (!rootType) throw new Error("The Dext declaration is missing UiNode.");
+  const displayTypes = new Map();
+  function collectDisplayType(symbol) {
+    if (!exportedTypes.has(symbol) || displayTypes.has(symbol)) return;
+    const declaration = symbol.declarations?.[0];
+    if (!declaration) throw new Error(`The Dext declaration is missing ${symbol.getName()}.`);
+    displayTypes.set(symbol, declaration);
+    function visit(node) {
+      if (ts.isTypeReferenceNode(node)) collectDisplayType(checker.getSymbolAtLocation(node.typeName));
+      ts.forEachChild(node, visit);
+    }
+    visit(declaration);
+  }
+  collectDisplayType(rootType);
+  const uiTypes = exports.filter((symbol) => displayTypes.has(symbol)).map((symbol) => {
     return {
       ...memberOf(symbol, checker, source, 0),
-      signature: node.getText().replace(/^export\s+/, "")
+      signature: displayTypes.get(symbol).getText().replace(/^export\s+/, "")
     };
   });
   return [{

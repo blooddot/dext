@@ -1,0 +1,66 @@
+/* Shared component styles. Host palettes provide the VS Code variables. */
+body {
+  --dext-ui-fg: var(--vscode-foreground, CanvasText);
+  --dext-ui-muted: var(--vscode-descriptionForeground, var(--dext-ui-fg));
+  --dext-ui-info: var(--vscode-editorInfo-foreground, var(--dext-ui-fg));
+  --dext-ui-warning: var(--vscode-editorWarning-foreground, var(--dext-ui-fg));
+  --dext-ui-error: var(--vscode-errorForeground, var(--dext-ui-fg));
+}
+
+[data-ui="stack"],
+[data-ui="inline"] {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+}
+[data-ui="stack"] { flex-direction: column; align-items: stretch; }
+[data-ui="inline"] { flex-wrap: wrap; }
+[data-ui="inline"][data-wrap="false"] { flex-wrap: nowrap; overflow-x: auto; }
+:is([data-ui="stack"], [data-ui="inline"]) > * { min-width: 0; }
+[data-gap="sm"] { gap: 4px; }
+[data-gap="md"] { gap: 8px; }
+[data-gap="lg"] { gap: 12px; }
+
+:where([data-ui="section"]) { min-width: 0; overflow-wrap: anywhere; }
+:where([data-ui="section"]) > :where(h2, h3, h4, h5, h6) { margin: 0 0 4px; }
+:where([data-ui="section-description"], [data-ui="empty"]) { color: var(--dext-ui-muted); }
+
+.agent-todo-status { flex: 0 0 auto; font-size: 12px; color: var(--dext-ui-muted); font-variant-numeric: tabular-nums; }
+[data-ui-tone="normal"] { color: var(--dext-ui-fg); }
+[data-ui-tone="muted"] { color: var(--dext-ui-muted); }
+[data-ui-tone="info"] { color: var(--dext-ui-info); }
+[data-ui-tone="warning"] { color: var(--dext-ui-warning); }
+[data-ui-tone="error"] { color: var(--dext-ui-error); }
+body:is(.vscode-high-contrast, .vscode-high-contrast-light) [data-ui-tone] { color: var(--dext-ui-fg); }
+
+.disclosure-chevron {
+  flex: 0 0 12px;
+  width: 12px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  transition: transform 60ms linear;
+}
+details[open] > summary > .disclosure-chevron { transform: rotate(90deg); }
+
+.output-copyable,
+.output-text-copyable {
+  position: relative;
+}
+.output-copyable > pre { padding-right: 34px; }
+
+.output-copyable > .output-copy,
+.output-text-copyable > .output-copy {
+  position: absolute;
+  right: 4px;
+  bottom: 7px;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.output-copyable:hover > .output-copy,
+.output-copyable:focus-within > .output-copy,
+.output-text-copyable:hover > .output-copy,
+.output-text-copyable:focus-within > .output-copy {
+  opacity: 1;
+}

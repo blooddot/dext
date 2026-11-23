@@ -5,10 +5,13 @@ import type { AgentMessagePresentation } from "./agentMessagePresentation.js";
 import { formatJsonOutput } from "../../../shared/lib/jsonOutput.js";
 import { renderUiView } from "../../../shared/lib/ui/uiViewPresentation.js";
 import type { MarkupAdapter, UiRenderAdapter } from "../../../shared/lib/ui/renderAdapter.js";
+import { CodeBlock, Text } from "../../../shared/lib/ui/content/contentComponents.js";
+import { Disclosure, DisclosureTrigger } from "../../../shared/lib/ui/content/disclosure.js";
+import { Alert } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
 import {
-  CodeBlock, Text, TraceChevron, TraceCollapsible, TraceCollapsibleContent,
-  TraceCollapsibleTrigger, TraceDescription, TraceLine, TraceTitle
-} from "../../../shared/lib/ui/traceComponents.js";
+  TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
+  TraceDescription, TraceLine, TraceTitle
+} from "../../../shared/lib/ui/content/traceComponents.js";
 
 /** The process line: one light `Worked …` row that unfolds into the timeline.
  * It never renders a section label of its own. */
@@ -56,10 +59,10 @@ export function renderTurnMarkdown<E>(adapter: UiRenderAdapter<E>, body: E): E {
 export function renderTurnJson<E>(adapter: UiRenderAdapter<E>, text: string, copy?: E): E | undefined {
   const formatted = formatJsonOutput(text);
   if (formatted === undefined) return undefined;
-  const summary = TraceCollapsibleTrigger(adapter, [TraceChevron(adapter), Text("JSON"), ...(copy ? [copy] : [])]);
-  const content = TraceCollapsibleContent(adapter, [CodeBlock(adapter, formatted, { class: "json-output-text" })]);
+  const summary = DisclosureTrigger(adapter, [TraceChevron(adapter), Text("JSON"), ...(copy ? [copy] : [])]);
+  const content = CodeBlock(adapter, formatted, { class: "json-output-text" });
   return adapter.element("div", { class: "output-text-copyable json-output" }, [
-    TraceCollapsible(adapter, summary, content, { class: "execution-disclosure json-disclosure", open: true })
+    Disclosure(adapter, summary, [content], { class: "execution-disclosure json-disclosure", open: true })
   ]);
 }
 
@@ -86,14 +89,14 @@ export function renderTurnResult<E>(adapter: TurnResultAdapter<E>, result: DextR
   }
   if (result.kind === "agent") return [
     ...(result.text ? [textOutput(result.text)] : []),
-    ...(patchApplication ? [adapter.element("div", {
+    ...(patchApplication ? [Alert(adapter, patchApplication.status === "applied"
+      ? `Automatically applied changes to ${patchApplication.files.length} file${patchApplication.files.length === 1 ? "" : "s"}.`
+      : `Auto-apply ${patchApplication.status}: ${patchApplication.summary}`, {
       class: `patch-application ${patchApplication.status}`,
       role: patchApplication.status === "conflict" ? "alert" : "status"
-    }, [patchApplication.status === "applied"
-      ? `Automatically applied changes to ${patchApplication.files.length} file${patchApplication.files.length === 1 ? "" : "s"}.`
-      : `Auto-apply ${patchApplication.status}: ${patchApplication.summary}`])] : result.patch ? [adapter.element("div", {
+    }, "div")] : result.patch ? [Alert(adapter, "Legacy patch ignored; no files were written when loading this conversation.", {
       class: "patch-application ignored", role: "status"
-    }, ["Legacy patch ignored; no files were written when loading this conversation."])] : [])
+    }, "div")] : [])
   ];
   if (result.kind === "apply") return [adapter.markdown(`${result.status}: ${result.summary}`)];
   // terminal 的返回值是给 API 读的，不进 Output；要给人看就由 API 自己 console.log。

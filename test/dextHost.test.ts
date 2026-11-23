@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
 import type { ContextHost } from "../src/shared/contracts/context.js";
@@ -48,6 +49,16 @@ async function fixture(root: string, name: string, source: string): Promise<stri
   const file = join(root, name);
   await writeFile(file, source, "utf8");
   return file;
+}
+
+async function installSpecApi(root: string): Promise<void> {
+  const api = join(root, ".dext", "api", "spec");
+  await mkdir(api, { recursive: true });
+  await writeFile(join(api, "index.ts"), await readFile(resolve(".dext/api/spec/index.ts")));
+}
+
+function specReply(text: string, receipt: Record<string, unknown>): string {
+  return `${text}\n\nDEXT_OPENSPEC_RESULT ${JSON.stringify(receipt)}`;
 }
 
 function askResponse(invocation: InvocationAst): RuntimeResponse {
@@ -117,6 +128,342 @@ describe("Dext kernel host", () => {
     // Quiet only hides the step: the caller still gets the same result.
     expect(asks[0]?.response?.result).toEqual({ kind: "ask", text: "x" });
     expect(response.steps?.some((step) => step.stream?.text === "xy\n")).toBe(true);
+  });
+
+  it.each([
+    { scenario: "reports partial progress", finalCount: 2, expected: "实施尚未完成。下一项是 1.3 收尾" },
+    { scenario: "reports completion", finalCount: 3, expected: "开发任务已全部勾选。" },
+    { scenario: "displays the skill pause", pause: true, finalCount: 2, expected: "需要确认设计。" },
+    { scenario: "displays the OpenSpec blocker", blocked: true, finalCount: 2, expected: "缺少实施产物" },
+    { scenario: "propagates an Agent error", fail: true, finalCount: 2, expected: "Agent execution failed" },
+    { scenario: "omits the delta after deleting a task and reusing its ID", deleted: true, finalCount: 1, expected: "结束时 1/2 项已勾选" },
+    { scenario: "omits the delta after reordering tasks", reordered: true, finalCount: 1, expected: "结束时 1/3 项已勾选" },
+    { scenario: "omits the delta for duplicate descriptions in the same artifact", ambiguous: true, finalCount: 2, expected: "结束时 2/3 项已勾选" },
+    { scenario: "keeps duplicate descriptions and IDs in different artifacts distinct", duplicate: true, finalCount: 1, expected: "本轮没有新增勾选的任务。" }
+  ])("spec.apply $scenario after invoking the skill once", { timeout: 30000 }, async ({ pause, blocked, fail, deleted, reordered, ambiguous, duplicate, finalCount, expected }) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    let completed = 1;
+    const calls: string[] = [];
+    const descriptions = duplicate || ambiguous ? ["重复任务", "重复任务", "1.3 收尾"] : ["1.1 基线", "1.2 组件验证 verify: npm test", "1.3 收尾"];
+    const kernel = host(root, async (invocation) => {
+      calls.push(invocation.method);
+      const response = askResponse(invocation);
+      if (invocation.method === "agent") {
+        expect(invocation.arguments.find(({ name }) => name === "input")?.value).toContain("Change: example");
+        expect(invocation.arguments.find(({ name }) => name === "skills")?.value).toEqual(["openspec-apply-change"]);
+        completed = finalCount;
+        if (fail) throw new Error(expected);
+        const text = specReply(pause ? "## Implementation Paused\n\n需要确认设计。" : "本轮 Agent 说明",
+          { status: pause ? "pending" : blocked ? "blocked" : "completed", change: "example", root, cwd: ".", store: null });
+        return { ...response, result: { kind: "agent", text } };
+      }
+      const command = invocation.arguments.find(({ name }) => name === "command")?.value;
+      if (typeof command !== "string") throw new Error("Expected a terminal command");
+      let tasks = descriptions.map((description, index) => ({
+        description, done: index < completed, sourcePath: duplicate && index === 1 ? "/tasks/other.md" : "/tasks/main.md"
+      }));
+      if (deleted || reordered) {
+        tasks[0]!.done = false;
+        tasks[1]!.done = true;
+        if (calls.includes("agent")) {
+          if (deleted) tasks = tasks.slice(1);
+          if (reordered) tasks = [tasks[1]!, tasks[0]!, tasks[2]!];
+        }
+      }
+      const stdout = command === 'openspec instructions apply --change "example" --json'
+        ? JSON.stringify({
+          changeName: "example",
+          root: { path: root, source: "nearest" },
+          state: blocked && completed > 1 ? "blocked" : completed === 3 ? "all_done" : "ready",
+          instruction: blocked ? "缺少实施产物" : completed === 3 ? "归档前建议执行验证和人工验收。" : "继续实施",
+          tasks: tasks.map((task, index) => ({ ...task, id: String(duplicate && index < 2 ? 1 : index + 1) }))
+        })
+        : " M openspec/changes/example/tasks.md\n";
+      return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
+        exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
+    });
+    const run = kernel.runSource('import { spec } from "dext/api/spec/index";\nspec.apply("example");');
+    if (fail) {
+      await expect(run).rejects.toThrow(expected);
+      expect(calls.filter((method) => method === "agent")).toHaveLength(1);
+      return;
+    }
+    const response = await run;
+    const output = response.steps?.find((step) => step.stream?.channel === "stdout")?.stream?.text;
+    expect(calls.filter((method) => method === "agent")).toHaveLength(1);
+    const total = deleted ? 2 : 3;
+    expect(output).toContain(`开始时 1/3，结束时 ${finalCount}/${total} 项已勾选，剩余 ${total - finalCount} 项。`);
+    if (duplicate || deleted || reordered || ambiguous) expect(output).not.toContain("本轮新增勾选");
+    else expect(output).toContain("- 1.2 组件验证");
+    expect(output).not.toContain("verify: npm test");
+    expect(output).toContain(expected);
+    expect(output).toContain(pause ? "## Implementation Paused" : "本轮 Agent 说明");
+    // Whatever the state, the output ends with the one command to run next.
+    const nextStep = output?.slice(output.lastIndexOf("### 下一步"));
+    expect(nextStep).toBeDefined();
+    const command = blocked ? 'openspec status --change "example" --json'
+      : pause ? "先完成 Agent 说明中的确认"
+      : finalCount === 3 ? 'spec.archive("example",' : 'spec.apply("example",';
+    expect(nextStep).toContain(command);
+    if (finalCount === 3) {
+      expect(nextStep).toMatch(/归档前建议执行验证和人工验收。[\s\S]+完成[\s\S]+spec\.archive/u);
+      expect(nextStep).not.toContain("剩下的只有归档");
+    }
+    if (!pause && !blocked && !ambiguous && finalCount === 2) expect(nextStep).toContain('从「1.3 收尾」继续');
+  });
+
+  it.each([
+    { mode: "propose", args: '"新增示例"', id: "openspec-propose", text: "提案 example 的规划产物已写入。", next: 'spec.apply("example",' },
+    { mode: "propose", args: '"新增示例"', id: "openspec-propose", text: "待确认\n\n请确认提案范围。", state: "pending", next: "先完成 Agent 说明中的确认", absent: "spec.apply" },
+    { mode: "propose", args: '"新增示例"', id: "openspec-propose", text: "规划产物已写入，严格校验未通过。", state: "blocked", next: "尚未确认本轮提案已创建并通过检查", absent: "spec.apply" },
+    { mode: "update", args: '"example", "修订方案"', id: "openspec-update-change", text: "已修订 proposal.md。", next: 'spec.apply("example",' },
+    { mode: "update", args: '"example"', id: "openspec-update-change", text: "待确认\n\n拟修订提案。", state: "pending", next: "先完成 Agent 说明中的确认", absent: "spec.apply" },
+    { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "已归档到 openspec/changes/archive/2026-11-21-example。", next: 'spec.propose' },
+    { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "等待选择同步方式。", state: "pending", next: "归档确认未能完成", absent: "活跃变更已清空" },
+    { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "归档目录已存在。", state: "blocked", next: "仍在活跃变更中", absent: "活跃变更已清空" },
+    { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "归档查询出错。", queryFails: true, next: "归档状态未知", absent: "活跃变更已清空" },
+    { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "活跃列表已找不到目标。", archiveMissing: true, next: "归档状态未知", absent: "活跃变更已清空" },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "已同步 openspec/specs/example/spec.md。", next: 'spec.archive("example",' },
+    { mode: "sync", args: "", id: "openspec-sync-specs", text: "已同步 openspec/specs/。", next: 'spec.archive("example",' },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格校验失败。", state: "blocked", next: "同步结果尚未确认", absent: "spec.archive" },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格仍有校验错误。", queryFails: true, next: "校验未通过", absent: "spec.archive" },
+    { mode: "explore", args: '"调查示例"', id: "openspec-explore", text: "探索结论和源码依据。", next: 'spec.propose' }
+  ])("shows spec.$mode output after $text", { timeout: 30000 }, async ({ mode, args, id, text, state = "completed", queryFails, archiveMissing, next, absent }) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    const calls: string[] = [];
+    const kernel = host(root, async (invocation) => {
+      calls.push(invocation.method);
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "skill") {
+        expect(args.skill).toBe(id);
+        return { ...response, result: { kind: "skill", text } };
+      }
+      if (invocation.method === "agent") {
+        expect(args).toMatchObject({ skills: [id], apply: true, patch: false });
+        if (mode === "propose") expect(args.input).toContain("运行严格校验并报告结果");
+        const receipt = { status: state, change: "example", root, cwd: ".", store: null,
+          ...(mode === "archive" && state === "completed" ? { archiveName: "2026-11-21-example" } : {}) };
+        return { ...response, result: { kind: "agent", text: specReply(text, receipt) } };
+      }
+      const command = args.command;
+      if (typeof command !== "string") throw new Error("Expected a terminal command");
+      const rootInfo = { path: root, source: "nearest" };
+      const change = { name: "example", completedTasks: 1, totalTasks: 3, lastModified: "2026-11-21T08:35:53.351Z" };
+      let stdout = "";
+      let exitCode = 0;
+      if (command === "openspec list --json") {
+        stdout = JSON.stringify({ root: rootInfo, changes: [
+          ...(calls.includes("agent") && state === "completed" ? [change] : []),
+          { ...change, name: "other", lastModified: "2026-11-22T08:35:53.351Z" }
+        ] });
+      } else if (command === "openspec list --all --json") {
+        const changes = archiveMissing ? [] : state === "completed"
+          ? [{ ...change, name: "2026-11-21-example", archived: true }]
+          : [{ ...change, archived: false }];
+        stdout = queryFails ? "查询失败" : JSON.stringify({ changes, root: rootInfo });
+        if (queryFails) exitCode = 1;
+      } else if (command === "openspec validate --specs --json") {
+        stdout = JSON.stringify({ root: rootInfo, items: [{ id: "example", valid: !queryFails }] });
+        if (queryFails) exitCode = 1;
+      } else {
+        expect(command).toBe("git status --porcelain -uall");
+      }
+      return { ...response, result: { kind: "terminal", status: exitCode === 0 ? "succeeded" : "failed", command, cwd: root,
+        exit_code: exitCode, stdout, stderr: "", duration_ms: 1 } };
+    });
+    const response = await kernel.runSource(`import { spec } from "dext/api/spec/index";\nspec.${mode}(${args});`);
+    const output = response.steps?.filter((step) => step.stream?.channel === "stdout").map((step) => step.stream?.text).join("");
+    expect(output).toContain(text);
+    expect(output).toContain(`### 下一步`);
+    expect(output).toContain(next);
+    expect(output).not.toContain("DEXT_OPENSPEC_RESULT");
+    if (absent) expect(output?.slice(output.lastIndexOf("### 下一步"))).not.toContain(absent);
+    expect(calls.filter((method) => method === (mode === "explore" ? "skill" : "agent"))).toHaveLength(1);
+  });
+
+  it.each(["sync", "skip", "cancel"] as const)("handles the spec.archive dialog action %s in the same Code turn", { timeout: 30000 }, async (choice) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    const runtime = builtinRuntime(root);
+    const summary = "example 将新建主规格。";
+    const archiveName = "2026-11-21-example";
+    const agentInputs: string[] = [];
+    const kernel = host(root, async (invocation, metadata) => {
+      if (invocation.method === "ui.form") return runtime.execute(invocation, [], metadata);
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "agent") {
+        expect(args).toMatchObject({ skills: ["openspec-archive-change"], apply: true, patch: false });
+        const input = String(args.input);
+        agentInputs.push(input);
+        const receipt = { change: "example", root, cwd: root, store: null };
+        const text = agentInputs.length === 1
+          ? specReply(summary, { ...receipt, status: "pending", archivePrompt: { kind: "sync_needed", summary } })
+          : specReply("归档完成。", { ...receipt, status: "completed", archiveName });
+        return { ...response, result: { kind: "agent", text } };
+      }
+      expect(invocation.method).toBe("terminal");
+      const command = String(args.command);
+      const changes = command === "openspec list --all --json" ? [{ name: archiveName, archived: true }] : [{ name: "example" }];
+      const stdout = command === "git status --porcelain -uall" ? "" : JSON.stringify({ changes, root: { path: root } });
+      return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root, exit_code: 0, stdout,
+        stderr: "", duration_ms: 1 } };
+    });
+    const h = createConversationHarness({
+      executeInput: (source, execution, run) => kernel.runSource(source, { ...run, execution, signal: execution.signal! })
+    });
+    const session = conversation(`archive-${choice}`);
+    await h.seed([session]);
+    const running = h.coordinator.execute(h.controller.active(), "code",
+      'import { spec } from "dext/api/spec/index";\nspec.archive("example");');
+    try {
+      const request = await vi.waitFor(() => {
+        const message = h.messages.find((entry) => entry.type === "agentEvent" && entry.event.uiInteraction?.status === "waiting");
+        if (message?.type !== "agentEvent" || !message.event.uiInteraction) throw new Error("Waiting for archive dialog");
+        return message.event.uiInteraction;
+      }, { timeout: 8000 });
+      expect(agentInputs).toHaveLength(1);
+      expect(request.form).toMatchObject({ title: "归档 example", description: summary, presentation: "dialog",
+        actions: [{ id: "sync" }, { id: "skip" }], show_cancel: true });
+      const reply = choice === "cancel" ? { status: "cancelled" } : { status: "submitted", action: choice };
+      expect(h.interactions.respondUi(request.sessionId, request.turnId, request.requestId,
+        { kind: "ui", type: "form", answers: {}, ...reply })).toBe(true);
+      await running;
+      const turn = (await h.history.session(session.id))!.turns[0]!;
+      const output = turn.response?.steps?.filter((step) => step.stream?.channel === "stdout").map((step) => step.stream?.text).join("");
+      if (choice === "cancel") {
+        expect(agentInputs).toHaveLength(1);
+        expect(output).toContain("已取消归档");
+      } else {
+        expect(agentInputs).toHaveLength(2);
+        expect(agentInputs[1]).toContain(JSON.stringify([{ kind: "sync_needed", action: choice, summary }]));
+        expect(agentInputs[1]).toContain(JSON.stringify({ cwd: root, root }));
+        expect(output).toContain("归档完成");
+        expect(output).toContain("活跃变更已清空");
+      }
+    } finally {
+      h.coordinator.abort(session.id);
+      await running;
+      h.dispose();
+    }
+  });
+
+  it.each([
+    { scenario: "a caller-selected store", requested: true, reportedRootMatches: true },
+    { scenario: "a caller-selected store without a receipt", requested: true, reportedRootMatches: true, omitReceipt: true },
+    { scenario: "a skill-selected store", requested: false, reportedRootMatches: true },
+    { scenario: "a response from the wrong root", requested: true, reportedRootMatches: false }
+  ])("scopes apply snapshots and follow-ups to $scenario", { timeout: 30000 }, async ({ requested, reportedRootMatches, omitReceipt }) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    const storeRoot = join(root, "store");
+    const scopedOptions = { store: "selected", cwd: "nested directory", root: storeRoot };
+    const scopedCwd = join(root, scopedOptions.cwd);
+    const verifiedScope = { cwd: scopedCwd, root: storeRoot, store: "selected" };
+    const calls: Array<{ command: unknown; cwd: unknown }> = [];
+    let ranAgent = false;
+    const kernel = host(root, async (invocation) => {
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "agent") {
+        ranAgent = true;
+        if (requested) {
+          expect(args.workspace).toEqual({ kind: "dirRef", uri: pathToFileURL(scopedCwd).href, path: scopedOptions.cwd });
+          expect(args.input).toContain(JSON.stringify(verifiedScope));
+        }
+        const text = "已执行所选 store 的任务。";
+        return { ...response, result: { kind: "agent", text: omitReceipt ? text : specReply(text, {
+          status: "completed", change: "example", store: "selected", root: storeRoot, cwd: scopedOptions.cwd
+        }) } };
+      }
+      const command = args.command;
+      if (typeof command !== "string") throw new Error("Expected a terminal command");
+      let stdout = "";
+      if (command !== "git status --porcelain -uall") {
+        calls.push({ command, cwd: args.cwd });
+        const selected = command.endsWith(' --store "selected"');
+        const tasks = [
+          { id: "1", description: "本地与 store 中同名的任务", done: selected && ranAgent, sourcePath: "tasks.md" }
+        ];
+        stdout = JSON.stringify({ changeName: "example", state: tasks[0]!.done ? "all_done" : "ready", tasks,
+          root: selected ? { path: ranAgent && !reportedRootMatches ? root : storeRoot, store_id: "selected" } : { path: root } });
+      }
+      return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: requested ? scopedCwd : root,
+        exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
+    });
+    const arg = requested ? `, ${JSON.stringify(scopedOptions)}` : "";
+    const response = await kernel.runSource(`import { spec } from "dext/api/spec/index";\nspec.apply("example"${arg});`);
+    const output = response.steps?.find((step) => step.stream?.channel === "stdout")?.stream?.text;
+    const applyCommand = 'openspec instructions apply --change "example" --json';
+    const scopedCommand = `${applyCommand} --store "selected"`;
+    expect(calls).toEqual([
+      { command: requested ? scopedCommand : applyCommand, cwd: requested ? scopedOptions.cwd : undefined },
+      { command: scopedCommand, cwd: requested ? scopedCwd : "." }
+    ]);
+    if (reportedRootMatches) {
+      expect(output).toContain("1/1 项已勾选");
+      expect(output).toContain(`spec.archive("example", ${JSON.stringify({ ...verifiedScope, cwd: requested ? scopedCwd : "." })})`);
+      if (requested) expect(output).toContain("本轮新增勾选");
+      else expect(output).not.toContain("本轮新增勾选");
+    } else {
+      expect(output).toContain("未能从 OpenSpec 核实任务进度");
+      expect(output).toContain('openspec status --change "example" --json --store "selected"');
+      expect(output).not.toContain('spec.archive("example"');
+    }
+  });
+
+  it.each([
+    { call: 'apply("example", { cwd: "missing" })', error: "terminal cwd must stay inside the current workspace." },
+    { call: 'apply("example", { root: "/wrong-root" })' },
+    { call: 'propose("新增示例", { store: "wrong-store" })' },
+    { call: 'update("example", "修订", { root: "/wrong-root" })' },
+    { call: 'archive("example", { cwd: "missing" })', error: "terminal cwd must stay inside the current workspace." },
+    { call: 'sync("example", { root: "/wrong-root" })' }
+  ])("blocks scoped spec.$call before dispatching a write", { timeout: 30000 }, async ({ call, error }) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    const calls: string[] = [];
+    const kernel = host(root, async (invocation) => {
+      calls.push(invocation.method);
+      if (invocation.method !== "terminal") throw new Error("Unexpected write dispatch");
+      if (error) throw new Error(error);
+      const command = invocation.arguments.find(({ name }) => name === "command")?.value;
+      if (typeof command !== "string") throw new Error("Expected a terminal command");
+      return { ...askResponse(invocation), result: { kind: "terminal", status: "succeeded", command, cwd: root,
+        exit_code: 0, stdout: JSON.stringify({ root: { path: root }, changeName: "example", state: "ready", tasks: [] }),
+        stderr: "", duration_ms: 1 } };
+    });
+    const response = await kernel.runSource(`import { spec } from "dext/api/spec/index";\nspec.${call};`);
+    const output = response.steps?.find((step) => step.stream?.channel === "stdout")?.stream?.text;
+    expect(calls).toEqual(["terminal"]);
+    expect(output).toContain("未能核实指定的 OpenSpec");
+    expect(output).toContain("### 下一步");
+  });
+
+  it.each([
+    { input: "", expected: "先审查当前工作区变更，再按规则修复审查发现的问题。" },
+    { input: "这次明确修复所有 Medium，包括维护性建议。", expected: "这次明确修复所有 Medium，包括维护性建议。" }
+  ])("passes git.fix input and a single fix policy to the Agent", { timeout: 30000 }, async ({ input, expected }) => {
+    const root = await workspace();
+    const gitApi = join(root, ".dext", "api", "git");
+    await mkdir(gitApi, { recursive: true });
+    for (const name of ["fix.ts", "review.ts"]) {
+      await writeFile(join(gitApi, name), await readFile(resolve(".dext/api/git", name)));
+    }
+    const calls: string[] = [];
+    const kernel = host(root, async (invocation) => {
+      calls.push(invocation.method);
+      const response = askResponse(invocation);
+      if (invocation.method === "terminal") throw new Error("No fixture git repository");
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      expect(args).toMatchObject({ input: expected, rules: ["git/fix.md"] });
+      return { ...response, result: { kind: "agent", text: "执行说明" } };
+    });
+    await kernel.runSource(`import { fix } from "dext/api/git/fix";\nfix(${JSON.stringify(input)});`);
+    expect(calls).toEqual(["terminal", "agent"]);
   });
 
   it("renders a logged object as JSON instead of util.inspect's [Object]", { timeout: 30000 }, async () => {
@@ -220,6 +567,123 @@ describe("Dext kernel host", () => {
     expect(result.executions[0]?.result).toEqual({ kind: "view", nodes: [{ type: "Text", text: "view" }] });
     expect(result.steps?.[0]?.quiet).toBeUndefined();
     expect(result.steps?.[1]?.stream?.text).toContain("plain JSON at nodes[0].text");
+  });
+
+  it.each(["available", "submit", "cancel", "stop"] as const)("runs and persists the inspection report for %s", { timeout: 30000 }, async (state) => {
+    const root = await workspace();
+    const path = "openspec/config.yaml";
+    if (state === "available") {
+      await mkdir(join(root, "openspec"));
+      await writeFile(join(root, path), "schema: spec-driven");
+    }
+    const example = await readFile("docs/examples/ui-inspection-report.ts", "utf8");
+    const apiDirectory = join(root, ".dext", "api");
+    if (state === "submit") {
+      await mkdir(apiDirectory, { recursive: true });
+      await writeFile(join(apiDirectory, "inspection-report.ts"), example);
+    }
+    const input = state === "submit" ? [
+      'import { existsSync } from "node:fs";',
+      'import { ui } from "dext";',
+      'import { inspectConfig } from "dext/api/inspection-report";',
+      'console.log(JSON.stringify(await inspectConfig()));',
+      'await ui.render({ nodes: [{ type: "Text", text: "检查结束" }] });',
+      'if (!existsSync("resume-ready")) throw new Error("Test retry");'
+    ].join("\n") : example + "\nconsole.log(JSON.stringify((await inspectConfig()) ?? null));";
+    const runtime = builtinRuntime(root);
+    const calls: string[] = [];
+    const kernel = host(root, (invocation, metadata) => {
+      calls.push(invocation.method);
+      return runtime.execute(invocation, [], metadata);
+    });
+    const h = createConversationHarness({
+      executeInput: (source, execution, run) => kernel.runSource(source, {
+        ...run, execution, signal: execution.signal!, apiRoots: [apiDirectory]
+      })
+    });
+    try {
+      const session = conversation(`inspection-${state}`);
+      await h.seed([session]);
+      const running = h.coordinator.execute(h.controller.active(), "code", input);
+      if (state !== "available") {
+        const request = await vi.waitFor(() => {
+          const interaction = h.messages.find((message) =>
+            message.type === "agentEvent" && message.event.uiInteraction?.status === "waiting");
+          if (interaction?.type !== "agentEvent" || !interaction.event.uiInteraction) throw new Error("Waiting for the form");
+          return interaction.event.uiInteraction;
+        }, { timeout: 8000 });
+        const { sessionId, turnId, requestId } = request;
+        expect(calls).toEqual(["ui.render", "ui.form"]);
+        expect(request.form).toMatchObject({ title: "确认修复计划", presentation: "inline", actions: [{ id: "confirm" }] });
+        const submitted = {
+          kind: "ui", type: "form", status: "submitted", action: "confirm",
+          answers: { scope: { type: "select", selected: ["配置文件"] } }
+        };
+        const cancelled = { kind: "ui", type: "form", status: "cancelled", answers: {} };
+        const respond = (reply: unknown) => h.interactions.respondUi(sessionId, turnId, requestId, reply);
+        if (state === "submit") {
+          expect(respond({ ...submitted, answers: { scope: { type: "select", selected: ["unexpected"] } } })).toBe(false);
+          expect(respond(submitted)).toBe(true);
+          expect(respond(submitted)).toBe(false);
+        } else if (state === "cancel") {
+          expect(respond(cancelled)).toBe(true);
+          expect(respond(cancelled)).toBe(false);
+        } else {
+          expect(h.coordinator.abort(session.id)).toBe(true);
+        }
+      }
+      await running;
+      const record = (await h.history.session(session.id))!.turns[0]!;
+      const steps = record.response!.steps!;
+      const expectedSteps = {
+        available: ["ui.render", "stdout"],
+        submit: ["ui.render", "stdout", "ui.render"],
+        cancel: ["ui.render", "ui.form", "stdout"],
+        stop: ["ui.render"]
+      }[state];
+      expect(steps.map((step) => step.method)).toEqual(expectedSteps);
+      expect(steps[0]?.response?.result).toMatchObject({ kind: "view", nodes: [{
+        type: "Stack", children: [
+          { type: "Section", title: "摘要" }, { type: "Section", title: "详情" }, { type: "Section", title: "说明" }
+        ]
+      }] });
+      const html = renderHistoryRecord(record, session.id);
+      if (state === "available") {
+        expect(html).toContain('<p data-ui="empty">没有待修复的项目</p>');
+        expect(steps.at(-1)?.stream?.text).toBe("null\n");
+      } else {
+        expect(html).toContain(`<pre><code>ENOENT: ${path}</code></pre>`);
+      }
+      expect(html).not.toContain("<form");
+      if (state === "submit") {
+        const output = JSON.stringify({ path, scope: "配置文件" });
+        expect(html).toContain("Submitted (确认)");
+        expect(steps[1]?.stream?.text).toContain(output + "\n");
+        expect(record.error).toContain("Test retry");
+        expect(calls).toEqual(["ui.render", "ui.form", "ui.render"]);
+        const continuation = h.coordinator.takeContinuation(session.id, record.id);
+        expect(continuation?.map((entry) => entry.method)).toEqual(calls);
+        expect(h.coordinator.takeContinuation(session.id, record.id)).toBeUndefined();
+        await writeFile(join(root, "resume-ready"), "");
+        h.messages.length = 0;
+        await h.coordinator.execute(h.controller.active(), "code", input, { codeContinuation: continuation! });
+        const resumed = (await h.history.session(session.id))!.turns.at(-1)!;
+        expect(resumed.error).toBeUndefined();
+        expect(resumed.response?.steps?.map((step) => step.method)).toEqual(["ui.render", "ui.form", "stdout", "ui.render"]);
+        expect(resumed.response?.steps?.[2]?.stream?.text).toBe(steps[1]?.stream?.text);
+        expect(calls).toEqual(["ui.render", "ui.form", "ui.render"]);
+        expect(h.messages.some((message) => message.type === "agentEvent" && message.event.uiInteraction?.status === "waiting")).toBe(false);
+      } else if (state === "cancel") {
+        expect(steps[1]?.response?.result).toMatchObject({ kind: "ui", type: "form", status: "cancelled", answers: {} });
+        expect(steps[2]?.stream?.text).toContain('"status":"cancelled","answers":{}');
+        expect(record.error).toBeUndefined();
+      } else if (state === "stop") {
+        expect(record.error).toBe("Execution was cancelled.");
+        expect(h.coordinator.takeContinuation(session.id, record.id)).toBeUndefined();
+      }
+    } finally {
+      h.dispose();
+    }
   });
 
   it("round-trips a 32-level UI tree and reports the UI limit at 33 levels", { timeout: 30000 }, async () => {

@@ -6,6 +6,8 @@ export const UI_VIEW_MAX_NODES = serializationLimits.uiRenderMaxNodes;
 export const UI_VIEW_MAX_BYTES = serializationLimits.uiRenderMaxBytes;
 export const UI_VIEW_STATUSES = ["pending", "in_progress", "completed"] as const;
 export const UI_VIEW_TONES = ["normal", "muted", "info", "warning", "error"] as const;
+export const UI_VIEW_GAPS = ["sm", "md", "lg"] as const;
+export const UI_VIEW_LAYOUT_DEFAULTS = { Stack: { gap: "md" }, Inline: { gap: "sm", wrap: true } } as const;
 export const UI_VIEW_ICONS = [
   "check", "terminal", "diff", "file-media", "circle-small-filled", "chevron-right",
   "checklist", "debug-pause", "circle-large-outline", "info", "warning", "error"
@@ -14,39 +16,61 @@ export const UI_VIEW_ICONS = [
 const status = z.enum(UI_VIEW_STATUSES).optional();
 const tone = z.enum(UI_VIEW_TONES).optional();
 const text = z.string();
-const leaves = [
+const traceLeaves = [
   z.strictObject({ type: z.literal("TraceIcon"), icon: z.enum(UI_VIEW_ICONS) }),
   z.strictObject({ type: z.literal("TraceTitle"), text }),
-  z.strictObject({ type: z.literal("TraceDescription"), text, tone }),
+  z.strictObject({ type: z.literal("TraceDescription"), text, tone })
+] as const;
+const contentLeaves = [
   z.strictObject({ type: z.literal("Text"), text, tone }),
   z.strictObject({ type: z.literal("Markdown"), source: text }),
   z.strictObject({ type: z.literal("Code"), text }),
   z.strictObject({ type: z.literal("CodeBlock"), code: text }),
   z.strictObject({ type: z.literal("Separator") }),
-  z.strictObject({ type: z.literal("Badge"), text, status }),
+  z.strictObject({ type: z.literal("Badge"), text, status, tone }),
   z.strictObject({ type: z.literal("Spinner"), label: z.string().regex(/\S/, "A Spinner requires a visible name.") }),
   z.strictObject({ type: z.literal("Alert"), text, tone })
 ] as const;
+const empty = z.strictObject({ type: z.literal("Empty"), text: text.regex(/\S/, "An Empty requires visible text.") });
+const leaves = [...traceLeaves, ...contentLeaves] as const;
 
+export type UiGap = typeof UI_VIEW_GAPS[number];
 export type UiTraceLine = {
   type: "TraceLine";
   status?: typeof UI_VIEW_STATUSES[number] | undefined;
   tone?: typeof UI_VIEW_TONES[number] | undefined;
   children: UiTraceLineChild[];
 };
-type UiTrace = { type: "Trace"; ordered?: boolean | undefined; children: UiTraceLine[] };
+export type UiTrace = { type: "Trace"; ordered?: boolean | undefined; children: UiTraceLine[] };
 export type UiTraceLineChild = UiTrace | z.infer<typeof leaves[number]>;
-export type UiNode = UiTraceLineChild | UiTraceLine;
+export type UiStack = { type: "Stack"; gap?: UiGap | undefined; children: UiLayoutChild[] };
+export type UiInline = { type: "Inline"; gap?: UiGap | undefined; wrap?: boolean | undefined; children: UiLayoutChild[] };
+export type UiSection = { type: "Section"; title: string; description?: string | undefined; children: UiLayoutChild[] };
+export type UiEmpty = z.infer<typeof empty>;
+export type UiLayoutChild = UiStack | UiInline | UiSection | UiTrace | UiEmpty | z.infer<typeof contentLeaves[number]>;
+export type UiNode = UiLayoutChild | UiTraceLine | z.infer<typeof traceLeaves[number]>;
 
 const traceChildren: z.ZodType<UiTraceLine[]> = z.lazy(() => z.array(traceLine));
 const lineChildren: z.ZodType<UiTraceLineChild[]> = z.lazy(() => z.array(lineChild));
+const layoutChildren: z.ZodType<UiLayoutChild[]> = z.lazy(() => z.array(layoutChild));
 const trace = z.strictObject({ type: z.literal("Trace"), ordered: z.boolean().optional(), children: traceChildren });
 const traceLine = z.strictObject({ type: z.literal("TraceLine"), status, tone, children: lineChildren });
+const gap = z.enum(UI_VIEW_GAPS).optional();
+const stack = z.strictObject({ type: z.literal("Stack"), gap, children: layoutChildren });
+const inline = z.strictObject({ type: z.literal("Inline"), gap, wrap: z.boolean().optional(), children: layoutChildren });
+const section = z.strictObject({
+  type: z.literal("Section"),
+  title: text.regex(/\S/, "A Section requires a visible title."),
+  description: text.optional(),
+  children: layoutChildren
+});
 const lineChild = z.discriminatedUnion("type", [trace, ...leaves]);
-const node = z.discriminatedUnion("type", [trace, traceLine, ...leaves]);
+const layoutChild = z.discriminatedUnion("type", [stack, inline, section, empty, trace, ...contentLeaves]);
+const node = z.discriminatedUnion("type", [trace, traceLine, ...leaves, stack, inline, section, empty]);
 
 export const UI_VIEW_NODE_TYPES = node.options.map((option) => option.shape.type.value);
 export const UI_VIEW_LINE_CHILD_TYPES = lineChild.options.map((option) => option.shape.type.value);
+export const UI_VIEW_LAYOUT_CHILD_TYPES = layoutChild.options.map((option) => option.shape.type.value);
 const nodeFields = new Map<string, Set<string>>(node.options.map((option) => [
   option.shape.type.value, new Set(Object.keys(option.shape))
 ]));

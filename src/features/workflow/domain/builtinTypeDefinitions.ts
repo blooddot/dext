@@ -6,7 +6,9 @@
 import { BUILTIN_METHODS } from "./builtins.js";
 import { formatFieldType } from "./methodSignature.js";
 import {
-  UI_VIEW_NODE_TYPES, UI_VIEW_LINE_CHILD_TYPES, UI_VIEW_ICONS, UI_VIEW_STATUSES, UI_VIEW_TONES
+  UI_VIEW_NODE_TYPES, UI_VIEW_LAYOUT_CHILD_TYPES, UI_VIEW_LINE_CHILD_TYPES, UI_VIEW_ICONS,
+  UI_VIEW_GAPS, UI_VIEW_LAYOUT_DEFAULTS, UI_VIEW_STATUSES, UI_VIEW_TONES, UI_VIEW_MAX_DEPTH,
+  UI_VIEW_MAX_NODES, UI_VIEW_MAX_BYTES
 } from "../../../shared/contracts/uiView.js";
 export interface BuiltinTypeField {
   name: string;
@@ -29,23 +31,57 @@ export const RESERVED_UI_TYPE_DEFINITIONS = [
 ].map((name) => ({ name, status: "reserved" as const }));
 
 const literals = (values: readonly string[]): string => values.map((value) => JSON.stringify(value)).join(" | ");
-const uiNodeFields: Record<typeof UI_VIEW_LINE_CHILD_TYPES[number], string> = {
-  Trace: "ordered?: boolean; children: list[ui.TraceLine]",
-  TraceIcon: `icon: ${literals(UI_VIEW_ICONS)}`,
-  TraceTitle: "text: string",
-  TraceDescription: `text: string; tone?: ${literals(UI_VIEW_TONES)}`,
-  Text: `text: string; tone?: ${literals(UI_VIEW_TONES)}`,
-  Markdown: "source: string",
-  Code: "text: string",
-  CodeBlock: "code: string",
-  Separator: "",
-  Badge: `text: string; status?: ${literals(UI_VIEW_STATUSES)}`,
-  Spinner: "label: string",
-  Alert: `text: string; tone?: ${literals(UI_VIEW_TONES)}`
+type DisplayNodeName = typeof UI_VIEW_NODE_TYPES[number];
+const uiNodeAlias = (types: readonly DisplayNodeName[]): string => types.map((type) => `ui.${type}`).join(" | ");
+const layoutChildrenField = { name: "children", type: "list[ui.LayoutChild]", description: "Display children in declaration order. An empty array is allowed." };
+const displayText = { name: "text", type: "string" };
+const displayTone = { name: "tone", type: literals(UI_VIEW_TONES), optional: true };
+const displayStatus = { name: "status", type: literals(UI_VIEW_STATUSES), optional: true };
+const displayNodeDetails: Record<DisplayNodeName, Omit<BuiltinTypeDefinition, "name">> = {
+  Stack: { description: "A vertical sequence of display nodes.", fields: [
+    { name: "gap", type: "ui.Gap", optional: true, description: `Defaults to "${UI_VIEW_LAYOUT_DEFAULTS.Stack.gap}".` },
+    layoutChildrenField
+  ] },
+  Inline: { description: "A horizontal sequence that wraps by default.", fields: [
+    { name: "gap", type: "ui.Gap", optional: true, description: `Defaults to "${UI_VIEW_LAYOUT_DEFAULTS.Inline.gap}".` },
+    { name: "wrap", type: "boolean", optional: true, description: `Defaults to ${UI_VIEW_LAYOUT_DEFAULTS.Inline.wrap}.` },
+    layoutChildrenField
+  ] },
+  Section: { description: "A titled section. The first section heading is h3 and nested sections increment to h6.", fields: [
+    { name: "title", type: "string", description: "A non-empty visible heading." },
+    { name: "description", type: "string", optional: true, description: "Plain text below the heading. Omitted by default." },
+    layoutChildrenField
+  ] },
+  Empty: { description: "An explicitly empty state.", fields: [{ ...displayText, description: "A non-empty visible message." }] },
+  Trace: { description: "A list of process rows.", fields: [
+    { name: "ordered", type: "boolean", optional: true, description: "Defaults to false." },
+    { name: "children", type: "list[ui.TraceLine]", description: "Only TraceLine nodes are allowed directly inside a Trace." }
+  ] },
+  TraceLine: { description: "A process row. A standalone root row is supported for compatibility.", fields: [
+    { ...displayStatus, description: "Omitted by default." },
+    { ...displayTone, description: 'Defaults to "normal".' },
+    { name: "children", type: "list[ui.TraceLineChild]" }
+  ] },
+  TraceIcon: { description: "A decorative icon for a process row.", fields: [{ name: "icon", type: literals(UI_VIEW_ICONS) }] },
+  TraceTitle: { description: "The title of a process row.", fields: [displayText] },
+  TraceDescription: { description: "A description for a process row.", fields: [displayText, { ...displayTone, description: 'Defaults to "normal".' }] },
+  Text: { description: "A plain-text node.", fields: [displayText, { ...displayTone, description: 'Defaults to "normal".' }] },
+  Markdown: { description: "Read-only Markdown with inert links, images and raw HTML.", fields: [{ name: "source", type: "string" }] },
+  Code: { description: "Inline code with literal text.", fields: [displayText] },
+  CodeBlock: { description: "Preformatted code with literal text. Script output keeps its copy control disabled.", fields: [{ name: "code", type: "string" }] },
+  Separator: { description: "A thematic break with no additional fields.", fields: [] },
+  Badge: { description: "A visible label for a task or general feedback.", fields: [displayText,
+    { ...displayStatus, description: "Task status. Omitted by default." },
+    { ...displayTone, description: "When omitted, the task status keeps its original appearance." }
+  ] },
+  Spinner: { description: "A read-only busy indicator.", fields: [{ name: "label", type: "string", description: "A non-empty visible name." }] },
+  Alert: { description: "A static feedback message.", fields: [displayText, { ...displayTone, description: 'Defaults to "info".' }] }
 };
-const uiNodeAlias = (types: readonly (keyof typeof uiNodeFields | "TraceLine")[]): string => types.map((type) =>
-  type === "TraceLine" ? "ui.TraceLine" : `{ type: ${JSON.stringify(type)}${uiNodeFields[type] ? `; ${uiNodeFields[type]}` : ""} }`
-).join(" | ");
+const displayNodeTypes: BuiltinTypeDefinition[] = UI_VIEW_NODE_TYPES.map((type) => ({
+  name: `ui.${type}`,
+  description: displayNodeDetails[type].description,
+  fields: [{ name: "type", type: JSON.stringify(type) }, ...displayNodeDetails[type].fields]
+}));
 
 const staticTypes: readonly BuiltinTypeDefinition[] = [
   { name: "AskResult", description: "Text returned by Ask.", fields: [
@@ -99,15 +135,14 @@ const staticTypes: readonly BuiltinTypeDefinition[] = [
     { name: "primary", type: "boolean", optional: true, description: "Highlighted button and the one Enter submits. Defaults to the first action." },
     { name: "requires", type: "list[string]", optional: true, description: "Field IDs this action must have answered, even when the field itself is optional." }
   ] },
-  { name: "ui.Node", description: "A public read-only display node accepted by ui.render.",
+  { name: "ui.Node", description: `A read-only display node accepted by ui.render. A tree accepts up to ${UI_VIEW_MAX_DEPTH} levels, ${UI_VIEW_MAX_NODES} nodes and ${UI_VIEW_MAX_BYTES} UTF-8 bytes. Validation reports the location of an invalid node, such as nodes[0].children[1].`,
     fields: [], alias: uiNodeAlias(UI_VIEW_NODE_TYPES) },
+  { name: "ui.LayoutChild", description: "A display node allowed inside a Stack, Inline or Section.",
+    fields: [], alias: uiNodeAlias(UI_VIEW_LAYOUT_CHILD_TYPES) },
+  { name: "ui.Gap", description: "Spacing between layout children.", fields: [], alias: literals(UI_VIEW_GAPS) },
+  ...displayNodeTypes,
   { name: "ui.TraceLineChild", description: "A read-only node that can appear inside a trace line.",
     fields: [], alias: uiNodeAlias(UI_VIEW_LINE_CHILD_TYPES) },
-  { name: "ui.TraceLine", description: "A row of display nodes within a trace.",
-    fields: [{ name: "type", type: '"TraceLine"' },
-      { name: "status", type: literals(UI_VIEW_STATUSES), optional: true },
-      { name: "tone", type: literals(UI_VIEW_TONES), optional: true },
-      { name: "children", type: "list[ui.TraceLineChild]" }] },
   { name: "ui.Field", description: "Base form field. The `type` discriminator selects a concrete field variant.", fields: [
     { name: "id", type: "string" }, { name: "type", type: '"select" | "radio" | "checkbox" | "input"' }, { name: "label", type: "string" },
     { name: "description", type: "string", optional: true }, { name: "required", type: "boolean", optional: true },

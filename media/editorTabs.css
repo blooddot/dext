@@ -1,3 +1,5 @@
+@import "./ui.css";
+
 :root {
   color-scheme: light dark;
   font-family: var(--vscode-font-family, sans-serif);
@@ -62,7 +64,7 @@ p { overflow-wrap: anywhere; }
 .resource-create { color: var(--resource-accent); border-color: var(--resource-accent); background: transparent; }
 .resource-create:hover { background: color-mix(in srgb, var(--resource-accent) 12%, var(--vscode-editor-background)); }
 body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .resource-create { border-color: var(--vscode-contrastBorder, var(--resource-accent)); }
-.resource-navigation { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--vscode-panel-border); }
+.resource-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid var(--vscode-panel-border); }
 .resource-navigation > button { flex-shrink: 0; }
 .resource-navigation-current { min-width: 0; overflow-wrap: anywhere; font-family: var(--vscode-editor-font-family, monospace); }
 .resource-navigation-home { color: var(--vscode-textLink-foreground, var(--resource-api-accent)); background: transparent; }
@@ -126,6 +128,7 @@ body.vscode-high-contrast .resource-create, body.vscode-high-contrast-light .res
 .resource-api-specifier code { font-size: 1.05em; }
 .resource-api-copy { padding: 2px 8px; font-size: 12px; }
 .resource-api-members { list-style: none; margin: 0; padding: 0; }
+.resource-api-type-index { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 12px; }
 .resource-api-members .resource-api-members { margin: 8px 0 0 16px; padding-left: 12px; border-left: 1px solid var(--vscode-panel-border); }
 .resource-api-member { padding: 8px 0; border-top: 1px solid var(--vscode-panel-border); }
 .resource-api-members > .resource-api-member:first-child { border-top: 0; }

@@ -30,14 +30,30 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   await evaluate('tabs(false)');await settle();
   assert.deepEqual(await states(), [idle,idle], 'restored idle tabs hide activity indicators');
   const selectionState = () => evaluate(`[...document.querySelectorAll('#conversation-tabs [role=tab]')].map(tab=>[
-    tab.dataset.sessionId,tab.getAttribute('aria-selected'),tab.classList.contains('active')
+    tab.parentElement.dataset.sessionId,tab.getAttribute('aria-selected'),tab.parentElement.classList.contains('active')
   ])`);
   assert.deepEqual(await evaluate(`document.querySelector('#conversation-tabs').getAttribute('role')`), 'tablist');
   assert.deepEqual(await selectionState(), [['active','true',true], ['pinned','false',false]]);
+  const tabIds = () => evaluate(`Object.fromEntries([...document.querySelectorAll('#conversation-tabs [role=tab]')]
+    .map(tab=>[tab.parentElement.dataset.sessionId, tab.id]))`);
+  const initialIds = await tabIds();
+  assert.ok(initialIds.active && initialIds.pinned && initialIds.active !== initialIds.pinned);
+  const assertPanel = async (sessionId) => {
+    assert.deepEqual(await evaluate(`(() => {
+      const tabs = [...document.querySelectorAll('#conversation-tabs [role=tab]')];
+      const selected = tabs.find(tab=>tab.getAttribute('aria-selected')==='true');
+      const panel = document.getElementById(selected.getAttribute('aria-controls'));
+      return [selected.parentElement.dataset.sessionId, panel.id, panel.getAttribute('role'),
+        document.getElementById(panel.getAttribute('aria-labelledby'))===selected,
+        tabs.every(tab=>tab.getAttribute('aria-controls')===panel.id)];
+    })()`), [sessionId, 'result-section', 'tabpanel', true, true]);
+  };
+  await assertPanel('active');
   assert.deepEqual(await evaluate(`[...document.querySelectorAll('#conversation-tabs [role=tab]')].map(tab=>[
-    tab.querySelector('.conversation-tab-label').textContent,tab.querySelector('button:last-child').getAttribute('aria-label')
+    tab.textContent,tab.parentElement.querySelector('button:last-child').getAttribute('aria-label')
   ])`), [['Active conversation','Close Active conversation'],['Pinned idle','Unpin Pinned idle']]);
   await evaluate('tabs(true)');await settle();
+  assert.deepEqual(await tabIds(), initialIds, 'tab IDs survive rerendering');
   assert.deepEqual(await states(), [{ running:true,spinner:true,action:false,disabled:true },idle], 'only the executing conversation shows an activity indicator');
   await evaluate(`document.querySelector('.conversation-tab-close').click()`);
   assert.equal(await evaluate(`sent.filter(m=>m.type==='closeConversation').length`), 0);
@@ -57,19 +73,23 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   await evaluate(`document.querySelector('.conversation-tab[data-session-id="pinned"] .conversation-tab-label').focus()`);
   await key('Enter', 13);
   assert.deepEqual(await selectionState(), [['active','false',false], ['pinned','true',true]]);
+  await assertPanel('pinned');
   assert.equal(await evaluate(`document.activeElement.matches('#code-editor textarea')`), true, 'restoring the selected draft focuses the composer');
   assert.equal(await input(), '', 'a tab without a draft opens empty');
   await send('Input.insertText', { text: 'draftB' });await settle();
   await click('.conversation-tab[data-session-id="active"] .conversation-tab-label');
+  await assertPanel('active');
   assert.equal(await input(), 'draftA', 'switching back restores the first draft');
   await evaluate(`host({type:'activeConversation',activeId:'pinned',selection,planStatus:'new',hostInitiated:true})`);await settle();
   assert.deepEqual(await selectionState(), [['active','false',false], ['pinned','true',true]]);
+  await assertPanel('pinned');
   assert.equal(await input(), 'draftB', 'a host-initiated switch restores the target draft');
   await evaluate(`host({type:'activeConversation',activeId:'fresh',selection,planStatus:'new',hostInitiated:true});
     host({type:'conversations',sessions:[{id:'active',title:'Active conversation',updatedAt:1,turnCount:0,pinned:false,running:false},
       {id:'pinned',title:'Pinned idle',updatedAt:1,turnCount:0,pinned:true,running:false},
       {id:'fresh',title:'New conversation',updatedAt:1,turnCount:0,pinned:false,running:false}],activeId:'fresh',selection,planStatus:'new',hostInitiated:true})`);await settle();
   assert.equal(await input(), '', 'a new tab starts empty instead of inheriting the previous draft');
+  await assertPanel('fresh');
   await click('.conversation-tab[data-session-id="pinned"] .conversation-tab-label');
   assert.equal(await input(), 'draftB', 'the older tab still owns its draft');
   const order = () => evaluate(`[...document.querySelectorAll('.conversation-tab')].map(tab=>tab.dataset.sessionId)`);
@@ -98,5 +118,7 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   assert.deepEqual(await evaluate(`sent.filter(m=>m.type==='moveConversation')`), [
     { type: 'moveConversation', sessionId: 'fresh', beforeSessionId: 'active' }
   ]);
-  console.log('PASS production tab roles, focus, running state, close/pin, drafts, drag commit and Escape cancellation');
+  await evaluate(`host({type:'conversations',sessions:[],activeId:'',selection,planStatus:'new',hostInitiated:true})`);
+  assert.equal(await evaluate(`document.getElementById('result-section').hasAttribute('aria-labelledby')`), false);
+  console.log('PASS production tab roles, panel associations, focus, running state, close/pin, drafts, drag commit and Escape cancellation');
 });

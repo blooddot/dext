@@ -1,12 +1,15 @@
-import { answerChoices, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerFieldPresentation } from "./uiInteractionPresentation.js";
+import { answerChoices, answeredCardTitle, presentAnswerChoice, presentAnswerField, renderInteractionSummary, type AnswerFieldPresentation } from "./uiInteractionPresentation.js";
 import { readHistoryResponse } from "../domain/historyResponse.js";
 import { turnChanges, type TurnChange } from "../domain/turnDiff.js";
 import { renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMarkdown, renderTurnJson, renderTurnResult, renderTurnMessage, renderTurnDisclosureSummary } from "./turnComponents.js";
 import { htmlUiAdapter, type HtmlFragment } from "../../../shared/lib/ui/htmlUiAdapter.js";
+import { CodeBlock, Markdown } from "../../../shared/lib/ui/content/contentComponents.js";
+import { Disclosure, DisclosureTrigger } from "../../../shared/lib/ui/content/disclosure.js";
+import { Empty } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
 import {
-  CodeBlock, Markdown, Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
+  Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
   TraceDescription, TraceIcon, TraceLine, TraceTitle
-} from "../../../shared/lib/ui/traceComponents.js";
+} from "../../../shared/lib/ui/content/traceComponents.js";
 import { latestAgentTodos, renderAgentTodos, planExecutionLabel } from "./agentTodoPresentation.js";
 import type { AgentStreamEvent, DextResult, InputExecutionResponse, PlanAcceptanceItem, RuntimeResponse, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { DEFAULT_HISTORY_LIMITS, type DextHistoryRecord, type DextHistorySession, type DextHistorySummary } from "../contracts/history.js";
@@ -227,7 +230,8 @@ function commandLabel(event: AgentStreamEvent): string {
 }
 
 function historyTerminal(text: string): HtmlFragment {
-  return CodeBlock(htmlUiAdapter, [{ html: highlightTerminal(text) }], { class: "terminal-text" });
+  const highlighted = htmlUiAdapter.markup("code", {}, highlightTerminal(text), []);
+  return CodeBlock(htmlUiAdapter, [highlighted], { class: "terminal-text" });
 }
 
 function commandRow(event: AgentStreamEvent, className = "process-command"): HtmlFragment {
@@ -316,7 +320,8 @@ function inputHistory(events: readonly AgentStreamEvent[]): string {
       `<div class="agent-input-field">${answerField(presentAnswerField(field, state.answers?.[field.id]))}</div>`).join("");
     const description = state.form.description ? historyMarkdown(state.form.description, "interaction-description markdown-body").html : "";
     const title = answeredCardTitle(state.form.title, state.status === "submitted", action?.label);
-    return `<section class="agent-input-card"><details class="agent-input-disclosure"><summary>${chevron()}<strong>${escapeHtml(title)}</strong></summary><div class="agent-input-disclosure-body">${description}${fields}</div></details></section>`;
+    const summary = renderInteractionSummary(htmlUiAdapter, title, [{ html: description + fields }]);
+    return `<section class="agent-input-card">${summary.html}</section>`;
   }).join("");
   const requests = new Map(events.flatMap((event) => event.userInput ? [[event.userInput.id, event.userInput] as const] : []));
   return forms + [...requests.values()].map((request) => {
@@ -452,17 +457,17 @@ function lastPlanTurnIndex(turns: readonly DextHistoryRecord[], planPath: string
 export function renderHistorySession(session: DextHistorySession | DextHistorySummary, view: HistorySessionView = {}): string {
   const favorite = view.favorite === true;
   const body = view.lazy
-    ? `<div class="history-lazy-placeholder">Expand to load conversation turns.</div>`
+    ? Empty(htmlUiAdapter, "Expand to load conversation turns.", { class: "history-lazy-placeholder" }, "div").html
     : "turns" in session ? renderHistorySessionBody(session) : "";
   const turnCount = "turns" in session ? session.turns.length : session.turnCount;
   const count = `${turnCount} turn${turnCount === 1 ? "" : "s"}`;
-  const context = contextAttribute({
+  const context = {
     webviewSection: "session",
     sessionId: session.id,
     dextFavorite: favorite,
     ...(session.archivedAt ? { dextArchived: true } : {}),
     preventDefaultContextMenuItems: true
-  });
+  };
   const star = favorite
     ? `<i class="history-favorite codicon codicon-star-full" title="Favorite" aria-label="Favorite"></i>`
     : "";
@@ -471,8 +476,17 @@ export function renderHistorySession(session: DextHistorySession | DextHistorySu
   // the host panel, which fills the hits span.
   const prompts = "turns" in session ? session.turns.map(historyTurnLabel) : [session.firstInput ?? ""];
   const searchText = [label, ...prompts].join(" ").toLocaleLowerCase();
-  const lazyAttributes = view.lazy ? ` data-history-lazy="true" data-history-session-id="${escapeHtml(session.id)}"` : "";
-  return `<details class="history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}"${lazyAttributes} data-history-search-id="${escapeHtml(session.id)}" data-history-search-text="${escapeHtml(searchText)}" ${context}><summary title="${SESSION_ACTION_HINT}">${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta" data-history-search-hits hidden></span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span></summary><div class="history-session-body">${body}</div></details>`;
+  const summary = DisclosureTrigger(htmlUiAdapter, [{ html:
+    `${chevron()}${star}<span class="history-summary-input${view.name ? " named" : ""}">${escapeHtml(label)}</span><span class="history-meta">${count}</span><span class="history-meta" data-history-search-hits hidden></span><span class="history-meta history-session-time">${escapeHtml(dateLabel(session.createdAt))}</span><span class="history-session-actions">${historySessionActions(session, favorite)}</span>`
+  }], { title: SESSION_ACTION_HINT });
+  return Disclosure(htmlUiAdapter, summary, [{ html: `<div class="history-session-body">${body}</div>` }], {
+    class: `history-session${favorite ? " favorite" : ""}${session.archivedAt ? " archived" : ""}`,
+    "data-history-lazy": view.lazy ? "true" : false,
+    "data-history-session-id": view.lazy ? session.id : false,
+    "data-history-search-id": session.id,
+    "data-history-search-text": searchText,
+    "data-vscode-context": JSON.stringify(context)
+  }).html;
 }
 
 export function historyTurnMarkdown(record: DextHistoryRecord, index = 0): string {

@@ -91,7 +91,7 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
   assert.equal(await evaluate(`document.querySelector('[data-turn-section="input"]')`), null, 'no Input section');
   assert.ok(await evaluate(`document.querySelector('[data-turn-section="process"] > summary .output-copy') !== null`), 'process copy in the line');
   assert.ok(await evaluate(`document.querySelector('[data-turn-section="output"] > .output-copy') !== null`), 'answer copy over the answer');
-  const displayed = await evaluate(`document.querySelector('.json-output-text').textContent`);
+  const displayed = await evaluate(`document.querySelector('pre.json-output-text > code').textContent`);
   assert.deepEqual(JSON.parse(displayed), JSON.parse(raw));
   assert.equal(await evaluate(`document.querySelectorAll('.json-output strong,.json-output img').length`), 0);
   assert.equal(await evaluate(`document.querySelectorAll('.json-output').length`), 1);
@@ -135,9 +135,15 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
 
   const planPath = 'plans/build.plan.md';
   const acceptance = { id: 'accept-abc', text: '**Review** the output', checked: false };
+  const permission = {
+    sessionId: 'active', turnId: 'latest-plan', requestId: 'permission', status: 'submitted', action: 'confirm', answers: {},
+    form: { title: 'Allow tool?', description: '**Write plan**', presentation: 'dialog', show_cancel: true, cancel_label: 'Deny',
+      actions: [{ id: 'confirm', label: 'Allow once', primary: true, requires: [] }], fields: [] }
+  };
   const plan = { ...record, id: 'latest-plan', mode: 'plan', executePlan: true, planPath,
     planOutcome: { status: 'completed', reason: 'fixture', rounds: 1 }, process: [
-      { phase: 'todo', text: '', todos: [{ id: 'plan-1', status: 'completed', text: 'Implement' }] }
+      { phase: 'todo', text: '', todos: [{ id: 'plan-1', status: 'completed', text: 'Implement' }] },
+      { phase: 'input', text: '', uiInteraction: permission }
     ] };
   const planSession = { id: 'active', createdAt: 1, updatedAt: 3,
     turns: [{ ...plan, id: 'older-plan' }, plan], planProgress: { path: planPath, acceptance: [acceptance] } };
@@ -165,11 +171,42 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
     const box=historyDocument.querySelector('input[data-acceptance-id]');
     return { checked:box.checked, disabled:box.disabled, label:box.labels[0]?.textContent.trim() };
   })()`), { checked: true, disabled: true, label: 'Review the output' });
+  assert.deepEqual(await evaluate(`(() => {
+    const historyDocument=document.implementation.createHTMLDocument();
+    historyDocument.body.innerHTML=${JSON.stringify(staticPlan)};
+    const snapshot=(root)=>{
+      const task=root.querySelector('.agent-todo-item');
+      return {status:task.dataset.status,badge:task.querySelector('.agent-todo-status').outerHTML,
+        tag:task.tagName, list:task.parentElement.tagName};
+    };
+    return [snapshot(document.querySelector('[data-turn-id="latest-plan"]')),snapshot(historyDocument)];
+  })()`), Array.from({ length: 2 }, () => ({
+    status: 'completed', badge: '<span class="agent-todo-status">Completed</span>', tag: 'LI', list: 'UL'
+  })));
+  assert.deepEqual(await evaluate(`(() => {
+    const historyDocument=document.implementation.createHTMLDocument();
+    historyDocument.body.innerHTML=${JSON.stringify(staticPlan)};
+    const snapshot=(root)=>{
+      const card=root.querySelector('.agent-input-disclosure');
+      return {tag:card.tagName,title:card.querySelector('summary strong').textContent,
+        body:card.querySelector('.agent-input-disclosure-body strong').textContent,
+        interactive:Boolean(card.closest('.agent-input-card').querySelector('dialog,form'))};
+    };
+    return [snapshot(document.querySelector('[data-turn-id="latest-plan"]')),snapshot(historyDocument)];
+  })()`), Array.from({ length: 2 }, () => ({
+    tag: 'DETAILS', title: 'Allow tool? — Submitted (Allow once)', body: 'Write plan', interactive: false
+  })));
   console.log('PASS live acceptance delegation, host confirmation, focus and disabled History checkbox');
 
   const viewOne = execution({ kind: 'view', nodes: [
-    { type: 'Markdown', source: '**Display first** [link](https://example.com/path) `src/view.ts`\n\n```mermaid\ngraph TD; A-->B\n```' },
-    { type: 'CodeBlock', code: 'src/view.ts' }
+    { type: 'Stack', children: [
+      { type: 'Section', title: 'Summary', children: [
+        { type: 'Inline', children: [{ type: 'Text', text: 'src/view.ts' }, { type: 'Badge', text: 'Warning', tone: 'warning' }] },
+        { type: 'Markdown', source: '**Display first** [link](https://example.com/path) `src/view.ts`\n\n```mermaid\ngraph TD; A-->B\n```' }
+      ] },
+      { type: 'Section', title: 'Details', children: [{ type: 'CodeBlock', code: 'src/view.ts' }] },
+      { type: 'Section', title: 'Notes', children: [{ type: 'Alert', text: 'Review the file', tone: 'info' }] }
+    ] }
   ] });
   const viewTwo = execution({ kind: 'view', nodes: [{ type: 'Text', text: 'Display second' }] });
   const ordinary = execution({ kind: 'ask', text: 'Ordinary answer `src/view.ts`' });
@@ -195,6 +232,9 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
       { text: 'Ordinary answer src/view.ts', tree: 0, copies: [], links: 0 }
     ]);
   }
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('[data-turn-id=display-view] [data-ui=section] > h3')].map(node=>node.textContent)`),
+    ['Summary', 'Details', 'Notes']);
+  assert.equal(await evaluate(`document.querySelector('[data-turn-id=display-view] [data-script-view] .output-copyable > pre > code').textContent`), 'src/view.ts');
   await evaluate(`host({type:'executing',value:false,sessionId:'active',turnId:'display-view',
     changes:[{path:'src/view.ts',reason:'fixture change'}]});`);
   assert.deepEqual(await evaluate(`(() => {
@@ -208,17 +248,29 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
   console.log('PASS two read-only displays stay ordered and their code stays inert after Changes arrive');
 
   const partialView = { ...viewResponse, executions: [viewOne, viewTwo], steps: [viewResponse.steps[0], viewResponse.steps[2]] };
-  const savedFailure = { ...record, id: 'failed-view', mode: 'code', output: '', response: partialView, error: 'Script stopped' };
-  await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:'failed-view',source:'ui.render()',mode:'code',startedAt:Date.now()});
-    host({type:'executionFailed',sessionId:'active',turnId:'failed-view',message:${JSON.stringify(savedFailure.error)},response:${JSON.stringify(partialView)}});
-    host({type:'executing',value:false,sessionId:'active',turnId:'failed-view'});`);
-  const failureOutput = `[...document.querySelectorAll('[data-turn-id=failed-view] .turn-output-body > :is(.execution-result,.error-output)')]
+  const interruptedTurns = [
+    { ...record, id: 'failed-view', output: '', response: partialView, error: 'Script failed.' },
+    { ...record, id: 'cancelled-view', output: '', response: partialView, error: 'Execution was cancelled.' }
+  ];
+  const interruptedOutput = id => `[...document.querySelectorAll('[data-turn-id="${id}"] .turn-output-body > :is(.execution-result,.error-output)')]
     .map(row=>(row.querySelector('[data-script-view] strong') ?? row).textContent.trim())`;
-  assert.deepEqual(await evaluate(failureOutput), ['Display first', 'Display second', 'Script stopped']);
-  await evaluate(`host({type:'outputSession',hostInitiated:true,session:{id:'active',createdAt:1,updatedAt:2,turns:[${JSON.stringify(savedFailure)}]}});`);
+  const expectedOutput = turn => ['Display first', 'Display second', turn.error];
+  for (const turn of interruptedTurns) {
+    const id = JSON.stringify(turn.id);
+    await evaluate(`host({type:'executing',value:true,sessionId:'active',turnId:${id},source:'ui.render()',mode:'code',startedAt:Date.now()});`);
+    if (turn.id === 'cancelled-view') {
+      await click('#run');
+      assert.deepEqual(await evaluate(`messages.findLast(message=>message.type==='stopExecution')`), { type: 'stopExecution', turnId: turn.id });
+    }
+    await evaluate(`host({type:'executionFailed',sessionId:'active',turnId:${id},message:${JSON.stringify(turn.error)},response:${JSON.stringify(partialView)}});
+      host({type:'executing',value:false,sessionId:'active',turnId:${id}});`);
+    assert.deepEqual(await evaluate(interruptedOutput(turn.id)), expectedOutput(turn));
+  }
+  await evaluate(`host({type:'outputSession',hostInitiated:true,session:{id:'active',createdAt:1,updatedAt:2,turns:${JSON.stringify(interruptedTurns)}}});`);
+  await evaluate(`document.querySelectorAll('details[data-turn-id]').forEach(turn=>turn.open=true)`);
   await settle();
-  assert.deepEqual(await evaluate(failureOutput), ['Display first', 'Display second', 'Script stopped']);
-  console.log('PASS failed live turn and reopened Conversation both show the displays before the error');
+  for (const turn of interruptedTurns) assert.deepEqual(await evaluate(interruptedOutput(turn.id)), expectedOutput(turn));
+  console.log('PASS failed and stopped turns keep their outputs in order during execution and when reopened');
 
   // History's HTML adapter and the shipped delegated copy handler.
   const historyProvider = await readFile('src/features/conversations/host/historyEditorProvider.ts', 'utf8');
@@ -233,10 +285,10 @@ await runWebviewChecks(async ({ evaluate, settle, send, click }) => {
     assert.match(await evaluate(`document.querySelector(${JSON.stringify(processSummary)}).textContent`), /1\.2k tokens/, 'History usage including records without duration');
     assert.ok(await evaluate(`document.querySelector('[data-turn-section="process"] > summary [data-copy]') !== null`), 'history process copy');
     assert.ok(await evaluate(`document.querySelector('[data-turn-section="output"] > [data-copy]') !== null`), 'history answer copy');
-    assert.equal(await evaluate(`document.querySelector('.json-output-text').textContent`), displayed);
+    assert.equal(await evaluate(`document.querySelector('pre.json-output-text > code').textContent`), displayed);
     await click('.json-output [data-copy]');
     assert.equal(await evaluate(`messages.findLast(m=>m.type==='copy').text`), raw, 'history HTML parsing preserves CRLF copy payload');
-    assert.equal(await evaluate(`document.querySelector('.process-command-solo pre').textContent`), command);
+    assert.equal(await evaluate(`document.querySelector('.process-command-solo pre > code').textContent`), command);
     await checkWidths('.history-content,.json-output,.process-command-solo');
   }
   console.log('PASS Conversation re-open and History replay including legacy raw JSON, exact CRLF copy and narrow layout');

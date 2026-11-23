@@ -253,22 +253,50 @@ const isDomGlobal = name => name === "window" || name === "document" || name ===
 
 function checkDom(file, source, violations) {
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
-  const locals = new Set();
+  const options = { noLib: true, noResolve: true, types: [] };
+  const host = {
+    ...ts.createCompilerHost(options),
+    getSourceFile: name => name === file ? tree : undefined
+  };
+  const checker = ts.createProgram([file], options, host).getTypeChecker();
   const serialized = new Set();
   const called = new Set();
   function declarations(node) {
-    if ((ts.isParameter(node) || ts.isVariableDeclaration(node)) && ts.isIdentifier(node.name)) locals.add(node.name.text);
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) called.add(node.expression.text);
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "toString" && ts.isIdentifier(node.expression.expression)) serialized.add(node.expression.expression.text);
+    if (ts.isCallExpression(node)) {
+      const target = node.expression;
+      if (ts.isIdentifier(target)) called.add(checker.getSymbolAtLocation(target));
+      if (ts.isPropertyAccessExpression(target) && target.name.text === "toString" && ts.isIdentifier(target.expression)) {
+        serialized.add(checker.getSymbolAtLocation(target.expression));
+      }
+    }
     ts.forEachChild(node, declarations);
   }
   declarations(tree);
+  function report(name) {
+    violations.add(`${file}: DOM global ${name} in a non-browser module`);
+  }
   function dom(node) {
+    if (ts.isTypeNode(node) && ts.isPartOfTypeNode(node)) return;
     // Existing HTML generators serialize a binding function, never run it in the host.
-    if (ts.isFunctionDeclaration(node) && node.name && serialized.has(node.name.text) && !called.has(node.name.text)) return;
-    if (ts.isIdentifier(node) && isDomGlobal(node.text) && !locals.has(node.text) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) && !ts.isPropertyAssignment(node.parent) && !ts.isParameter(node.parent)) {
-      // HTML template contents are string literals, not DOM expressions.
-      if (node.parent && !ts.isVariableDeclaration(node.parent) && !ts.isTypeReferenceNode(node.parent)) violations.add(`${file}: DOM global ${node.text} in a non-browser module`);
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      const binding = checker.getSymbolAtLocation(node.name);
+      if (binding && serialized.has(binding) && !called.has(binding)) return;
+    }
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const receiver = ts.skipOuterExpressions(node.expression);
+      const key = ts.isPropertyAccessExpression(node) ? node.name : ts.skipOuterExpressions(node.argumentExpression);
+      if ((ts.isPropertyAccessExpression(node) || ts.isStringLiteralLike(key)) && isDomGlobal(key.text) &&
+          ts.isIdentifier(receiver) && receiver.text === "globalThis" && !checker.getSymbolAtLocation(receiver)?.declarations?.length) {
+        report(key.text);
+      }
+    }
+    if (ts.isIdentifier(node) && isDomGlobal(node.text)) {
+      const parent = node.parent;
+      if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
+        if (!checker.getShorthandAssignmentValueSymbol(parent)) report(node.text);
+      } else if (parent.name !== node && parent.propertyName !== node && parent.label !== node && !checker.getSymbolAtLocation(node)) {
+        report(node.text);
+      }
     }
     ts.forEachChild(node, dom);
   }
@@ -303,6 +331,7 @@ export function checkModuleBoundaries(sources) {
         if (edge.to.startsWith("src/") && !edge.to.startsWith("src/shared/")) add(`shared depends on ${edge.to}`);
         if (isNodeBuiltin(edge.to) || edge.to === "vscode") add(`shared depends on ${edge.to}`);
       }
+      if (file.startsWith("src/shared/lib/ui/")) checkDom(file, source, violations);
     }
 
     // Platform: environment adapters, never feature implementations or the app.

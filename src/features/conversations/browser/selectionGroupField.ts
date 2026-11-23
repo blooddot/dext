@@ -1,5 +1,5 @@
 import type { UiFieldAnswer, UiSelectionField } from "../../../shared/contracts/uiForm.js";
-import { Button, Checkbox, Label, Radio } from "../../../shared/lib/ui/nativeControls.js";
+import { Button, Checkbox, Label, Radio } from "../../../shared/lib/ui/input/nativeControls.js";
 import { interactionOptionDescription, interactionTextInput } from "./interactionControls.js";
 import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 

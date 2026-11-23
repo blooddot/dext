@@ -36,11 +36,23 @@ await runLabChecks(async ({evaluate,key,settle,send,artifacts}) => {
     assert.ok(await evaluate("lab.projection.decode(lab.model.getValueInRange(lab.editor.getSelection())).includes('@src/界面/a.ts#L1,1-L3,4')"));
   }
   // Chat Enter sends; Code Enter inserts a line; Shift+Enter always inserts a line.
-  await evaluate("lab.production.setMode("chat");lab.reset('hello');lab.position(5);lab.assistance.runs=0");await key('Enter',13);assert.equal(await evaluate('lab.assistance.runs'),1);
+  await evaluate("lab.production.setMode('chat');lab.reset('hello');lab.position(5);lab.assistance.runs=0");await key('Enter',13);assert.equal(await evaluate('lab.assistance.runs'),1);
   await key('Enter',13,8);assert.equal(await evaluate('lab.source()'),'hello\n');
-  await evaluate("lab.production.setMode("code");lab.reset('hello');lab.position(5)");await key('Enter',13);assert.equal(await evaluate('lab.assistance.runs'),1);assert.equal(await evaluate('lab.source()'),'hello\n');
-  // Native @ suggestions operate in chat mode and Enter accepts rather than sends.
-  await evaluate("lab.production.setMode("chat");lab.reset('@');lab.position(1);lab.production.triggerSuggest()");await settle();await key('Enter',13);await settle();assert.ok((await evaluate('lab.source()')).includes('@src/'));assert.equal(await evaluate('lab.assistance.runs'),1);
+  await evaluate("lab.production.setMode('code');lab.reset('hello');lab.position(5)");await key('Enter',13);assert.equal(await evaluate('lab.assistance.runs'),1);assert.equal(await evaluate('lab.source()'),'hello\n');
+  // File suggestions stay closed when typing @ or invoking completion in chat.
+  await evaluate("lab.production.setMode('chat');lab.reset('');lab.position(0)");
+  await send('Input.insertText',{text:'@'});await settle();
+  const suggestionVisible=()=>evaluate("Boolean(document.querySelector('#editor .suggest-widget.visible'))");
+  assert.equal(await suggestionVisible(),false);
+  await evaluate('lab.production.triggerSuggest()');await settle();
+  assert.equal(await evaluate("document.querySelectorAll('#editor .suggest-widget .monaco-list-row').length"),0);
+  assert.equal(await evaluate('lab.source()'),'@');
+  await key('Escape',27);
+  await key('Enter',13);assert.equal(await evaluate('lab.assistance.runs'),2);
+  await evaluate("lab.reset('');lab.position(0)");
+  await send('Input.insertText',{text:'@src/a.ts '});await settle();
+  assert.equal(await evaluate('lab.source()'),'@src/a.ts ');
+  assert.equal(await evaluate('lab.refs().length'),1);
   // Identical draft switch must invalidate pending clipboard work.
   await evaluate("lab.reset('draft');window.releasePaste=undefined;lab.production.options.clipboard.read=()=>new Promise(resolve=>releasePaste=resolve);lab.position(5)");await key('v',86,2);
   await evaluate("lab.reset('draft');releasePaste({text:'late',contextAttached:false});lab.production.options.clipboard.read=oldRead");await settle();assert.equal(await evaluate('lab.source()'),'draft');
@@ -58,7 +70,7 @@ await runLabChecks(async ({evaluate,key,settle,send,artifacts}) => {
   // Verify production styles and all host theme classes in a narrow editor.
   await evaluate("{const style=document.createElement('style');style.textContent="+JSON.stringify(await readFile('media/styles.css','utf8'))+";document.head.append(style);document.getElementById('editor').classList.add('code-editor');}");
   for(const theme of ['vscode-light','vscode-dark','vscode-high-contrast','vscode-high-contrast-light']) {
-    await evaluate("document.body.className='"+theme+"';document.documentElement.dataset.theme='"+({ 'vscode-light':'vs','vscode-dark':'vs-dark','vscode-high-contrast':'hc-black','vscode-high-contrast-light':'hc-light'}[theme])+"';lab.production.setMode("code");lab.reset();lab.editor.updateOptions({wordWrap:'on'});document.getElementById('width').value='320';document.getElementById('width').dispatchEvent(new Event('change'));window.scrollTo(0,0)");await settle();
+    await evaluate("document.body.className='"+theme+"';document.documentElement.dataset.theme='"+({ 'vscode-light':'vs','vscode-dark':'vs-dark','vscode-high-contrast':'hc-black','vscode-high-contrast-light':'hc-light'}[theme])+"';lab.production.setMode('code');lab.reset();lab.editor.updateOptions({wordWrap:'on'});document.getElementById('width').value='320';document.getElementById('width').dispatchEvent(new Event('change'));window.scrollTo(0,0)");await settle();
     await evaluate(`document.body.style.setProperty('--vscode-textLink-foreground','${theme.includes('light')?'#173e67':'#c2e1ff'}');document.body.style.setProperty('--vscode-textCodeBlock-background','${theme.includes('light')?'#e3effb':'#26415f'}');document.body.style.background='var(--page-bg)';document.body.style.color='var(--text)';`);await settle();
     const counts=await evaluate("lab.refs().map((_,i)=>document.querySelectorAll('.ref-open-'+i).length)");assert.ok(counts.every(n=>n===1));
     const colors=await evaluate("{const s=getComputedStyle(document.querySelector('.dext-ref-chip'));({fg:s.color,bg:s.backgroundColor})}");

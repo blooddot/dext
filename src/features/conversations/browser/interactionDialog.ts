@@ -1,5 +1,6 @@
 import type { InteractionForm } from "./interactionForm.js";
-import { Button } from "../../../shared/lib/ui/nativeControls.js";
+import { Button } from "../../../shared/lib/ui/input/nativeControls.js";
+import { Dialog } from "../../../shared/lib/ui/overlay/dialog.js";
 import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 /** The dialog and the inline card share the whole-view toggle: the button names
@@ -25,7 +26,7 @@ export class InteractionDialog {
   private previousFocus: HTMLElement | undefined;
   constructor(form: InteractionForm) {
     const adapter = domUiAdapter(form.element.ownerDocument);
-    this.element = adapter.element("dialog", { class: "interaction-dialog", "aria-label": form.definition.title }, []) as HTMLDialogElement;
+    this.element = Dialog(adapter, { label: form.definition.title }, [], { class: "interaction-dialog" }) as HTMLDialogElement;
     const close = Button(adapter, { class: "interaction-close", "aria-label": "Close interaction" }, ["×"]);
     close.addEventListener("click", () => form.cancel());
     const fullscreen = interactionFullscreen(this.element);

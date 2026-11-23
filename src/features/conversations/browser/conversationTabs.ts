@@ -1,7 +1,9 @@
 import type { ConversationSummary } from "../contracts/protocol.js";
-import { Spinner, TraceIcon } from "../../../shared/lib/ui/traceComponents.js";
-import { Button } from "../../../shared/lib/ui/nativeControls.js";
+import { Spinner } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
+import { TraceIcon } from "../../../shared/lib/ui/content/traceComponents.js";
+import { Button } from "../../../shared/lib/ui/input/nativeControls.js";
 import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
+import { Tab } from "../../../shared/lib/ui/navigation/navigationComponents.js";
 
 export interface ConversationTabActions {
   select(sessionId: string): void;
@@ -12,12 +14,18 @@ export interface ConversationTabActions {
 export interface ConversationTabStripOptions {
   document: Document;
   container: HTMLElement;
+  panel: HTMLElement;
   actions: ConversationTabActions;
 }
 
-export function setTabSelected(tab: HTMLElement, selected: boolean, selectedClass: "active" | "is-selected" = "active"): void {
-  tab.classList.toggle(selectedClass, selected);
-  tab.setAttribute("aria-selected", String(selected));
+function labelPanel(panel: HTMLElement, label: HTMLElement | undefined): void {
+  if (label) {
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", label.id);
+  } else {
+    panel.removeAttribute("role");
+    panel.removeAttribute("aria-labelledby");
+  }
 }
 
 /** Renders the conversation tab strip. The caller keeps the drag controller and
@@ -27,19 +35,19 @@ export function renderConversationTabs(
   sessions: readonly ConversationSummary[],
   activeId: string
 ): HTMLElement | undefined {
-  const { document, container, actions } = options;
+  const { document, container, panel, actions } = options;
   const adapter = domUiAdapter(document);
   container.replaceChildren();
   container.hidden = sessions.length === 0;
   let activeTab: HTMLElement | undefined;
+  let activeLabel: HTMLElement | undefined;
   for (const conversation of sessions) {
     const active = conversation.id === activeId;
     const tab = adapter.element("div", {
-      class: `conversation-tab${conversation.pinned ? " pinned" : ""}${conversation.running ? " running" : ""}`,
-      "data-session-id": conversation.id, role: "tab",
+      class: `conversation-tab${active ? " active" : ""}${conversation.pinned ? " pinned" : ""}${conversation.running ? " running" : ""}`,
+      "data-session-id": conversation.id, role: "presentation",
       title: conversation.running ? `${conversation.title} — running` : conversation.title
     }, []);
-    setTabSelected(tab, active);
     // VS Code reads this attribute to build the native tab context menu and
     // passes the merged object to the invoked command.
     tab.dataset.vscodeContext = JSON.stringify({
@@ -74,7 +82,11 @@ export function renderConversationTabs(
     tab.addEventListener("mouseup", (event) => {
       if (event.button === 1) middleButtonDown = false;
     });
-    const label = Button(adapter, { class: "conversation-tab-label" }, [conversation.title]);
+    const label = Tab(adapter, active, {
+      id: `conversation-tab-${encodeURIComponent(conversation.id)}`,
+      class: "conversation-tab-label",
+      "aria-controls": panel.id
+    }, [conversation.title]);
     // Select on press instead of waiting for the browser's click synthesis.
     // In the trace, pointerup/click can arrive 90–180ms after pointerdown
     // while the webview is busy.  The tab highlight and viewport reset are
@@ -107,8 +119,24 @@ export function renderConversationTabs(
       else actions.close(conversation.id);
     });
     tab.append(label, activity, action);
-    if (active) activeTab = tab;
+    if (active) {
+      activeTab = tab;
+      activeLabel = label;
+    }
     container.append(tab);
   }
+  labelPanel(panel, activeLabel);
   return activeTab;
+}
+
+export function selectRenderedConversationTab(container: HTMLElement, panel: HTMLElement, sessionId: string): void {
+  let activeLabel: HTMLElement | undefined;
+  for (const tab of container.querySelectorAll<HTMLElement>(".conversation-tab")) {
+    const active = tab.dataset.sessionId === sessionId;
+    tab.classList.toggle("active", active);
+    const label = tab.querySelector<HTMLElement>("[role=tab]");
+    label?.setAttribute("aria-selected", String(active));
+    if (active && label) activeLabel = label;
+  }
+  labelPanel(panel, activeLabel);
 }

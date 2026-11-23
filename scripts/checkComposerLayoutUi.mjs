@@ -13,7 +13,8 @@ await runWebviewChecks(async ({ evaluate, settle, send, key, artifacts }) => {
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(await readFile('dist/webview/main.css', 'utf8'))};document.head.append(style);}`);
   await evaluate(await readFile('dist/webview/main.js', 'utf8'));
   await evaluate(`window.selection={profileId:'codex',mode:'plan',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:''};
-    host({type:'state',state:{methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']}],agentSelection:selection,skills:[{id:'ponytail',title:'Ponytail',description:'Lean code',packId:'ponytail',packName:'Ponytail',commandIds:['ponytail-review']},{id:'ponytail-review',title:'Review',description:'Review',packId:'ponytail',packName:'Ponytail',commandIds:[]}],skillCommands:[{id:'ponytail-review',title:'Review',description:'Review',skillId:'ponytail',packId:'ponytail',packName:'Ponytail',syntax:'/ponytail-review'}],skillsEnabled:true}});
+    window.layoutState={methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']}],agentSelection:selection,skills:[{id:'ponytail',title:'Ponytail',description:'Lean code',packId:'ponytail',packName:'Ponytail',commandIds:['ponytail-review']},{id:'ponytail-review',title:'Review',description:'Review',packId:'ponytail',packName:'Ponytail',commandIds:[]}],skillCommands:[{id:'ponytail-review',title:'Review',description:'Review',skillId:'ponytail',packId:'ponytail',packName:'Ponytail',syntax:'/ponytail-review'}],skillsEnabled:true};
+    host({type:'state',state:layoutState});
     host({type:'conversations',sessions:[{id:'active',title:'Layout',updatedAt:1,turnCount:0,pinned:false,running:false}],activeId:'active',selection,planStatus:'new',hostInitiated:true});`);
   const bounds = () => evaluate(`{
     const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height};};
@@ -36,6 +37,18 @@ await runWebviewChecks(async ({ evaluate, settle, send, key, artifacts }) => {
   };
   await send('Emulation.setDeviceMetricsOverride', { width: 940, height: 1000, deviceScaleFactor: 1, mobile: false });
   await settle();
+  await evaluate(`document.getElementById('mode-control').click()`);
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('#mode-menu [role=menuitemradio]')].map(item=>[
+    item.textContent.trim(),item.getAttribute('aria-checked')
+  ])`), [['Agent','false'],['Ask','false'],['Plan','true'],['Code','false']]);
+  for (const [index, mode, label] of [[3, 'code', 'Run'], [2, 'plan', 'Send']]) {
+    await evaluate(`document.querySelectorAll('#mode-menu [role=menuitemradio]')[${index}].click()`);
+    assert.equal(await evaluate(`sent.findLast(message=>message.type==='agentSelection')?.selection.mode`), mode);
+    await evaluate(`host({type:'state',state:{...layoutState,agentSelection:sent.findLast(message=>message.type==='agentSelection').selection}})`);
+    assert.equal(await evaluate(`document.querySelector('#input-section').dataset.mode`), mode);
+    assert.equal(await evaluate(`document.querySelector('#run').getAttribute('aria-label')`), label);
+    if (mode === 'code') await evaluate(`document.getElementById('mode-control').click()`);
+  }
   const before = await bounds();
   assert.equal(await evaluate(`document.getElementById('skills-menu-shell').hidden`), false, 'Skills is a primary composer control');
   await evaluate(`document.getElementById('skills-control').click()`);

@@ -769,7 +769,7 @@ describe("Dext history rendering", () => {
 
     const html = renderHistorySession({ id: "session-1", createdAt: 1, updatedAt: 2, turns });
 
-    expect(html).toContain('data-vscode-context=\'{&quot;webviewSection&quot;:&quot;session&quot;,&quot;sessionId&quot;:&quot;session-1&quot;,&quot;dextFavorite&quot;:false,&quot;preventDefaultContextMenuItems&quot;:true}\'');
+    expect(html).toContain('data-vscode-context="{&quot;webviewSection&quot;:&quot;session&quot;,&quot;sessionId&quot;:&quot;session-1&quot;,&quot;dextFavorite&quot;:false,&quot;preventDefaultContextMenuItems&quot;:true}"');
     expect(html).toContain('&quot;webviewSection&quot;:&quot;turn&quot;,&quot;sessionId&quot;:&quot;session-1&quot;,&quot;turnId&quot;:&quot;turn-0&quot;');
     // A turn rendered on its own has no conversation to act on.
     expect(renderHistoryRecord(turns[0]!)).not.toContain("data-vscode-context");

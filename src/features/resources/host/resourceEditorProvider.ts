@@ -4,6 +4,9 @@ import { editorTabKey } from "../../../platform/editor-tabs/editorTabTypes.js";
 import type { ApiCallable, ApiDataSourceOptions, FileResourceDataSourceOptions, ResourceEditorDataSource, ResourceEditorProviderOptions, ResourceEditorShowResult, ResourceEntry } from "../contracts/resourceDocuments.js";
 import { RESOURCE_DIRECTORIES, resourceDirectorySegments, type ResourceKind, type ResourceScope } from "../contracts/resourceSession.js";
 import { filterResourceEntries, resourceEntryId } from "../presentation/resourceDocuments.js";
+import { UI_VIEW_NODE_TYPES } from "../../../shared/contracts/uiView.js";
+
+const UI_RENDER_TYPES = new Set(["UiNode", "UiLayoutChild", "UiTraceLineChild", "UiGap", ...UI_VIEW_NODE_TYPES.map((name) => `Ui${name}`)]);
 
 
 /**
@@ -211,10 +214,41 @@ export function createApiDataSource(options: ApiDataSourceOptions): ResourceEdit
       const reference = await options.reference?.();
       const entry = entries(reference).find(candidate => candidate.id === id);
       if (!entry) return undefined;
-      const apiTypes = entry.name === "ui.render"
-        ? reference?.dext?.filter(({ name }) => /^Ui(?:Node|TraceLine|TraceLineChild)$/.test(name))
-        : undefined;
-      return { entry: apiTypes?.length ? { ...entry, apiTypes } : entry, content: "" };
+      if (entry.name !== "ui.render") return { entry, content: "" };
+      const apiTypes = reference?.dext?.filter(({ name }) => UI_RENDER_TYPES.has(name));
+      return {
+        entry: {
+          ...entry,
+          ...(apiTypes?.length ? { apiTypes } : {}),
+          apiExample: [
+            'import { ui } from "dext";',
+            "",
+            "await ui.render({ nodes: [",
+            '  { type: "Text", text: "Config preview" },',
+            '  { type: "CodeBlock", code: "schema: spec-driven" },',
+            '  { type: "Stack", children: [',
+            '    { type: "Section", title: "Summary", children: [',
+            '      { type: "Inline", children: [',
+            '        { type: "Text", text: "openspec/config.yaml" },',
+            '        { type: "Badge", text: "Ready", tone: "info" }',
+            '      ] }',
+            '    ] },',
+            '    { type: "Section", title: "Details", children: [',
+            '      { type: "Empty", text: "No fixes needed" },',
+            '      { type: "Alert", text: "The report is read-only" }',
+            '    ] }',
+            '  ] },',
+            '  { type: "Trace", children: [',
+            '    { type: "TraceLine", status: "completed", children: [',
+            '      { type: "TraceIcon", icon: "check" },',
+            '      { type: "TraceTitle", text: "Checked the configuration" }',
+            '    ] }',
+            '  ] }',
+            "] });"
+          ].join("\n")
+        },
+        content: ""
+      };
     }
   };
 }

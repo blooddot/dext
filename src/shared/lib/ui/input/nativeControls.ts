@@ -1,4 +1,4 @@
-import type { ComponentAttributes, UiRenderAdapter } from "./renderAdapter.js";
+import type { ComponentAttributes, UiRenderAdapter } from "../renderAdapter.js";
 
 export function Button<E>(adapter: UiRenderAdapter<E>, attributes: ComponentAttributes, children: readonly (E | string)[] = []): E {
   return adapter.element("button", { type: "button", ...attributes }, children);
@@ -20,8 +20,4 @@ export function Radio<E>(adapter: UiRenderAdapter<E>, attributes: ComponentAttri
 
 export function Label<E>(adapter: UiRenderAdapter<E>, attributes: ComponentAttributes, children: readonly (E | string)[]): E {
   return adapter.element("label", attributes, children);
-}
-
-export function Alert<E>(adapter: UiRenderAdapter<E>, text: string, attributes: ComponentAttributes = {}): E {
-  return adapter.element("p", { role: "alert", ...attributes }, [text]);
 }

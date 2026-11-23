@@ -4,11 +4,17 @@ import type { DefaultTreeAdapterTypes } from "parse5";
 import { renderTurnResult, renderTurnSection, renderTurnMode, renderTurnOutput, renderTurnMessage, renderTurnJson } from "../src/features/conversations/presentation/turnComponents.js";
 import { htmlUiAdapter } from "../src/shared/lib/ui/htmlUiAdapter.js";
 import { domUiAdapter } from "../src/platform/browser/domUiAdapter.js";
+import { Badge, Spinner } from "../src/shared/lib/ui/feedback/feedbackComponents.js";
+import { Code, CodeBlock, Markdown, Separator, Text } from "../src/shared/lib/ui/content/contentComponents.js";
 import {
-  Badge, Code, CodeBlock, Markdown, Separator, Spinner, Text,
-  Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle
-} from "../src/shared/lib/ui/traceComponents.js";
+  Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
+  TraceDescription, TraceIcon, TraceLine, TraceTitle
+} from "../src/shared/lib/ui/content/traceComponents.js";
 import type { MarkupAdapter } from "../src/shared/lib/ui/renderAdapter.js";
+import { renderUiView, uiViewText } from "../src/shared/lib/ui/uiViewPresentation.js";
+import { Dialog } from "../src/shared/lib/ui/overlay/dialog.js";
+import { Field, Form, Textarea } from "../src/shared/lib/ui/input/formComponents.js";
+import { Button } from "../src/shared/lib/ui/input/nativeControls.js";
 import { presentTurn, presentTurnMode, resultCopyText } from "../src/features/conversations/presentation/turnPresentation.js";
 import type { UiViewResult } from "../src/shared/contracts/uiView.js";
 import { presentAgentMessage } from "../src/features/conversations/presentation/agentMessagePresentation.js";
@@ -100,6 +106,47 @@ function traceFixture<E>(adapter: MarkupAdapter<E>, interactive: boolean): E {
 }
 
 describe("shared view primitives", () => {
+  it("preserves section hierarchy, layout defaults and text order in both media", () => {
+    const report = { kind: "view", nodes: [{
+      type: "Stack", children: [{
+        type: "Section", title: "Report <today>", description: "Overview & scope", children: [{
+          type: "Inline", children: [
+            { type: "Badge", text: "Done", status: "completed", tone: "info" },
+            { type: "Section", title: "Details", children: [
+              { type: "Empty", text: "No failures" }, { type: "CodeBlock", code: "<source>" }
+            ] }
+          ]
+        }]
+      }]
+    }] } satisfies UiViewResult;
+    const markup = renderUiView(htmlUiAdapter, report)!.html;
+    const dom = renderUiView(domUiAdapter(parsedDocument()), report);
+    expect(comparableStructure(markup)).toEqual([serializeOuter(dom as unknown as ParsedElement)]);
+    expect(markup).toContain('<div data-ui="stack" data-gap="md"><section data-ui="section"><h3>Report &lt;today&gt;</h3>');
+    expect(markup).toContain('<div data-ui="inline" data-gap="sm" data-wrap="true">');
+    expect(markup).toContain('data-status="completed" data-ui-tone="info">Done</span><section data-ui="section"><h4>Details</h4>');
+    expect(markup).toContain('<p data-ui="empty">No failures</p>');
+    expect(markup).toContain('<pre><code>&lt;source&gt;</code></pre>');
+    expect(markup).toContain('title="Copy" disabled');
+    expect(uiViewText(report)).toBe("Report <today>\nOverview & scope\nDone\nDetails\nNo failures\n<source>");
+  });
+
+  it("preserves the form name, field text and disabled native controls in both media", () => {
+    const fixture = <E>(adapter: MarkupAdapter<E>) => Dialog(adapter, { label: "Review & submit" }, [
+      Form(adapter, "Review & submit", [
+        Field(adapter, "Comment", [
+          Textarea(adapter, { "aria-label": "Comment", disabled: true }, "<saved>")
+        ], { description: "Optional & visible" }),
+        Button(adapter, { type: "submit", disabled: true }, ["Submit"])
+      ], { novalidate: true })
+    ]);
+    const source = fixture(htmlUiAdapter).html;
+    expect(comparableStructure(source)).toEqual([serializeOuter(fixture(domUiAdapter(parsedDocument())) as unknown as ParsedElement)]);
+    expect(source).toContain('<dialog aria-label="Review &amp; submit"><form aria-label="Review &amp; submit" novalidate>');
+    expect(source).toContain('<legend>Comment</legend><p>Optional &amp; visible</p><textarea aria-label="Comment" disabled>&lt;saved&gt;</textarea>');
+    expect(source).toContain('<button type="submit" disabled>Submit</button>');
+  });
+
   it.each([true, false])("produces equivalent parsed markup and DOM for interactive=%s", (interactive) => {
     const staticMarkup = presentation(htmlUiAdapter, interactive).html;
     const dom = presentation(domUiAdapter(parsedDocument()), interactive);

@@ -4,6 +4,7 @@ import { VideoAnnotator } from "./videoAnnotator.js";
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
 const vscode = acquireVsCodeApi();
+const lifecycle = new AbortController();
 const meta = (name: string): string => document.querySelector(`meta[name="${name}"]`)?.getAttribute("content") ?? "";
 
 interface FrameImageResult {
@@ -33,7 +34,7 @@ window.addEventListener("message", (event: MessageEvent<FrameImageResult>) => {
   pendingFrames.delete(message.requestId);
   if (message.relativePath) pending.resolve(message.relativePath);
   else pending.reject(new Error(message.error ?? "The frame image could not be stored."));
-});
+}, { signal: lifecycle.signal });
 
 const storeFrame = (data: string, mimeType: string): Promise<string> => new Promise((resolve, reject) => {
   const requestId = ++nextFrameRequest;
@@ -52,7 +53,7 @@ window.addEventListener("message", (event: MessageEvent<TranscodeResult>) => {
   pendingTranscodes.delete(message.requestId);
   if (message.source) pending.resolve(message.source);
   else pending.reject(new Error(message.error ?? "This video could not be converted."));
-});
+}, { signal: lifecycle.signal });
 
 /** The host runs FFmpeg: only it can reach the file and the program. */
 const transcode = (): Promise<string> => new Promise((resolve, reject) => {
@@ -72,3 +73,12 @@ const annotator = new VideoAnnotator({
 });
 
 annotator.open();
+window.addEventListener("pagehide", () => {
+  const reason = new DOMException("This operation was aborted", "AbortError");
+  lifecycle.abort(reason);
+  annotator.dispose();
+  for (const pending of pendingFrames.values()) pending.reject(reason);
+  for (const pending of pendingTranscodes.values()) pending.reject(reason);
+  pendingFrames.clear();
+  pendingTranscodes.clear();
+}, { once: true });

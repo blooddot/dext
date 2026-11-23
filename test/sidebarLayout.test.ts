@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { DextHistoryRecord } from "../src/features/conversations/contracts/history.js";
+import { renderHistorySession } from "../src/features/conversations/presentation/historyRender.js";
 
 vi.mock("vscode", () => ({}));
 
@@ -103,14 +104,14 @@ describe("sidebar panel layout", () => {
     expect(extension).toContain("editors.resources?.showList()");
     expect(html).not.toContain('id="methods-section"');
     expect(html.indexOf('id="result-section"')).toBeLessThan(html.indexOf('id="input-section"'));
-    expect(html).toMatch(/id="input-body" class="input-body"[\s\S]*id="input-shell"[\s\S]*id="attachment-bar"[\s\S]*class="action-row"/);
+    expect(html).toMatch(/id="input-body" class="input-body"[\s\S]*id="input-shell"[\s\S]*id: "attachment-bar"[\s\S]*class: "action-row"/);
     expect(html.match(/class="icon-button panel-fullscreen"/g)).toBeNull();
   });
 
   it("places the queued message row next to the composer", async () => {
     const html = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(html).toMatch(/id="input-shell"[\s\S]*id="queued-turn"[\s\S]*id="attachment-bar"/);
+    expect(html).toMatch(/id="input-shell"[\s\S]*id="queued-turn"[\s\S]*id: "attachment-bar"/);
     expect(html).toMatch(/id="queued-turn-label"[\s\S]*id="queued-turn-edit"[\s\S]*id="queued-turn-withdraw"/);
     // No second button for queueing: Enter is the only way in, as in Cursor and Codex.
     expect(html).not.toContain('id="queue-turn"');
@@ -128,9 +129,9 @@ describe("sidebar panel layout", () => {
     expect(html).not.toContain('id="create-resource"');
     expect(main).not.toContain('openResourceCreator');
     expect(html).not.toContain('id="resource-creator-dialog"');
-    expect(html).toContain('id="resource-toolbar"');
-    expect(html).toContain('id="resource-preview"');
-    expect(html).toContain('id="resource-save"');
+    expect(html).toContain('id: "resource-toolbar"');
+    expect(html).toContain('id: "resource-preview"');
+    expect(html).toContain('id: "resource-save"');
     expect(main).toContain('renderResourceControls()');
     expect(main).not.toContain('resourceCreatorDialog');
   });
@@ -170,7 +171,7 @@ describe("sidebar panel layout", () => {
     expect(main).not.toContain("toggleSection");
     expect(main).not.toContain("syncResultToggle");
     // The turns themselves are still native disclosures.
-    expect(transcript).toContain('const disclosure = document.createElement("details");');
+    expect(transcript).toContain('const disclosure = Disclosure(adapter, summary, [body]');
   });
 
   it("uses exactly Mode, Agent, and Model controls for the input footer", async () => {
@@ -178,11 +179,11 @@ describe("sidebar panel layout", () => {
     const main = await source("src/webview/main.ts");
     const editor = await source("src/webview/codeEditor.ts");
     const css = await source("media/styles.css");
-    expect(html).toContain('id="mode-control"');
+    expect(html).toContain('composerMenu("mode", "Mode"');
     expect(html).toContain('id="mode-control-icon"');
-    expect(html).toContain('id="agent-control"');
-    expect(html).toContain('id="model-control"');
-    expect(html).toContain('id="model-submenu" class="composer-popover composer-model-popover composer-model-submenu"');
+    expect(html).toContain('composerMenu("agent", "Agent"');
+    expect(html).toContain('composerMenu("model", "Model"');
+    expect(html).toContain('id: "model-submenu", class: "composer-popover composer-model-popover composer-model-submenu"');
     expect(html).not.toContain('id="agent-profile"');
     expect(main).toContain('type InputMode = "agent" | "ask" | "plan" | "code"');
     expect(main).toContain('editor.setMode(inputMode === "code" ? "code" : "chat")');
@@ -361,7 +362,7 @@ describe("sidebar panel layout", () => {
     const main = await source("src/webview/main.ts");
     const manifest = await source("package.json");
     const css = await source("media/styles.css");
-    expect(html).toContain('id="permission-control"');
+    expect(html).toContain('composerMenu("permission", "Permission"');
     expect(html).toContain('id="permission-menu-shell"');
     // Ask is the dedicated read-only mode; Agent and Plan expose write scope.
     expect(main).toContain('elements.permissionMenuShell.hidden = inputMode !== "agent" && inputMode !== "plan"');
@@ -469,7 +470,7 @@ describe("sidebar panel layout", () => {
     // title bar and the only webview chrome left is the tab strip.
     expect(html).not.toContain('class="chat-header"');
     expect(css).not.toContain(".chat-header");
-    expect(html).toContain('<nav id="conversation-tabs" class="conversation-tabs" role="tablist"');
+    expect(html).toContain('TabList(htmlUiAdapter, "Dext conversations", { id: "conversation-tabs", class: "conversation-tabs" }');
     expect(css).toMatch(/^\.app-shell \{[\s\S]*?flex-direction: column;/m);
     expect(css).toMatch(/^main \{\r?\n {2}flex: 1 1 auto;/m);
     expect(css).toMatch(/\.conversation-tab \{[\s\S]*?max-width: 190px;[\s\S]*?\}/);
@@ -508,7 +509,7 @@ describe("sidebar panel layout", () => {
     ])));
     expect(h.controller.layout().openConversationIds.filter((id) => id === "two")).toHaveLength(1);
     h.dispose();
-    expect(html).toContain('id="input-error" class="input-error"');
+    expect(html).toContain('{ id: "input-error", class: "input-error", hidden: true }');
     expect(main).toMatch(/function renderInputError[\s\S]*elements\.inputError\.hidden = false/);
     expect(main).toMatch(/message\.type === "error"[\s\S]*renderInputError\(message\.message\)/);
     expect(main).not.toContain("Code mode only");
@@ -726,7 +727,7 @@ describe("sidebar panel layout", () => {
     const transcript = await source("src/features/conversations/browser/transcriptView.ts");
     const sidebar = await source("src/app/sidebarProvider.ts");
     const css = await source("media/styles.css");
-    const history = await source("src/features/conversations/presentation/historyRender.ts");
+    const history = renderHistorySession(conversation("history", [turn("turn")]));
     // The summary is its own click target, so an action click must not fold the
     // turn it belongs to.
     expect(transcript).toMatch(/private actionButton[\s\S]*?event\.preventDefault\(\);\s*event\.stopPropagation\(\);/);
@@ -805,7 +806,7 @@ describe("sidebar panel layout", () => {
     // A mouse click must not leave the bar pinned open via focus.
     expect(css).not.toContain(".output-turn:focus-within");
     expect(css).not.toContain(".history-record:focus-within");
-    expect(history).toContain('const TURN_ACTION_HINT = "Right-click for turn actions";');
+    expect(history).toContain('<summary title="Right-click for turn actions">');
     expect(css).toMatch(/\.history-record:hover \.history-turn-actions,[\s\S]*?opacity: 1;/);
     // An open turn parks its actions in the Worked row, clear of the prompt and
     // of any question card above it, so the row owns the space while it shows.
@@ -814,7 +815,7 @@ describe("sidebar panel layout", () => {
     expect(css).toMatch(/\.turn-section > summary > \.output-turn-actions \{[\s\S]*?position: static;[\s\S]*?display: none;[\s\S]*?padding: 0;[\s\S]*?border: 0;/);
     expect(transcript).toMatch(/disclosure\.open \? process\.summary : summary/);
     expect(css).toMatch(/\.history-record-body > \.history-turn-actions \{[\s\S]*?top: 4px;[\s\S]*?transform: none;/);
-    expect(history).toContain('<summary title="${SESSION_ACTION_HINT}">');
+    expect(history).toContain('<summary title="Right-click for conversation actions">');
   });
 
   it("clears submitted text and its attachment chips without deleting the files", async () => {

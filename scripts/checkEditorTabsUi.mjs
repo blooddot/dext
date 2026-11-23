@@ -38,7 +38,17 @@ try {
     throw new Error(`Timed out waiting for ${label}`);
   };
 
-  const bundle = await build({ stdin: { contents: 'export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts"; export { buildResourceList, renderResourceDefinition, buildResourceDefinition } from "./src/features/resources/presentation/resourceDocuments.ts"; export { renderApiList } from "./src/features/resources/presentation/apiPanel.ts"; export { renderGlobalResources } from "./src/features/resources/presentation/globalResourcesPanel.ts";', resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
+  const bundle = await build({ stdin: { contents: `
+    export { renderEditorTabHtml } from "./src/platform/editor-tabs/editorTabHtml.ts";
+    export { EditorTabManager } from "./src/platform/editor-tabs/editorTabManager.ts";
+    export { EditorTabRestorer } from "./src/platform/editor-tabs/editorTabSerializer.ts";
+    export { ResourceBrowserProvider } from "./src/features/resources/host/resourceBrowserProvider.ts";
+    export { createApiDataSource } from "./src/features/resources/host/resourceEditorProvider.ts";
+    export { BUILTIN_METHODS } from "./src/features/workflow/domain/builtins.ts";
+    export { buildResourceList, renderResourceDefinition, buildResourceDefinition } from "./src/features/resources/presentation/resourceDocuments.ts";
+    export { renderApiList } from "./src/features/resources/presentation/apiPanel.ts";
+    export { renderGlobalResources } from "./src/features/resources/presentation/globalResourcesPanel.ts";
+    `, resolveDir: process.cwd() }, bundle: true, write: false, platform: "node", format: "esm" });
   const ui = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`);
   // Build the real Webview entries so the API detail fixture renders Mermaid under
   // the page CSP. Mermaid is a separate lazy bundle now; both files are served from
@@ -50,12 +60,14 @@ try {
   const apiFlowScript = apiFlowBundle.outputFiles[0].text;
   const mermaidScript = mermaidBundle.outputFiles[0].text;
   const css = (await readFile('media/editorTabs.css', 'utf8')) + '\n' + (await readFile('media/appearance.css', 'utf8'));
+  const foundationCss = await readFile('media/ui.css', 'utf8');
   let pageHtml = '', themeCss = '', themeClass = '';
   server = createServer((request, response) => {
     const url = request.url ?? '';
-    const contentType = url === '/style.css' ? 'text/css' : url === '/apiFlow.js' || url === '/mermaid.js' ? 'text/javascript' : 'text/html';
+    const contentType = url === '/style.css' || url === '/ui.css' ? 'text/css' : url === '/apiFlow.js' || url === '/mermaid.js' ? 'text/javascript' : 'text/html';
     response.setHeader('Content-Type', contentType);
-    response.end(url === '/style.css' ? themeCss + css : url === '/apiFlow.js' ? apiFlowScript : url === '/mermaid.js' ? mermaidScript : pageHtml);
+    response.end(url === '/style.css' ? css.replace('@import "./ui.css";', () => '@import "./ui.css";\n' + themeCss)
+      : url === '/ui.css' ? foundationCss : url === '/apiFlow.js' ? apiFlowScript : url === '/mermaid.js' ? mermaidScript : pageHtml);
   });
   await new Promise(done => server.listen(0, '127.0.0.1', done));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -74,11 +86,15 @@ try {
   entries[1].api = { signature: 'main(input?: string): Promise<AskResult>', parameters: [{ name: 'input', type: 'string', required: false }], returnType: 'Promise<AskResult>' };
   const artifacts = resolve('.tmp-tb/editor-tabs-ui'); await mkdir(artifacts, { recursive: true });
   async function load(body, options = {}, bootstrap = '') {
-    pageHtml = ui.renderEditorTabHtml('<script>' + bootstrap + 'window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message)});</script>' + body, `${origin}/style.css`, origin, { mermaidUri: `${origin}/mermaid.js`, ...options });
+    pageHtml = ui.renderEditorTabHtml('<script>' + bootstrap
+      + 'window.messages=[];window.acquireVsCodeApi=()=>({postMessage:message=>messages.push(message),setState:state=>{window.tabState=state;}});</script>'
+      + body, `${origin}/style.css`, origin, { mermaidUri: `${origin}/mermaid.js`, ...options });
     await send('Page.navigate', { url: `${origin}/?${Date.now()}` });
     for (let i = 0; i < 100; i++) {
       if (await evaluate(`document.readyState === 'complete' && !!document.querySelector('.editor-tab') && !!window.messages`)) {
         await evaluate(`document.body.classList.add(${JSON.stringify(themeClass)})`);
+        assert.ok(await evaluate(`getComputedStyle(document.body).getPropertyValue('--dext-ui-fg').trim()`),
+          'The local foundation stylesheet must load under the editor tab CSP');
         return;
       }
       await new Promise(done => setTimeout(done, 30));
@@ -97,7 +113,7 @@ try {
       assert.equal(await evaluate(`getComputedStyle(document.querySelector('.resource-group ul')).listStyleType`), 'none');
       assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
       assert.equal(await evaluate(`document.querySelectorAll('[data-resource-toggle-all]').length`), 1);
-      await evaluate(`document.querySelector('[data-resource-toggle-all] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+      await evaluate(`document.querySelector('[data-resource-toggle-all] [data-resource-icon]:not([hidden]) .codicon').click()`);
       assert.equal(await evaluate(`Array.from(document.querySelectorAll('[data-resource-node]')).every(node=>!node.open)`), true);
       assert.equal(await evaluate(`document.querySelector('[data-resource-toggle-all]').getAttribute('aria-label')`), 'Expand all');
       await evaluate(`document.querySelector('[data-resource-toggle-all]').focus()`);
@@ -176,20 +192,20 @@ try {
       resourceEntries.forEach(entry => { entry.id = `${entry.kind}:${entry.scope}:${entry.path}`; entry.source.path = `C:/project/.dext/${entry.kind === 'skill' ? 'skills' : 'api'}/${entry.path}`; });
       await load(ui.renderGlobalResources(ui.buildResourceList({ kind: 'api', scope: 'project', entries: resourceEntries, groupBy: 'kind' }), { title: 'Resources', createKinds: ['api','mcp','rule','skill'], openResourceDirectory: true }));
       assert.equal(await evaluate(`document.querySelectorAll('.resource-group:not(.resource-api-node)').length`), 4);
-      assert.equal(await evaluate(`document.querySelectorAll('[data-resource-group-action]').length`), 4);
+      assert.equal(await evaluate(`document.querySelectorAll('.resource-group:not(.resource-api-node) > summary .resource-group-chevron .codicon').length`), 4);
       assert.equal(await evaluate(`document.querySelectorAll('[data-resource-toggle-all]').length`), 0);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API.dev"] .resource-name').textContent`), 'feat');
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API"]').querySelectorAll('.resource-entry').length`), 2);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="MCP.files"] .resource-name').textContent`), 'readFile');
       assert.equal(await evaluate(`!!document.querySelector('[data-resource-node="API"]').querySelector('[data-resource-id="api:project:mcp/files/readFile.ts"]')`), false);
       assert.equal(await evaluate(`!!document.querySelector('[data-resource-node="MCP"]').querySelector('[data-resource-id="api:project:mcp/files/readFile.ts"]')`), true);
-      await evaluate(`document.querySelector('[data-resource-group-target="API"] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+      await evaluate(`document.querySelector('[data-resource-node="API"] > summary .resource-group-chevron .codicon').click()`);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API"]').open`), false);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="MCP"]').open`), true);
-      assert.equal(await evaluate(`document.querySelector('[data-resource-group-target="API"]').title`), 'Expand API');
-      await evaluate(`document.querySelector('[data-resource-group-target="API"]').click()`);
+      await evaluate(`document.querySelector('[data-resource-node="API"] > summary').focus()`);
+      await key('Enter', 13);
       assert.equal(await evaluate(`document.querySelector('[data-resource-node="API"]').open`), true);
-      await evaluate(`document.querySelector('.resource-toolbar [data-resource-command] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+      await evaluate(`document.querySelector('.resource-toolbar [data-resource-command] .codicon').click()`);
       assert.equal(await evaluate(`messages[0].command`), 'dext.reloadMethods');
       await evaluate(`messages=[]`);
       assert.equal(await evaluate(`document.querySelector('.resource-toolbar [data-resource-command="dext.openResourceDirectory"]').title`), 'Open project resources folder');
@@ -208,7 +224,7 @@ try {
       const fileButton = await evaluate(`(() => { const r = document.querySelector('.resource-entry-actions button').getBoundingClientRect(); return { x:r.x+r.width/2, y:r.y+r.height/2 }; })()`);
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...fileButton, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...fileButton, button: 'left', clickCount: 1 });
-      for (const command of ['openResourceFolder', 'deleteResource']) await evaluate(`document.querySelector('.resource-entry-actions [data-resource-command="dext.${command}"] svg path').dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}))`);
+      for (const command of ['openResourceFolder', 'deleteResource']) await evaluate(`document.querySelector('.resource-entry-actions [data-resource-command="dext.${command}"] .codicon').click()`);
       assert.deepEqual(await evaluate(`messages.map(message=>({type:message.type,command:message.command,id:message.id}))`), ['editResourceDocument','openResourceFolder','deleteResource'].map(command=>({type:'resourceCommand',command:`dext.${command}`,id:resourceEntries[0].id})), 'toolbar actions target the resource without opening its detail');
       await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0 });
       await evaluate(`document.querySelector('.resource-entry-actions button').focus()`);
@@ -244,7 +260,42 @@ try {
 
     }
   }
-  console.log('PASS: editor styles and navigation under CSP. Screenshots: .tmp-tb/editor-tabs-ui');
+  let providerBody = '';
+  const manager = new ui.EditorTabManager({
+    createPanel: () => ({ setHtml: (html) => { providerBody = html; }, reveal() {}, dispose() {} })
+  });
+  const reference = JSON.parse(await readFile('dist/api-reference.json', 'utf8'));
+  const provider = new ui.ResourceBrowserProvider({
+    manager, restorer: new ui.EditorTabRestorer(manager), scope: 'project',
+    dataSource: { list: async () => [], definition: async () => undefined },
+    builtinDataSource: ui.createApiDataSource({
+      methods: () => ui.BUILTIN_METHODS.map((method) => ({ ...method, source: 'builtin' })), reference: async () => reference
+    })
+  });
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 800, deviceScaleFactor: 1, mobile: false });
+  await provider.showList();
+  await load(providerBody);
+  const selectDext = await evaluate(`document.querySelector('button[data-resource-scope="builtin"]').click(); messages.at(-1)`);
+  assert.equal(selectDext.type, 'resourceScope');
+  await provider.handleMessage(provider.listTabKey, selectDext);
+  await load(providerBody);
+  const openRender = await evaluate(`document.querySelector('[data-resource-open="api:global:ui/render.ts"]').click(); messages.at(-1)`);
+  assert.equal(openRender.type, 'resourceOpen');
+  await provider.handleMessage(provider.listTabKey, openRender);
+  await load(providerBody);
+  assert.deepEqual(await evaluate(`Array.from(document.querySelectorAll('[data-ui="section"] > h3'), heading => heading.textContent)`), ['Types', 'Example']);
+  assert.match(await evaluate(`document.querySelector('pre.resource-api-example > code').textContent`), /await ui\.render\([\s\S]*schema: spec-driven/);
+  assert.equal(await evaluate(`document.querySelectorAll('.resource-api-type-index a').length`), 21);
+  const [width, viewport] = await evaluate(`[document.documentElement.scrollWidth, innerWidth]`);
+  assert.ok(width <= viewport, `the ui.render detail is ${width}px wide in a ${viewport}px editor tab`);
+  await evaluate(`document.querySelector('a[href="#ui-type-UiInline"]').focus()`);
+  await key('Enter', 13);
+  await waitFor(`location.hash === '#ui-type-UiInline'`, 'UiInline type link');
+  assert.match(await evaluate(`document.getElementById('ui-type-UiInline').textContent`), /Defaults to true/);
+  await writeFile(join(artifacts, 'ui-render-types.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+  await evaluate(`document.querySelector('pre.resource-api-example').closest('section').scrollIntoView()`);
+  await writeFile(join(artifacts, 'ui-render-example.png'), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+  console.log('PASS: editor styles, ui.render detail and navigation under CSP. Screenshots: .tmp-tb/editor-tabs-ui');
 } finally {
   server?.close();
   try { await shutdown?.(); } catch {}

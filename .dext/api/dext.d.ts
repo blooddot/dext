@@ -170,11 +170,26 @@ declare module "dext" {
     requires?: string[]; // Field IDs this action must have answered, even when the field itself is optional.
   }
 
+  /** A static feedback message. */
+  export interface UiAlert {
+    type: "Alert";
+    text: string;
+    tone?: "normal" | "muted" | "info" | "warning" | "error"; // Defaults to "info".
+  }
+
   /** Result returned by ui.alert. */
   export interface UiAlertResult {
     kind: "ui";
     type: "alert";
     status: "acknowledged" | "dismissed";
+  }
+
+  /** A visible label for a task or general feedback. */
+  export interface UiBadge {
+    type: "Badge";
+    text: string;
+    status?: "pending" | "in_progress" | "completed"; // Task status. Omitted by default.
+    tone?: "normal" | "muted" | "info" | "warning" | "error"; // When omitted, the task status keeps its original appearance.
   }
 
   /** Result returned by ui.checkbox. */
@@ -185,11 +200,29 @@ declare module "dext" {
     custom?: string;
   }
 
+  /** Inline code with literal text. */
+  export interface UiCode {
+    type: "Code";
+    text: string;
+  }
+
+  /** Preformatted code with literal text. Script output keeps its copy control disabled. */
+  export interface UiCodeBlock {
+    type: "CodeBlock";
+    code: string;
+  }
+
   /** Result returned by ui.confirm. */
   export interface UiConfirmResult {
     kind: "ui";
     type: "confirm";
     confirmed: boolean;
+  }
+
+  /** An explicitly empty state. */
+  export interface UiEmpty {
+    type: "Empty";
+    text: string; // A non-empty visible message.
   }
 
   /** Base form field. The `type` discriminator selects a concrete field variant. */
@@ -225,6 +258,17 @@ declare module "dext" {
     answers: Record<string, UiFieldAnswer>; // Answers keyed by form field ID. Index with a field ID to access its answer.
   }
 
+  /** Spacing between layout children. */
+  export type UiGap = "sm" | "md" | "lg";
+
+  /** A horizontal sequence that wraps by default. */
+  export interface UiInline {
+    type: "Inline";
+    gap?: UiGap; // Defaults to "sm".
+    wrap?: boolean; // Defaults to true.
+    children: UiLayoutChild[]; // Display children in declaration order. An empty array is allowed.
+  }
+
   /** Result returned by ui.input. */
   export interface UiInputResult {
     kind: "ui";
@@ -232,8 +276,17 @@ declare module "dext" {
     value?: string;
   }
 
-  /** A public read-only display node accepted by ui.render. */
-  export type UiNode = { type: "Trace"; ordered?: boolean; children: UiTraceLine[] } | UiTraceLine | { type: "TraceIcon"; icon: "check" | "terminal" | "diff" | "file-media" | "circle-small-filled" | "chevron-right" | "checklist" | "debug-pause" | "circle-large-outline" | "info" | "warning" | "error" } | { type: "TraceTitle"; text: string } | { type: "TraceDescription"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Text"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Markdown"; source: string } | { type: "Code"; text: string } | { type: "CodeBlock"; code: string } | { type: "Separator" } | { type: "Badge"; text: string; status?: "pending" | "in_progress" | "completed" } | { type: "Spinner"; label: string } | { type: "Alert"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" };
+  /** A display node allowed inside a Stack, Inline or Section. */
+  export type UiLayoutChild = UiStack | UiInline | UiSection | UiEmpty | UiTrace | UiText | UiMarkdown | UiCode | UiCodeBlock | UiSeparator | UiBadge | UiSpinner | UiAlert;
+
+  /** Read-only Markdown with inert links, images and raw HTML. */
+  export interface UiMarkdown {
+    type: "Markdown";
+    source: string;
+  }
+
+  /** A read-only display node accepted by ui.render. A tree accepts up to 32 levels, 1000 nodes and 262144 UTF-8 bytes. Validation reports the location of an invalid node, such as nodes[0].children[1]. */
+  export type UiNode = UiTrace | UiTraceLine | UiTraceIcon | UiTraceTitle | UiTraceDescription | UiText | UiMarkdown | UiCode | UiCodeBlock | UiSeparator | UiBadge | UiSpinner | UiAlert | UiStack | UiInline | UiSection | UiEmpty;
 
   /** A labelled option accepted by a selection field. */
   export interface UiOption {
@@ -250,6 +303,14 @@ declare module "dext" {
     custom?: string;
   }
 
+  /** A titled section. The first section heading is h3 and nested sections increment to h6. */
+  export interface UiSection {
+    type: "Section";
+    title: string; // A non-empty visible heading.
+    description?: string; // Plain text below the heading. Omitted by default.
+    children: UiLayoutChild[]; // Display children in declaration order. An empty array is allowed.
+  }
+
   /** Result returned by ui.select. */
   export interface UiSelectResult {
     kind: "ui";
@@ -257,16 +318,67 @@ declare module "dext" {
     selected: string[];
   }
 
-  /** A row of display nodes within a trace. */
+  /** A thematic break with no additional fields. */
+  export interface UiSeparator {
+    type: "Separator";
+  }
+
+  /** A read-only busy indicator. */
+  export interface UiSpinner {
+    type: "Spinner";
+    label: string; // A non-empty visible name.
+  }
+
+  /** A vertical sequence of display nodes. */
+  export interface UiStack {
+    type: "Stack";
+    gap?: UiGap; // Defaults to "md".
+    children: UiLayoutChild[]; // Display children in declaration order. An empty array is allowed.
+  }
+
+  /** A plain-text node. */
+  export interface UiText {
+    type: "Text";
+    text: string;
+    tone?: "normal" | "muted" | "info" | "warning" | "error"; // Defaults to "normal".
+  }
+
+  /** A list of process rows. */
+  export interface UiTrace {
+    type: "Trace";
+    ordered?: boolean; // Defaults to false.
+    children: UiTraceLine[]; // Only TraceLine nodes are allowed directly inside a Trace.
+  }
+
+  /** A description for a process row. */
+  export interface UiTraceDescription {
+    type: "TraceDescription";
+    text: string;
+    tone?: "normal" | "muted" | "info" | "warning" | "error"; // Defaults to "normal".
+  }
+
+  /** A decorative icon for a process row. */
+  export interface UiTraceIcon {
+    type: "TraceIcon";
+    icon: "check" | "terminal" | "diff" | "file-media" | "circle-small-filled" | "chevron-right" | "checklist" | "debug-pause" | "circle-large-outline" | "info" | "warning" | "error";
+  }
+
+  /** A process row. A standalone root row is supported for compatibility. */
   export interface UiTraceLine {
     type: "TraceLine";
-    status?: "pending" | "in_progress" | "completed";
-    tone?: "normal" | "muted" | "info" | "warning" | "error";
+    status?: "pending" | "in_progress" | "completed"; // Omitted by default.
+    tone?: "normal" | "muted" | "info" | "warning" | "error"; // Defaults to "normal".
     children: UiTraceLineChild[];
   }
 
   /** A read-only node that can appear inside a trace line. */
-  export type UiTraceLineChild = { type: "Trace"; ordered?: boolean; children: UiTraceLine[] } | { type: "TraceIcon"; icon: "check" | "terminal" | "diff" | "file-media" | "circle-small-filled" | "chevron-right" | "checklist" | "debug-pause" | "circle-large-outline" | "info" | "warning" | "error" } | { type: "TraceTitle"; text: string } | { type: "TraceDescription"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Text"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" } | { type: "Markdown"; source: string } | { type: "Code"; text: string } | { type: "CodeBlock"; code: string } | { type: "Separator" } | { type: "Badge"; text: string; status?: "pending" | "in_progress" | "completed" } | { type: "Spinner"; label: string } | { type: "Alert"; text: string; tone?: "normal" | "muted" | "info" | "warning" | "error" };
+  export type UiTraceLineChild = UiTrace | UiTraceIcon | UiTraceTitle | UiTraceDescription | UiText | UiMarkdown | UiCode | UiCodeBlock | UiSeparator | UiBadge | UiSpinner | UiAlert;
+
+  /** The title of a process row. */
+  export interface UiTraceTitle {
+    type: "TraceTitle";
+    text: string;
+  }
 
   /** Ask — Hold a read-only conversation about a string input with optional inline Dext references. */
   export function ask(options: { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli?: undefined; model?: "sonnet" | "opus" | AgentModelOptions | AgentPiModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "codex"; model?: AgentModelOptions } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "claude"; model?: "sonnet" | "opus" } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "deepseek-harness"; model?: { model: string; reasoning?: string } } | { input: string; skills?: string | string[]; rules?: string | string[]; workspace?: DirectoryReference | DirRef; echo?: boolean; cli: "pi"; model?: AgentPiModelOptions }): Promise<AskResult>;

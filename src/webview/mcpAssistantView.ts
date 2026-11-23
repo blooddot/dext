@@ -1,6 +1,8 @@
 import type { AgentStreamEvent } from "../shared/contracts/types.js";
 import type { SidebarState, WebviewRequest } from "../platform/webviewProtocol.js";
 import { formatDuration } from "../shared/lib/duration.js";
+import { domUiAdapter } from "../platform/browser/domUiAdapter.js";
+import { Checkbox, Label } from "../shared/lib/ui/input/nativeControls.js";
 
 export interface McpAssistantElements {
   dialog: HTMLDialogElement;
@@ -98,13 +100,11 @@ export class McpAssistantView {
     const tokenLabel = this.processTokens === undefined ? "" : ` · ${this.processTokens} tokens`;
     elements.processMeta.textContent = `Worked for ${formatDuration(elapsed)} · ${this.processCount} events${tokenLabel}`;
     if (event.phase === "status" && !event.text.trim()) return;
-    const row = document.createElement("div");
-    row.className = `mcp-process-event mcp-process-${event.phase}`;
-    const title = document.createElement("strong");
-    title.textContent = event.title || (event.phase === "tool" ? "Tool" : event.phase[0]!.toUpperCase() + event.phase.slice(1));
-    const text = document.createElement("div");
-    text.textContent = event.text;
-    row.append(title, text);
+    const { element } = domUiAdapter(elements.processBody.ownerDocument);
+    const title = event.title || (event.phase === "tool" ? "Tool" : event.phase[0]!.toUpperCase() + event.phase.slice(1));
+    const row = element("div", { class: `mcp-process-event mcp-process-${event.phase}` }, [
+      element("strong", {}, [title]), element("div", {}, [event.text])
+    ]);
     elements.processBody.append(row);
     elements.processBody.scrollTop = elements.processBody.scrollHeight;
   }
@@ -262,28 +262,20 @@ export class McpAssistantView {
     this.pendingTools = tools.map((tool) => tool.name);
     elements.tools.replaceChildren();
     elements.tools.hidden = false;
-    const heading = document.createElement("div");
-    heading.className = "mcp-assistant-label";
-    heading.textContent = `Select tools to add (${tools.length})`;
+    const adapter = domUiAdapter(elements.tools.ownerDocument);
+    const heading = adapter.element("div", { class: "mcp-assistant-label" }, [`Select tools to add (${tools.length})`]);
     elements.tools.append(heading);
     for (const tool of tools) {
-      const label = document.createElement("label");
-      label.className = "mcp-tool-choice";
-      const input = document.createElement("input");
-      input.type = "checkbox";
-      input.checked = true;
+      const input = Checkbox(adapter, { checked: true }) as HTMLInputElement;
       input.addEventListener("change", () => {
         if (!this.pendingTools) return;
         this.pendingTools = input.checked
           ? [...new Set([...this.pendingTools, tool.name])]
           : this.pendingTools.filter((name) => name !== tool.name);
       });
-      const text = document.createElement("span");
-      text.textContent = tool.name;
-      const description = document.createElement("small");
-      description.textContent = tool.description ?? "";
-      label.append(input, text, description);
-      elements.tools.append(label);
+      elements.tools.append(Label(adapter, { class: "mcp-tool-choice" }, [input,
+        adapter.element("span", {}, [tool.name]), adapter.element("small", {}, [tool.description ?? ""])
+      ]));
     }
     elements.status.textContent = "Choose the tools to include, then save MCP.";
     elements.save.disabled = false;

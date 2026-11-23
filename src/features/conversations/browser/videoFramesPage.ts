@@ -22,16 +22,22 @@ function snapshot(video: HTMLVideoElement): string {
 
 /** Resolves with the moment actually reached: a seek to the end lands one frame
  * short of it, and the still would otherwise be labelled with a time it is not. */
-function seek(video: HTMLVideoElement, ms: number): Promise<number> {
+function seek(video: HTMLVideoElement, ms: number, signal: AbortSignal): Promise<number> {
+  signal.throwIfAborted();
   const end = Number.isFinite(video.duration) ? video.duration * 1000 : 0;
   const target = Math.min(Math.max(0, ms), Math.max(0, end - 1));
   if (Math.abs(video.currentTime * 1000 - target) < 1) return Promise.resolve(target);
-  return new Promise((resolve) => {
-    const done = (): void => {
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
       video.removeEventListener("seeked", done);
+      reject(new DOMException("This operation was aborted", "AbortError"));
+    };
+    const done = (): void => {
+      signal.removeEventListener("abort", abort);
       resolve(target);
     };
-    video.addEventListener("seeked", done);
+    signal.addEventListener("abort", abort, { once: true });
+    video.addEventListener("seeked", done, { once: true });
     video.currentTime = target / 1000;
   });
 }
@@ -39,20 +45,36 @@ function seek(video: HTMLVideoElement, ms: number): Promise<number> {
 /** Stills for the moments the host listed, then one message back and no more: the
  * host owns this page's whole lifetime and closes it on the answer. */
 async function capture(): Promise<void> {
+  const controller = new AbortController();
+  const { signal } = controller;
+  const video = document.createElement("video");
+  let blob: string | undefined;
+  const release = (): void => {
+    video.onloadedmetadata = video.onerror = null;
+    if (!blob) return;
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(blob);
+    blob = undefined;
+  };
+  const close = (): void => { controller.abort(); release(); };
+  window.addEventListener("pagehide", close, { once: true });
   try {
     const source = meta("dext-frames-src");
     if (!source) throw new Error("This video file is missing.");
     const times = JSON.parse(meta("dext-frames-times")) as number[];
-    const response = await fetch(source);
+    const response = await fetch(source, { signal });
     if (!response.ok) throw new Error(`The video could not be read (${response.status}).`);
-    const video = document.createElement("video");
     video.preload = "auto";
     video.muted = true;
     // Playing the bytes from a `blob:` keeps the canvas same-origin: a
     // `vscode-webview:` source would taint it and `toDataURL` would throw.
     // shortcut: the whole file lands in this page's memory, so a 100 MB video
     // costs that much for the length of one capture.
-    const blob = URL.createObjectURL(await response.blob());
+    const bytes = await response.blob();
+    signal.throwIfAborted();
+    const sourceUrl = URL.createObjectURL(bytes);
+    blob = sourceUrl;
     await new Promise<void>((resolve, reject) => {
       video.onloadedmetadata = () => resolve();
       // The demuxer's own words, so an unsupported codec reads differently from
@@ -61,7 +83,8 @@ async function capture(): Promise<void> {
         const detail = video.error?.message;
         reject(new Error(`This video's codec cannot be decoded in the editor${detail ? ` (${detail})` : ""}. Convert it to MP4/H.264 and try again.`));
       };
-      video.src = blob;
+      signal.addEventListener("abort", () => reject(new DOMException("This operation was aborted", "AbortError")), { once: true });
+      video.src = sourceUrl;
     });
     const captured: VideoFrameCapture = {
       durationMs: Number.isFinite(video.duration) ? Math.max(0, Math.round(video.duration * 1000)) : 0,
@@ -70,12 +93,15 @@ async function capture(): Promise<void> {
       frames: []
     };
     for (const ms of times) {
-      const timeMs = await seek(video, ms);
+      const timeMs = await seek(video, ms, signal);
       captured.frames.push({ timeMs, data: snapshot(video) });
     }
     vscode.postMessage({ type: "frames", capture: captured });
   } catch (failure) {
-    vscode.postMessage({ type: "frames", error: failure instanceof Error ? failure.message : String(failure) });
+    if (!signal.aborted) vscode.postMessage({ type: "frames", error: failure instanceof Error ? failure.message : String(failure) });
+  } finally {
+    release();
+    window.removeEventListener("pagehide", close);
   }
 }
 

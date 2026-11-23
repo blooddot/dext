@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
+import { readSidebarBody } from "./monaco-ref-lab/serve.mjs";
 
 const candidates = [process.env.DEXT_BROWSER, "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Google/Chrome/Application/chrome.exe", "/usr/bin/chromium", "/usr/bin/google-chrome"].filter(Boolean);
 let executable;
@@ -59,7 +60,9 @@ try {
     window.formFiles={resolve:async(paths)=>paths.map(path=>'@'+path.split('/').pop()),attach:async()=>'.dext-global/attachments/p.png',onError:(error)=>{throw error;},referenceField:(options)=>new ReferenceUI.ReferenceField(formFiles,clipboardStub,options)};
     window.createView=()=>{const view=new InteractionUI.AgentInputView((id,answers)=>replies.push({id,answers}),(state,result)=>replies.push({id:state.requestId,result}),'test',{get:key=>saved[key],set:(key,draft)=>{saved[key]=draft}},formFiles);document.getElementById('turn').append(view.element);view.setRunning(true);return view;};
     window.view=createView();window.state=(id,form)=>({sessionId:'session',turnId:'turn',requestId:id,status:'waiting',form});`);
-  await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify((await readFile('media/styles.css', 'utf8')) + "\n" + (referenceStyles?.text ?? ""))};document.head.append(style);const theme=document.createElement('style');theme.id='theme';document.head.append(theme);}`);
+  const foundationCss = await readFile("media/ui.css", "utf8");
+  const pageCss = (await readFile("media/styles.css", "utf8")).replace('@import "./ui.css";', () => foundationCss);
+  await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(pageCss + "\n" + (referenceStyles?.text ?? ""))};document.head.append(style);const theme=document.createElement('style');theme.id='theme';document.head.append(theme);}`);
   // The sidebar links the codicon stylesheet, so the window buttons must show real
   // glyphs; inline the ttf it points at because this harness has no server.
   const codiconFont = (await readFile("node_modules/@vscode/codicons/dist/codicon.ttf")).toString("base64");
@@ -88,6 +91,24 @@ try {
   for (const [name, background, foreground, accent] of [["dark", "#181818", "#ddd", "#66aaff"], ["light", "#fff", "#222", "#005fcc"], ["contrast", "#000", "#fff", "#ff0"]]) {
     await theme(background, foreground, accent);
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, `${name} overflow`);
+    const layout = await evaluate(`{
+      const fixture=document.createElement('div');
+      fixture.style.cssText='width:120px;--dext-ui-warning:rgb(255,120,0)';
+      fixture.innerHTML='<div data-ui="stack" data-gap="md"><div data-ui="inline" data-gap="sm" data-wrap="true"><span style="width:100px">Summary</span><span style="width:100px" data-ui-tone="warning">Warning</span></div></div>';
+      document.body.classList.toggle('vscode-high-contrast',${name === "contrast"});
+      document.body.append(fixture);
+      const stack=fixture.firstElementChild, inline=stack.firstElementChild, badge=inline.lastElementChild;
+      const result={direction:getComputedStyle(stack).flexDirection,gap:getComputedStyle(inline).gap,
+        wrapped:badge.offsetTop>inline.firstElementChild.offsetTop,
+        foreground:getComputedStyle(document.body).color,tone:getComputedStyle(badge).color};
+      fixture.remove();
+      document.body.classList.remove('vscode-high-contrast');
+      result;
+    }`);
+    assert.equal(layout.direction, "column");
+    assert.equal(layout.gap, "4px");
+    assert.equal(layout.wrapped, true);
+    assert.equal(layout.tone, name === "contrast" ? layout.foreground : "rgb(255, 120, 0)");
     const screenshot = await send("Page.captureScreenshot"); await writeFile(join(artifacts, `${name}.png`), Buffer.from(screenshot.data, "base64"));
   }
   await evaluate(`{const form=view.element.querySelector('form');form.requestSubmit();form.requestSubmit();}view.setRunning(false);view.setRunning(true);view.updateUi(state('mixed',mixed));`);
@@ -127,6 +148,19 @@ try {
   await key("Escape", 27);
   assert.equal(await evaluate(`replies.at(-1).result.status`), "cancelled");
   assert.equal(await evaluate(`document.activeElement.id`), "previous");
+  for (const [name, selector] of [["close", '[aria-label="Close interaction"]'], ["cancel", '.interaction-cancel']]) {
+    const count = await evaluate(`replies.length`);
+    await evaluate(`{
+      const request = state('report-${name}', InteractionUI.parseUiForm({title:'确认修复计划', fields:[]}));
+      view.updateUi(request);
+      const button = view.element.querySelector(${JSON.stringify(selector)});
+      button.click();
+      button.click();
+      view.updateUi({...request, status:'cancelled'});
+    }`);
+    assert.equal(await evaluate(`replies.length`), count + 1);
+    assert.deepEqual(await evaluate(`replies.at(-1).result`), {kind:"ui", type:"form", status:"cancelled", answers:{}});
+  }
   await evaluate(`window.inputState=state('input',InteractionUI.uiCallForm('input',{label:'Text',placeholder:'Type here',presentation:'inline'}));view.updateUi(inputState);`);
   await evaluate(`window.lineField=view.element.querySelector('.interaction-reference-field')`);
   assert.equal(await evaluate(`lineField.querySelector('.editorPlaceholder').textContent`), "Type here");
@@ -342,7 +376,7 @@ try {
   await evaluate(`document.getElementById('previous').focus();window.focusDialog=new InteractionUI.InteractionDialog(new InteractionUI.InteractionForm(InteractionUI.uiCallForm('confirm',{message:'Focus check'}),()=>{}));document.body.append(focusDialog.element);focusDialog.open();focusDialog.close();window.nextFocus=document.createElement('button');document.body.append(nextFocus);nextFocus.focus();focusDialog.close();`);
   assert.equal(await evaluate(`document.activeElement===nextFocus`), true, "closing an already closed dialog does not steal focus");
   await evaluate(`focusDialog.element.remove();nextFocus.remove();`);
-  const sidebar = await readFile("src/app/sidebarProvider.ts", "utf8");
+  const sidebar = await readSidebarBody();
   for (const id of ["mcp-assistant-dialog"]) {
     const template = sidebar.match(new RegExp(`<dialog id="${id}"[\\s\\S]*?</dialog>`))?.[0];
     assert.ok(template, `${id} template exists`);

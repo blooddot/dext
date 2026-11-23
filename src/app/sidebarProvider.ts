@@ -46,6 +46,14 @@ import type { WebviewResponse } from "../platform/webviewProtocol.js";
 import { webviewRequestSchema } from "../platform/webviewProtocol.js";
 import type { DextAppearanceController } from "../platform/vscode/appearance.js";
 import type { DextAppearance } from "../shared/contracts/appearance.js";
+import { htmlUiAdapter } from "../shared/lib/ui/htmlUiAdapter.js";
+import { Inline, Stack, Toolbar } from "../shared/lib/ui/layout/layoutComponents.js";
+import { Menu, MenuTrigger, Tab, TabList } from "../shared/lib/ui/navigation/navigationComponents.js";
+import { Button, Label } from "../shared/lib/ui/input/nativeControls.js";
+import { Alert, Badge } from "../shared/lib/ui/feedback/feedbackComponents.js";
+import { Form, NativeSelect, Textarea } from "../shared/lib/ui/input/formComponents.js";
+import { Dialog } from "../shared/lib/ui/overlay/dialog.js";
+import { Disclosure, DisclosureTrigger } from "../shared/lib/ui/content/disclosure.js";
 
 function imageExtension(mimeType: string): string | undefined {
   const normalized = mimeType.toLowerCase().split(";")[0]!.trim();
@@ -1535,6 +1543,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     const appearanceScript = asset("dist", "webview", "appearance.js");
     const codicons = asset("dist", "codicons", "codicon.css");
     const theme = this.appearance?.current ?? "auto";
+    const composerMenu = (id: string, label: string, content: string, menuClass = "composer-popover"): string =>
+      MenuTrigger(htmlUiAdapter, `${id}-menu`, { id: `${id}-control`, class: "composer-control" }, [{ html: content }]).html
+      + "\n" + Menu(htmlUiAdapter, label, { id: `${id}-menu`, class: menuClass }).html;
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -1552,9 +1563,9 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   <title>Dext</title>
 </head>
 <body data-dext-theme="${theme}">
-  <div class="app-shell">
+  ${Stack(htmlUiAdapter, [{ html: `
     <div class="dext-topbar">
-      <nav id="conversation-tabs" class="conversation-tabs" role="tablist" aria-label="Dext conversations"></nav>
+      ${TabList(htmlUiAdapter, "Dext conversations", { id: "conversation-tabs", class: "conversation-tabs" }, [], "nav").html}
     </div>
     <main id="dext-main">
     <section id="result-section" class="result-section" aria-live="polite">
@@ -1563,66 +1574,63 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
     <section id="input-section" class="input-section">
       <div id="input-body" class="input-body">
-        <div id="plan-toolbar" class="plan-toolbar" hidden>
+        ${Toolbar(htmlUiAdapter, "Plan", { id: "plan-toolbar", class: "plan-toolbar", hidden: true }, [{ html: `
           <div class="plan-target-group">
             <button id="plan-target" class="plan-target" type="button" title="Select a plan"><i class="codicon codicon-checklist"></i><span id="plan-target-label">New plan</span></button>
             <button id="plan-choose" class="plan-choose" type="button" title="Select a plan" aria-label="Select a plan"><i class="codicon codicon-chevron-down"></i></button>
           </div>
-          <span id="plan-status" class="plan-status">New plan</span>
+          ${Badge(htmlUiAdapter, "New plan", { id: "plan-status", class: "plan-status" }).html}
           <button id="plan-build" class="primary plan-build" type="button" title="Build the active plan" aria-label="Build the active plan"><i class="codicon codicon-play" aria-hidden="true"></i><span>Build</span></button>
-        </div>
-        <div id="resource-toolbar" class="plan-toolbar resource-toolbar" hidden>
+        ` }]).html}
+        ${Toolbar(htmlUiAdapter, "Resource", { id: "resource-toolbar", class: "plan-toolbar resource-toolbar", hidden: true }, [{ html: `
           <div class="plan-target-group">
             <button id="resource-target" class="plan-target" type="button" title="Select a resource"><i class="codicon codicon-file-code"></i><span id="resource-target-label">New resource</span></button>
             <button id="resource-choose" class="plan-choose" type="button" title="Select a resource" aria-label="Select a resource"><i class="codicon codicon-chevron-down"></i></button>
           </div>
-          <span id="resource-status" class="plan-status" aria-live="polite"></span>
-          <button id="resource-preview" class="resource-preview" type="button">Preview</button>
-          <button id="resource-save" class="primary resource-save" type="button">Save</button>
-        </div>
-        <div id="resource-source-toggle" class="resource-source-toggle" role="tablist" aria-label="Skill creation mode" hidden>
-          <button id="resource-source-describe" type="button" role="tab" data-resource-source="describe" aria-selected="true">Describe</button>
-          <button id="resource-source-import" type="button" role="tab" data-resource-source="import" aria-selected="false">Import</button>
-        </div>
+          ${Badge(htmlUiAdapter, "", { id: "resource-status", class: "plan-status", "aria-live": "polite" }).html}
+          ${Button(htmlUiAdapter, { id: "resource-preview", class: "resource-preview" }, ["Preview"]).html}
+          ${Button(htmlUiAdapter, { id: "resource-save", class: "primary resource-save" }, ["Save"]).html}
+        ` }]).html}
+        ${TabList(htmlUiAdapter, "Skill creation mode", { id: "resource-source-toggle", class: "resource-source-toggle", hidden: true }, [
+          Tab(htmlUiAdapter, true, { id: "resource-source-describe", "data-resource-source": "describe" }, ["Describe"]),
+          Tab(htmlUiAdapter, false, { id: "resource-source-import", "data-resource-source": "import" }, ["Import"])
+        ]).html}
         <section id="input-shell" class="input-panel unified-input">
           <div id="queued-turn" class="queued-turn" role="status" aria-live="polite" hidden>
             <span id="queued-turn-label" class="queued-turn-label"></span>
             <button id="queued-turn-edit" class="icon-button" type="button" title="Edit queued message (sends with the current Agent and model)" aria-label="Edit queued message"><i class="codicon codicon-edit" aria-hidden="true"></i></button>
             <button id="queued-turn-withdraw" class="icon-button" type="button" title="Withdraw queued message" aria-label="Withdraw queued message"><i class="codicon codicon-close" aria-hidden="true"></i></button>
           </div>
-          <div id="attachment-bar" class="attachment-bar hidden" aria-label="Image attachments"></div>
+          ${Inline(htmlUiAdapter, [], { attributes: {
+            id: "attachment-bar", class: "attachment-bar hidden", "aria-label": "Image attachments", "data-gap": false
+          } }).html}
           <div id="code-editor" class="code-editor" aria-label="Dext input"></div>
           <button id="attach-files" class="composer-attach icon-button" type="button" title="Attach workspace files, or hold Shift and drag files into the input" aria-label="Attach workspace files"><i class="codicon codicon-attach"></i></button>
         </section>
 
-        <div id="input-error" class="input-error" role="alert" hidden>
+        ${Alert(htmlUiAdapter, [{ html: `
           <span id="input-error-message" class="input-error-message"></span>
           <button id="dismiss-input-error" class="icon-button input-error-close" type="button" title="Dismiss error" aria-label="Dismiss error"><i class="codicon codicon-close" aria-hidden="true"></i></button>
-        </div>
+        ` }], { id: "input-error", class: "input-error", hidden: true }, "div").html}
 
-        <div class="action-row">
+        ${Toolbar(htmlUiAdapter, "Composer controls", { class: "action-row" }, [{ html: `
           <div id="composer-controls" class="composer-controls">
             <div class="composer-menu">
-              <button id="mode-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="mode-control-icon" class="codicon codicon-comment-discussion" aria-hidden="true"></i><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
-              <div id="mode-menu" class="composer-popover" role="menu" hidden></div>
+              ${composerMenu("mode", "Mode", '<i id="mode-control-icon" class="codicon codicon-comment-discussion" aria-hidden="true"></i><span class="composer-control-label">Mode</span><span id="mode-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i>')}
             </div>
             <div id="skills-menu-shell" class="composer-menu composer-skills">
-              <button id="skills-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i class="codicon codicon-library" aria-hidden="true"></i><span class="composer-control-label">Skills</span><span id="skills-control-value" class="composer-control-value">No skills</span><i class="codicon codicon-chevron-down" aria-hidden="true"></i></button>
-              <div id="skills-menu" class="composer-popover composer-skills-popover" role="menu" aria-label="Skills" hidden></div>
+              ${composerMenu("skills", "Skills", '<i class="codicon codicon-library" aria-hidden="true"></i><span class="composer-control-label">Skills</span><span id="skills-control-value" class="composer-control-value">No skills</span><i class="codicon codicon-chevron-down" aria-hidden="true"></i>', "composer-popover composer-skills-popover")}
             </div>
             <div id="permission-menu-shell" class="composer-menu">
-              <button id="permission-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><i id="permission-control-icon" class="codicon codicon-shield" aria-hidden="true"></i><span class="composer-control-label">Permission</span><span id="permission-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
-              <div id="permission-menu" class="composer-popover" role="menu" hidden></div>
+              ${composerMenu("permission", "Permission", '<i id="permission-control-icon" class="codicon codicon-shield" aria-hidden="true"></i><span class="composer-control-label">Permission</span><span id="permission-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i>')}
             </div>
             <div id="composer-extras" class="composer-extras">
             <div class="composer-menu">
-              <button id="agent-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Agent</span><span id="agent-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
-              <div id="agent-menu" class="composer-popover" role="menu" hidden></div>
+              ${composerMenu("agent", "Agent", '<span class="composer-control-label">Agent</span><span id="agent-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i>')}
             </div>
             <div class="composer-menu">
-              <button id="model-control" class="composer-control" type="button" aria-haspopup="menu" aria-expanded="false"><span class="composer-control-label">Model</span><span id="model-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i></button>
-              <div id="model-menu" class="composer-popover composer-model-popover" role="menu" hidden></div>
-              <div id="model-submenu" class="composer-popover composer-model-popover composer-model-submenu" role="menu" hidden></div>
+              ${composerMenu("model", "Model", '<span class="composer-control-label">Model</span><span id="model-control-value" class="composer-control-value"></span><i class="codicon codicon-chevron-down"></i>', "composer-popover composer-model-popover")}
+              ${Menu(htmlUiAdapter, "Model options", { id: "model-submenu", class: "composer-popover composer-model-popover composer-model-submenu" }).html}
             </div>
             </div>
             <button id="composer-more" class="composer-more icon-button" type="button" title="More options" aria-label="More options" aria-controls="composer-extras" aria-expanded="false"><i class="codicon codicon-ellipsis"></i></button>
@@ -1632,45 +1640,48 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             <button id="problems" class="problems-status" type="button" disabled>No problems</button>
             <button id="run" class="primary circular-action" type="button" title="Send" aria-label="Send"><i class="codicon codicon-arrow-up" aria-hidden="true"></i><span id="run-label" hidden>Send</span></button>
           </div>
-        </div>
+        ` }]).html}
       </div>
     </section>
 
     </main>
-    <dialog id="mcp-assistant-dialog" class="ui-dialog mcp-assistant-dialog" aria-labelledby="mcp-assistant-title">
-      <form class="ui-dialog-surface" method="dialog">
+    ${Dialog(htmlUiAdapter, { labelledBy: "mcp-assistant-title" }, [
+      Form(htmlUiAdapter, "Add MCP with AI", [{ html: `
         <header class="methods-dialog-header">
           <div id="mcp-assistant-title" class="methods-dialog-title"><i class="codicon codicon-sparkle"></i><span>Add MCP with AI</span></div>
           <button id="mcp-assistant-close" class="icon-button" type="button" title="Cancel" aria-label="Cancel"><i class="codicon codicon-close"></i></button>
         </header>
         <div class="mcp-assistant-body">
           <div class="mcp-assistant-message">Tell Dext what to connect. Paste MCP documentation, a registry URL, or a short description and Dext will draft the server configuration for you.</div>
-          <textarea id="mcp-assistant-input" class="ui-dialog-input mcp-assistant-input" rows="5" placeholder="https://example.com/mcp/docs or describe the server"></textarea>
+          ${Textarea(htmlUiAdapter, { id: "mcp-assistant-input", class: "ui-dialog-input mcp-assistant-input", rows: "5",
+            "aria-label": "Describe the MCP server", placeholder: "https://example.com/mcp/docs or describe the server" }).html}
           <div id="mcp-assistant-status" class="mcp-assistant-status" aria-live="polite"></div>
-          <details id="mcp-assistant-process" class="mcp-assistant-process" hidden>
-            <summary><i class="disclosure-chevron codicon codicon-chevron-right"></i><span>Process</span><span id="mcp-assistant-process-meta" class="disclosure-meta"></span></summary>
-            <div id="mcp-assistant-process-body" class="mcp-assistant-process-body"></div>
-          </details>
+          ${Disclosure(htmlUiAdapter, DisclosureTrigger(htmlUiAdapter, [{ html: '<i class="disclosure-chevron codicon codicon-chevron-right" aria-hidden="true"></i><span>Process</span><span id="mcp-assistant-process-meta" class="disclosure-meta"></span>' }]),
+            [htmlUiAdapter.element("div", { id: "mcp-assistant-process-body", class: "mcp-assistant-process-body" }, [])],
+            { id: "mcp-assistant-process", class: "mcp-assistant-process", hidden: true }).html}
           <div id="mcp-assistant-tools" class="mcp-assistant-tools" hidden></div>
-          <label class="mcp-assistant-label" for="mcp-assistant-preview">Review configuration</label>
-          <textarea id="mcp-assistant-preview" class="ui-dialog-input mcp-assistant-preview" rows="10" hidden></textarea>
-          <label id="mcp-assistant-scope-label" class="mcp-assistant-label" for="mcp-assistant-scope" hidden>Save to</label>
-          <select id="mcp-assistant-scope" class="ui-dialog-input" hidden><option value="project">Project (.dext/mcp)</option><option value="global">Dext global storage</option></select>
+          ${Label(htmlUiAdapter, { class: "mcp-assistant-label", for: "mcp-assistant-preview" }, ["Review configuration"]).html}
+          ${Textarea(htmlUiAdapter, { id: "mcp-assistant-preview", class: "ui-dialog-input mcp-assistant-preview", rows: "10", hidden: true }).html}
+          ${Label(htmlUiAdapter, { id: "mcp-assistant-scope-label", class: "mcp-assistant-label", for: "mcp-assistant-scope", hidden: true }, ["Save to"]).html}
+          ${NativeSelect(htmlUiAdapter, { id: "mcp-assistant-scope", class: "ui-dialog-input", hidden: true }, [
+            htmlUiAdapter.element("option", { value: "project" }, ["Project (.dext/mcp)"]),
+            htmlUiAdapter.element("option", { value: "global" }, ["Dext global storage"])
+          ]).html}
         </div>
-        <footer class="ui-dialog-actions"><button id="mcp-assistant-generate" type="button">Generate</button><button id="mcp-assistant-save" type="button" hidden>Save MCP</button></footer>
-      </form>
-    </dialog>
-    <dialog id="ui-dialog" class="ui-dialog" aria-labelledby="ui-dialog-title">
-      <form id="ui-dialog-form" class="ui-dialog-surface" method="dialog">
+        <footer class="ui-dialog-actions">${Button(htmlUiAdapter, { id: "mcp-assistant-generate" }, ["Generate"]).html}${Button(htmlUiAdapter, { id: "mcp-assistant-save", hidden: true }, ["Save MCP"]).html}</footer>
+      ` }], { class: "ui-dialog-surface", method: "dialog" })
+    ], { id: "mcp-assistant-dialog", class: "ui-dialog mcp-assistant-dialog" }).html}
+    ${Dialog(htmlUiAdapter, { labelledBy: "ui-dialog-title" }, [
+      Form(htmlUiAdapter, "Confirm", [{ html: `
         <header class="methods-dialog-header">
           <div id="ui-dialog-title" class="methods-dialog-title"></div>
           <button id="ui-dialog-close" class="icon-button" type="button" title="Cancel" aria-label="Cancel"><i class="codicon codicon-close"></i></button>
         </header>
         <div id="ui-dialog-body" class="ui-dialog-body"></div>
         <footer id="ui-dialog-actions" class="ui-dialog-actions"></footer>
-      </form>
-    </dialog>
-  </div>
+      ` }], { id: "ui-dialog-form", class: "ui-dialog-surface", method: "dialog" })
+    ], { id: "ui-dialog", class: "ui-dialog" }).html}
+  ` }], { attributes: { class: "app-shell", "data-gap": false } }).html}
   <script nonce="${nonce}" src="${appearanceScript.toString()}"></script>
   <script nonce="${nonce}" src="${script.toString()}"></script>
 </body>

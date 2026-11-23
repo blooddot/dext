@@ -1,6 +1,8 @@
 import type { AgentInputAnswers, AgentInputState } from "../../../shared/contracts/types.js";
 import type { UiField, UiFormAnswers, UiFormDefinition, UiFormResult, UiInteractionState } from "../../../shared/contracts/uiForm.js";
-import { agentInputForm, agentFormAnswers, answeredCardTitle, presentAnswerChoice, presentAnswerField, type AnswerChoice } from "../presentation/uiInteractionPresentation.js";
+import { agentInputForm, agentFormAnswers, answeredCardTitle, presentAnswerChoice, presentAnswerField, renderInteractionSummary, type AnswerChoice } from "../presentation/uiInteractionPresentation.js";
+import { Button } from "../../../shared/lib/ui/input/nativeControls.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 import { InteractionForm, type InteractionFileHost } from "./interactionForm.js";
 import { InteractionDialog, interactionFullscreen } from "./interactionDialog.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
@@ -82,6 +84,7 @@ export class AgentInputView {
     card.dialog?.close(); card.control?.disable();
     delete card.dialog; delete card.control;
     card.element.replaceChildren(); card.element.className = "agent-input-card";
+    const adapter = domUiAdapter(card.element.ownerDocument);
     const key = `${this.scope}:${card.id}`;
     if (this.running && card.status === "waiting") {
       const save = (draft: UiFormAnswers): void => { this.drafts.set(key, draft); this.store?.set(key, draft); };
@@ -94,12 +97,12 @@ export class AgentInputView {
       card.control = form;
       if (card.form.presentation === "dialog") {
         const dialog = new InteractionDialog(form); card.dialog = dialog;
-        const reopen = document.createElement("button"); reopen.type = "button"; reopen.textContent = card.form.title;
+        const reopen = Button(adapter, {}, [card.form.title]);
         reopen.addEventListener("click", () => dialog.open());
         card.element.append(reopen, dialog.element); queueMicrotask(() => dialog.open());
       } else {
-        const close = document.createElement("button"); close.type = "button"; close.textContent = "×";
-        close.className = "interaction-close"; close.setAttribute("aria-label", "Close interaction"); close.addEventListener("click", () => form.cancel());
+        const close = Button(adapter, { class: "interaction-close", "aria-label": "Close interaction" }, ["×"]);
+        close.addEventListener("click", () => form.cancel());
         const fullscreen = interactionFullscreen(card.element);
         card.element.append(fullscreen, close, form.element);
         card.element.onkeydown = (event) => {
@@ -114,15 +117,10 @@ export class AgentInputView {
     }
     card.element.onkeydown = null;
     const action = card.form.actions.find((action) => action.id === card.action);
-    const disclosure = document.createElement("details"); disclosure.className = "agent-input-disclosure";
-    const summary = document.createElement("summary");
-    const chevron = document.createElement("i"); chevron.className = "disclosure-chevron codicon codicon-chevron-right";
-    const title = document.createElement("strong"); title.textContent = answeredCardTitle(card.form.title, card.status === "submitted", action?.label);
-    summary.append(chevron, title); disclosure.append(summary);
-    const body = document.createElement("div"); body.className = "agent-input-disclosure-body";
-    if (card.form.description) body.append(interactionMarkdown(card.form.description));
-    for (const field of card.form.fields) body.append(this.field(card, field));
-    disclosure.append(body); card.element.append(disclosure);
+    const title = answeredCardTitle(card.form.title, card.status === "submitted", action?.label);
+    const fields = card.form.fields.map((field) => this.field(card, field));
+    if (card.form.description) fields.unshift(interactionMarkdown(card.form.description));
+    card.element.append(renderInteractionSummary(adapter, title, fields));
     if (card.status !== "waiting") { this.drafts.delete(key); this.store?.set(key, {}); }
   }
   /** A settled card keeps every choice the question offered and marks the picked

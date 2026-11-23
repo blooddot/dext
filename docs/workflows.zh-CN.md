@@ -449,6 +449,24 @@ Code 运行会在 Node 内核中立即执行。每次 Dext API 调用都会派�
 
 `await ui.render({ nodes })` 将只读 `UiNode[]` 记录到当前回合的 Output，随后返回 `void`。节点按数组顺序展示，并可在 History 回放。树最多有 32 层、1,000 个节点，UTF-8 JSON 大小上限为 256 KiB。
 
+`Stack` 纵向排列，默认间距为 `md`。`Inline` 横向排列，默认间距为 `sm`，空间不足时自动换行。`Section` 提供标题和可选说明。三种容器都接受 `UiLayoutChild[]`，其中可以放完整的 `Trace`。在 Resources 的 Dext 页打开 `ui.render` 可查阅节点属性、默认值、合法子项和组合写法。
+
+### 检查报告示例
+
+示例会检查工作区内的 OpenSpec 配置并显示摘要、详情和说明。配置存在时显示空态。配置缺失时，表单询问修复范围，确认后打印并返回 `{ path, scope }`，关闭或取消会打印并返回表单取消结果。报告和已答表单可在 History 中查阅。[检查报告源文件](./examples/ui-inspection-report.ts)
+
+在 Code 模式中粘贴示例源文件，并在末尾加上 `await inspectConfig()`。可传入 `"openspec/missing.yaml"` 查看缺失分支。
+
+也可以把源文件保存为 `.dext/api/inspection-report.ts`，然后在 Code 模式或其他自定义 API 中调用它。
+
+```ts
+import { inspectConfig } from "dext/api/inspection-report";
+
+const result = await inspectConfig("openspec/missing.yaml");
+```
+
+### 表单和快捷交互
+
 ```ts
 ui.select(options: { label: string; options: string[]; multiple?: boolean; placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiSelectResult>
 ui.radio(options: { label: string; options: string[]; allow_custom?: boolean; custom_placeholder?: string; presentation?: "inline" | "dialog" }): Promise<UiRadioResult>

@@ -117,6 +117,45 @@ describe("layer boundaries", () => {
     expect(checkModuleBoundaries({ "src/features/a/browser/view.ts": 'document.createElement("div");' })).toEqual([]);
   });
 
+  it("keeps shared UI independent of the DOM and Conversation", () => {
+    const component = "src/shared/lib/ui/content/example.ts";
+    expect(checkModuleBoundaries({
+      [component]: 'import type { Turn } from "../../../../features/conversations/contracts/turn.js"; const root = document;'
+    })).toEqual([
+      `${component}: DOM global document in a non-browser module`,
+      `${component}: shared depends on src/features/conversations/contracts/turn.js`
+    ]);
+    expect(checkModuleBoundaries({
+      [component]: 'export function Text(value: string) { return value; }',
+      "src/platform/browser/example.ts": 'import { Text } from "../../shared/lib/ui/content/example.js"; document.body.append(Text("ready"));'
+    })).toEqual([]);
+  });
+
+  it.each([
+    "const value = { owner: document };",
+    "const value = { document };",
+    "const value = globalThis.document.title;",
+    'const value = globalThis["document"].title;',
+    "function local(document: string) { return document; } const title = document.title;",
+    "function local(value = document.title) { return value; }",
+    "class Example extends document.Component {}"
+  ])("detects shared UI DOM reads in %s", (source) => {
+    const component = "src/shared/lib/ui/content/example.ts";
+    expect(checkModuleBoundaries({ [component]: source })).toEqual([
+      `${component}: DOM global document in a non-browser module`
+    ]);
+  });
+
+  it("allows local bindings, property names and type references in shared UI", () => {
+    const component = "src/shared/lib/ui/content/example.ts";
+    expect(checkModuleBoundaries({
+      [component]: `type browser = typeof globalThis.document;
+        export function local({ document }: { document: string }) { return { document }; }
+        export function override(globalThis: { document: string }) { return globalThis.document; }
+        export const value = { document: "name" }.document;`
+    })).toEqual([]);
+  });
+
   it("detects runtime cycles", () => {
     expect(flags({
       "src/features/a/domain/one.ts": 'import "./two.js";',

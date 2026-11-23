@@ -47,6 +47,7 @@ export interface ResourceEntry {
   hidden?: boolean;
   api?: ApiSourceFunction["api"];
   apiTypes?: readonly ApiReferenceMember[];
+  apiExample?: string;
   /** Exported functions read from a file; both pages render these with the same API component. */
   apiFunctions?: ApiSourceFunction[];
   /** Function-level Execution flow. Parsed only for a detail page, never for a list. */

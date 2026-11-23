@@ -144,8 +144,17 @@ describe("generated Dext TypeScript surface", () => {
     expect(declaration).toContain("children: UiTraceLineChild[];");
     expect(declaration).not.toContain("ViewResult");
     await writeFile(join(directory, "api", "view.ts"), [
-      'import { ui, type UiNode } from "dext";',
+      'import { ui, type UiGap, type UiNode, type UiSection } from "dext";',
       'const nodes: UiNode[] = [{ type: "Trace", children: [{ type: "TraceLine", children: [{ type: "Trace", children: [] }] }] }];',
+      'const gap: UiGap = "lg";',
+      'const report: UiSection = { type: "Section", title: "Overview", children: [{ type: "Stack", gap, children: [{ type: "Inline", wrap: false, children: [{ type: "Badge", text: "Passed", status: "completed", tone: "info" }, { type: "Empty", text: "No failures" }] }] }] };',
+      'await ui.render({ nodes: [report, { type: "TraceLine", children: [] }] });',
+      '// @ts-expect-error Section accepts full Trace rather than loose TraceLine',
+      'await ui.render({ nodes: [{ type: "Section", title: "Overview", children: [{ type: "TraceLine", children: [] }] }] });',
+      '// @ts-expect-error TraceLine keeps its original children',
+      'await ui.render({ nodes: [{ type: "TraceLine", children: [{ type: "Stack", children: [] }] }] });',
+      '// @ts-expect-error gap is a fixed enumeration',
+      'await ui.render({ nodes: [{ type: "Inline", gap: "xl", children: [] }] });',
       'const result: void = await ui.render({ nodes });',
       '// @ts-expect-error a result is never returned to the script',
       'result.nodes;',

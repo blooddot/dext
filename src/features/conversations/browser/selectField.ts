@@ -1,6 +1,6 @@
 import type { UiFieldAnswer, UiSelectionField } from "../../../shared/contracts/uiForm.js";
 import type { FieldControl } from "./selectionGroupField.js";
-import { Button } from "../../../shared/lib/ui/nativeControls.js";
+import { Button } from "../../../shared/lib/ui/input/nativeControls.js";
 import { interactionOptionDescription } from "./interactionControls.js";
 import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 

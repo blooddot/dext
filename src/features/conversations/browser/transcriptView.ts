@@ -26,7 +26,9 @@ import {
 import { renderTurnMode, renderTurnOutput, renderTurnSection } from "../presentation/turnComponents.js";
 import { TurnTitle } from "./turnTitle.js";
 import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
-import { TraceDescription, TraceTitle } from "../../../shared/lib/ui/traceComponents.js";
+import { TraceChevron, TraceDescription, TraceTitle } from "../../../shared/lib/ui/content/traceComponents.js";
+import { Disclosure, DisclosureTrigger } from "../../../shared/lib/ui/content/disclosure.js";
+import { Spinner } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
 
 export interface OutputTurnElements {
   disclosure: HTMLDetailsElement;
@@ -167,18 +169,11 @@ export class TranscriptView {
     const lazy = options.lazy === true;
     const turnPresentation = presentTurn({});
     for (const turn of this.turns.values()) turn.disclosure.open = false;
-    const disclosure = document.createElement("details");
-    disclosure.className = "output-turn";
-    disclosure.open = options.open ?? !lazy;
-    disclosure.dataset.turnId = turnId;
-    const summary = document.createElement("summary");
-    const runningIcon = document.createElement("i");
-    runningIcon.className = "turn-running codicon codicon-loading codicon-modifier-spin";
-    runningIcon.hidden = true;
-    runningIcon.title = "Dext turn running";
-    runningIcon.setAttribute("aria-label", "Dext turn running");
-    const chevron = document.createElement("i");
-    chevron.className = "disclosure-chevron codicon codicon-chevron-right";
+    const summary = DisclosureTrigger(adapter, []);
+    const runningIcon = Spinner(adapter, {
+      class: "turn-running codicon codicon-loading codicon-modifier-spin", hidden: true, title: "Dext turn running", role: false
+    }, "Dext turn running");
+    const chevron = TraceChevron(adapter);
     const time = document.createElement("span");
     time.className = "output-turn-time";
     time.textContent = new Date(createdAt).toLocaleTimeString();
@@ -287,7 +282,9 @@ export class TranscriptView {
     // The changed-file table closes the turn with what it did; a live turn keeps
     // it hidden until it ends and the record says which files it touched.
     body.append(todos.element, questions.element, process.disclosure, output.section, changes);
-    disclosure.append(summary, body);
+    const disclosure = Disclosure(adapter, summary, [body], {
+      class: "output-turn", open: options.open ?? !lazy, "data-turn-id": turnId
+    }) as HTMLDetailsElement;
     // An open turn keeps its actions in the short Worked row instead of covering
     // the prompt, which is the row label now, or the question card above it.
     const hostActions = (): void => { (disclosure.open ? process.summary : summary).append(actions); };

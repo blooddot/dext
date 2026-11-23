@@ -241,4 +241,52 @@ await runLabChecks(async ({ send, evaluate, settle, artifacts }) => {
   assert.equal(await evaluate(`document.activeElement===document.querySelector('.image-annotator-row textarea')`), true, 'focus stays in the list after a delete');
   assert.deepEqual(await evaluate(`[...document.querySelectorAll('.image-annotator-index')].map(n=>n.textContent)`), ['1', '1'], 'the surviving mark and its row are renumbered');
   console.log('PASS delete keeps focus and renumbers');
+
+  await evaluate(`window.closedImage=document.querySelector('.image-annotator-image');window.dispatchEvent(new Event('pagehide'));`);
+  assert.deepEqual(await evaluate(`[closedImage.isConnected,closedImage.hasAttribute('src')]`), [false, false]);
+
+  // Simulate a media load failure and the host's failed conversion reply.
+  await evaluate(`document.body.replaceChildren(); window.videoMessages=[]; window.revokedUrls=[];
+    {const revoke=URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=url=>{revokedUrls.push(url);revoke(url);};}
+    window.fetch=async()=>new Response(new Uint8Array([0]),{headers:{'Content-Type':'video/mp4'}});
+    for (const [name,content] of [['dext-video-path','.dext/attachments/clip.mp4'],['dext-video-src','/clip.mp4']]) {
+      const meta=document.createElement('meta');meta.name=name;meta.content=content;document.head.append(meta);
+    }
+    window.acquireVsCodeApi=()=>({postMessage:message=>videoMessages.push(message)});`);
+  await evaluate(await readFile('dist/webview/videoAnnotator.js', 'utf8'));
+  await evaluate(`{
+    const video=document.querySelector('.video-annotator-video');
+    if (video.onerror) video.dispatchEvent(new Event('error'));
+  }`);
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (await evaluate('videoMessages.length > 0')) break;
+    await settle();
+  }
+  assert.deepEqual(await evaluate('videoMessages'), [{ type: 'videoTranscode', requestId: 1 }]);
+  assert.match(await evaluate(`document.querySelector('.video-annotator .image-annotator-error').textContent`), /Converting it for playback/);
+  await evaluate(`window.dispatchEvent(new MessageEvent('message',{data:{type:'videoTranscodeResult',requestId:1,error:'Conversion failed'}}));`);
+  await settle();
+  assert.deepEqual(await evaluate(`{
+    const error=document.querySelector('.video-annotator .image-annotator-error');
+    [error.hidden,error.textContent,document.querySelector('.video-annotator-play').disabled,
+      document.querySelector('.video-annotator-timeline').disabled,videoMessages.length]
+  }`), [false, 'Conversion failed', true, true, 1]);
+  assert.equal(await evaluate('revokedUrls.length'), 1, 'failed decoder releases the playback URL before conversion');
+  await evaluate(`window.closedVideo=document.querySelector('.video-annotator-video');window.dispatchEvent(new Event('pagehide'));`);
+  assert.deepEqual(await evaluate(`[closedVideo.isConnected,closedVideo.hasAttribute('src')]`), [false, false]);
+  console.log('PASS video conversion failure is rendered and playback stays disabled');
+
+  await evaluate(`window.framesMessages=[];
+    for (const [name,content] of [['dext-frames-src','/clip.mp4'],['dext-frames-times','[0,100]']]) {
+      const meta=document.createElement('meta');meta.name=name;meta.content=content;document.head.append(meta);
+    }
+    window.acquireVsCodeApi=()=>({postMessage:message=>framesMessages.push(message)});`);
+  await evaluate(await readFile('dist/webview/videoFrames.js', 'utf8'));
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (await evaluate('framesMessages.length > 0')) break;
+    await settle();
+  }
+  assert.match(await evaluate('framesMessages[0]?.error'), /codec cannot be decoded/);
+  assert.equal(await evaluate('revokedUrls.length'), 2, 'failed capture releases the temporary URL');
+  console.log('PASS image and video close release media, and failed frame capture releases its URL');
 }, false);

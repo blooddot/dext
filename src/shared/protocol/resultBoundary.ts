@@ -158,20 +158,23 @@ const MAX_DIAGNOSTIC_ISSUES = 8;
 
 /** Formats zod issues as `path: message`, bounded in both count and length so a
  * fixing prompt cannot be flooded by a pathological schema. */
-export function formatDiagnostics(error: unknown): string {
+export function formatDiagnostics(error: unknown, {
+  formatPath = (path) => path.map(String).join("."),
+  maxChars = MAX_DIAGNOSTIC_CHARS
+}: { formatPath?: (path: readonly PropertyKey[]) => string; maxChars?: number } = {}): string {
   const issues = extractIssues(error);
   if (!issues.length) return error instanceof Error ? error.message : String(error);
   const lines = issues.slice(0, MAX_DIAGNOSTIC_ISSUES).map((issue) => {
-    const path = issue.path?.map(String).join(".");
+    const path = issue.path && formatPath(issue.path);
     return path ? `${path}: ${issue.message}` : issue.message;
   });
   let text = lines.join("\n");
   const more = issues.length > MAX_DIAGNOSTIC_ISSUES
     ? `... and ${issues.length - MAX_DIAGNOSTIC_ISSUES} more issue(s).`
     : "";
-  if (text.length > MAX_DIAGNOSTIC_CHARS) {
+  if (text.length > maxChars) {
     const suffix = more ? `\n${more}` : "...";
-    text = `${text.slice(0, Math.max(0, MAX_DIAGNOSTIC_CHARS - suffix.length))}${suffix}`;
+    text = `${text.slice(0, Math.max(0, maxChars - suffix.length))}${suffix}`;
     return text;
   }
   return more ? `${text}\n${more}` : text;

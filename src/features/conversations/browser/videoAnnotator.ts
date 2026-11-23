@@ -6,6 +6,11 @@ import {
   MAX_PLANNED_FRAMES, composeVideoAnnotationText, formatTimecode, planContextFrames, snapFrameKey,
   type AnnotationFrame, type FrameMarks
 } from "./videoAnnotation.js";
+import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
+import { Alert, Badge, Empty } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
+import { Input, Textarea } from "../../../shared/lib/ui/input/formComponents.js";
+import { Button } from "../../../shared/lib/ui/input/nativeControls.js";
+import { Toolbar } from "../../../shared/lib/ui/layout/layoutComponents.js";
 
 export interface VideoAnnotatorOptions {
   /** Attachment reference the composed block points at. */
@@ -51,17 +56,22 @@ const place = (element: HTMLElement, left: number, top: number, width: number, h
  * paused moment keeps its own marks. */
 export class VideoAnnotator {
   readonly element: HTMLElement;
+  private readonly adapter = domUiAdapter(document);
+  private readonly lifecycle = new AbortController();
+  private readonly resize = new ResizeObserver(() => this.renderMarks());
+  private objectUrl: string | undefined;
   private readonly video = document.createElement("video");
   private readonly stage = document.createElement("div");
   private readonly layers = document.createElement("div");
   private readonly preview = document.createElement("div");
   private readonly list = document.createElement("div");
-  private readonly error = document.createElement("div");
-  private readonly play = document.createElement("button");
-  private readonly timeline = document.createElement("input");
+  private readonly error = Alert(this.adapter, "", { class: "image-annotator-error", hidden: true }, "div");
+  private readonly play = Button(this.adapter, { class: "video-annotator-play" }) as HTMLButtonElement;
+  private readonly timeline = Input(this.adapter, { type: "range", min: "0", step: "1", value: "0", class: "video-annotator-timeline",
+    "aria-label": "Playback position" }) as HTMLInputElement;
   private readonly timecode = document.createElement("span");
-  private readonly done = document.createElement("button");
-  private readonly progress = document.createElement("span");
+  private readonly done = Button(this.adapter, { disabled: true }, ["Insert annotations"]) as HTMLButtonElement;
+  private readonly progress = this.adapter.element("span", { class: "video-annotator-progress", role: "status" }, []);
   /** Marks per frame, keyed by the millisecond the player reported. */
   private readonly frames = new Map<number, ImageMark[]>();
   /** The frame whose marks are being edited. */
@@ -91,8 +101,6 @@ export class VideoAnnotator {
     this.stage.append(this.video, this.layers);
 
     this.list.className = "image-annotator-list";
-    this.error.className = "image-annotator-error";
-    this.error.hidden = true;
 
     for (const frame of options.frames ?? []) this.frames.set(frame.timeMs, [...frame.marks]);
 
@@ -103,8 +111,8 @@ export class VideoAnnotator {
     this.video.addEventListener("timeupdate", () => this.syncFrame());
     this.video.addEventListener("play", () => this.renderTransport());
     this.video.addEventListener("pause", () => this.renderTransport());
-    new ResizeObserver(() => this.renderMarks()).observe(this.stage);
-    document.addEventListener("keydown", (event) => this.keydown(event));
+    this.resize.observe(this.stage);
+    document.addEventListener("keydown", (event) => this.keydown(event), { signal: this.lifecycle.signal });
 
     this.element.append(this.stage, this.transport(), this.error, this.list, this.actions());
   }
@@ -115,26 +123,54 @@ export class VideoAnnotator {
     void this.load();
   }
 
+  dispose(): void {
+    this.lifecycle.abort();
+    this.resize.disconnect();
+    this.releaseSource();
+    this.element.remove();
+  }
+
+  private releaseSource(): void {
+    if (!this.objectUrl) return;
+    this.video.pause();
+    this.video.removeAttribute("src");
+    this.video.load();
+    URL.revokeObjectURL(this.objectUrl);
+    this.objectUrl = undefined;
+  }
+
   private async load(source = this.options.source): Promise<void> {
+    const { signal } = this.lifecycle;
     try {
+      signal.throwIfAborted();
       if (!source) throw new Error("This attachment file is missing.");
       // Playing the bytes from a `blob:` keeps the canvas same-origin: a
       // `vscode-webview:` source would taint it and `toDataURL` would throw.
       // shortcut: the whole file lands in webview memory before playback, so a
       // 100 MB video costs that much; stream it and capture on Insert if that hurts.
-      const response = await fetch(source);
+      const response = await fetch(source, { signal });
       if (!response.ok) throw new Error(`The video could not be read (${response.status}).`);
-      const url = URL.createObjectURL(await response.blob());
-      await new Promise<void>((resolve, reject) => {
-        this.video.onloadedmetadata = () => resolve();
-        // Chromium names the stream it refused; without it a missing file, a
-        // corrupt file and a codec the build lacks all read the same.
-        this.video.onerror = () => {
-          const detail = this.video.error?.message;
-          reject(new CodecError(`This video's codec cannot be decoded in the editor${detail ? ` (${detail})` : ""}.`));
-        };
-        this.video.src = url;
-      });
+      const bytes = await response.blob();
+      signal.throwIfAborted();
+      this.objectUrl = URL.createObjectURL(bytes);
+      let abort: (() => void) | undefined;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          abort = () => reject(new DOMException("This operation was aborted", "AbortError"));
+          signal.addEventListener("abort", abort, { once: true });
+          this.video.onloadedmetadata = () => resolve();
+          // Chromium distinguishes a decoder or codec error from a missing file.
+          this.video.onerror = () => {
+            const detail = this.video.error?.message;
+            reject(new CodecError(`This video's codec cannot be decoded in the editor${detail ? ` (${detail})` : ""}.`));
+          };
+          this.video.src = this.objectUrl!;
+        });
+      } finally {
+        this.video.onloadedmetadata = this.video.onerror = null;
+        if (abort) signal.removeEventListener("abort", abort);
+      }
+      signal.throwIfAborted();
       this.natural = { width: this.video.videoWidth, height: this.video.videoHeight };
       this.timeline.max = String(Math.max(1, Math.round(this.durationMs())));
       this.done.disabled = false;
@@ -144,6 +180,8 @@ export class VideoAnnotator {
       this.syncFrame(true);
       this.renderTransport();
     } catch (failure) {
+      if (signal.aborted) return;
+      this.releaseSource();
       if (!(failure instanceof CodecError) || !this.options.transcode || this.converted) {
         this.showError(failure);
         return;
@@ -157,7 +195,7 @@ export class VideoAnnotator {
       try {
         await this.load(await this.options.transcode());
       } catch (conversion) {
-        this.showError(conversion);
+        if (!signal.aborted) this.showError(conversion);
       }
     }
   }
@@ -169,36 +207,18 @@ export class VideoAnnotator {
   /** Play/pause, a scrubbable timeline and the timecode: the three things a
    * video needs before anyone can point at a moment in it. */
   private transport(): HTMLElement {
-    const bar = document.createElement("div");
-    bar.className = "video-annotator-transport";
-    this.play.type = "button";
-    this.play.className = "video-annotator-play";
     this.play.addEventListener("click", () => { void this.togglePlay(); });
-    this.timeline.type = "range";
-    this.timeline.min = "0";
-    this.timeline.step = "1";
-    this.timeline.value = "0";
-    this.timeline.className = "video-annotator-timeline";
-    this.timeline.setAttribute("aria-label", "Playback position");
     this.timeline.addEventListener("input", () => { void this.seekMs(Number(this.timeline.value)); });
     this.timecode.className = "video-annotator-timecode";
-    bar.append(this.play, this.timeline, this.timecode);
-    return bar;
+    return Toolbar(this.adapter, "Video playback", { class: "video-annotator-transport" }, [this.play, this.timeline, this.timecode]);
   }
 
   private actions(): HTMLElement {
-    const actions = document.createElement("div");
-    actions.className = "ui-dialog-actions";
     const hint = document.createElement("span");
     hint.className = "video-annotator-hint";
     hint.textContent = "\u2190 \u2192 1 second\nShift+\u2190 \u2192 1 frame";
-    this.done.type = "button";
-    this.done.textContent = "Insert annotations";
-    this.done.disabled = true;
     this.done.addEventListener("click", () => { void this.insert(); });
-    this.progress.className = "video-annotator-progress";
-    actions.append(hint, this.progress, this.done);
-    return actions;
+    return Toolbar(this.adapter, "Annotation actions", { class: "ui-dialog-actions" }, [hint, this.progress, this.done]);
   }
 
   private async togglePlay(): Promise<void> {
@@ -249,6 +269,8 @@ export class VideoAnnotator {
   }
 
   private seekMs(ms: number): Promise<void> {
+    const { signal } = this.lifecycle;
+    if (signal.aborted) return Promise.resolve();
     const end = this.durationMs();
     const target = Math.min(Math.max(0, ms), Math.max(0, end - 1));
     if (Math.abs(this.video.currentTime * 1000 - target) < 1) {
@@ -258,10 +280,12 @@ export class VideoAnnotator {
     return new Promise((resolve) => {
       const done = (): void => {
         this.video.removeEventListener("seeked", done);
-        this.syncFrame(true);
+        signal.removeEventListener("abort", done);
+        if (!signal.aborted) this.syncFrame(true);
         resolve();
       };
       this.video.addEventListener("seeked", done);
+      signal.addEventListener("abort", done, { once: true });
       this.video.currentTime = target / 1000;
     });
   }
@@ -399,9 +423,8 @@ export class VideoAnnotator {
     head.className = "image-annotator-list-head";
     const total = groups.reduce((sum, group) => sum + group.marks.length, 0);
     head.textContent = `Annotations (${total})`;
-    const hint = document.createElement("div");
-    hint.className = "image-annotator-list-hint";
-    hint.textContent = "Pause the video, then drag on the picture to add a note. Each moment keeps its own notes.";
+    const hint = Empty(this.adapter, "Pause the video, then drag on the picture to add a note. Each moment keeps its own notes.",
+      { class: "image-annotator-list-hint" }, "div");
     const nodes = groups.map((group) => this.frameGroup(group));
     this.list.replaceChildren(head, ...(nodes.length ? nodes : [hint]));
   }
@@ -410,12 +433,10 @@ export class VideoAnnotator {
   private frameGroup(group: FrameMarks): HTMLElement {
     const box = document.createElement("div");
     box.className = "video-annotator-frame-group";
-    const header = document.createElement("button");
-    header.type = "button";
-    header.className = "video-annotator-frame";
+    const header = Button(this.adapter, { class: "video-annotator-frame", title: "Go to this frame" }, [
+      `${formatTimecode(group.timeMs)} (${group.marks.length})`
+    ]);
     header.classList.toggle("is-active", group.timeMs === this.key);
-    header.title = "Go to this frame";
-    header.textContent = `${formatTimecode(group.timeMs)} (${group.marks.length})`;
     header.addEventListener("click", () => { void this.seekMs(group.timeMs); });
     box.append(header, ...group.marks.map((mark, index) => this.row(group, mark, index)));
     return box;
@@ -424,19 +445,14 @@ export class VideoAnnotator {
   private row(group: FrameMarks, mark: ImageMark, index: number): HTMLElement {
     const row = document.createElement("div");
     row.className = "image-annotator-row";
-    const badge = document.createElement("span");
-    badge.className = "image-annotator-index";
-    badge.textContent = String(index + 1);
+    const badge = Badge(this.adapter, String(index + 1), { class: "image-annotator-index" });
     const label = document.createElement("span");
     label.className = "image-annotator-row-label";
     label.textContent = mark.kind === "region"
       ? `${mark.box.width}\u00d7${mark.box.height} at ${mark.box.x},${mark.box.y}`
       : `point ${mark.point.x},${mark.point.y}`;
-    const note = document.createElement("textarea");
-    note.className = "ui-dialog-input";
-    note.rows = 1;
-    note.placeholder = "What happens here?";
-    note.value = mark.note;
+    const note = Textarea(this.adapter, { class: "ui-dialog-input", rows: "1", placeholder: "What happens here?",
+      "aria-label": `${formatTimecode(group.timeMs)} annotation ${index + 1} note` }, mark.note) as HTMLTextAreaElement;
     note.addEventListener("input", () => {
       mark.note = note.value;
       this.save();
@@ -448,11 +464,7 @@ export class VideoAnnotator {
       row.addEventListener("pointerenter", () => this.highlight(index, true));
       row.addEventListener("pointerleave", () => this.highlight(index, false));
     }
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "image-annotator-remove";
-    remove.setAttribute("aria-label", `Remove annotation ${index + 1}`);
-    remove.textContent = "\u00d7";
+    const remove = Button(this.adapter, { class: "image-annotator-remove", "aria-label": `Remove annotation ${index + 1}` }, ["\u00d7"]);
     remove.addEventListener("click", () => {
       group.marks.splice(index, 1);
       // A group this change emptied is not this frame's to commit.
@@ -484,12 +496,14 @@ export class VideoAnnotator {
       for (const [index, frame] of plan.entries()) {
         this.progress.textContent = `Exporting frame ${index + 1}/${plan.length}`;
         await this.seekMs(frame.timeMs);
+        if (this.lifecycle.signal.aborted) return;
         const main = frame.role === "mark";
         const marks = main ? marksByTime.get(frame.timeMs) ?? [] : [];
         const imagePath = await this.options.storeFrame(
           this.snapshot(main ? MARK_EDGE : CONTEXT_EDGE, main ? MARK_QUALITY : CONTEXT_QUALITY, marks),
           "image/jpeg"
         );
+        if (this.lifecycle.signal.aborted) return;
         frames.push({ timeMs: frame.timeMs, role: frame.role, imagePath, ...(main ? { marks } : {}) });
       }
       this.options.onInsert(composeVideoAnnotationText(this.options.path, frames));
@@ -497,11 +511,13 @@ export class VideoAnnotator {
       // what an agent will miss first.
       this.progress.textContent = `${frames.length} frame images added.${plan.length >= MAX_PLANNED_FRAMES ? ` ${MAX_PLANNED_FRAMES} is the limit, so some context frames were left out.` : ""}`;
     } catch (failure) {
-      this.showError(failure);
+      if (!this.lifecycle.signal.aborted) this.showError(failure);
     } finally {
-      await this.seekMs(restore);
-      if (wasPlaying) void this.video.play();
-      this.setBusy(false);
+      if (!this.lifecycle.signal.aborted) {
+        await this.seekMs(restore);
+        if (wasPlaying && !this.lifecycle.signal.aborted) void this.video.play();
+        this.setBusy(false);
+      }
     }
   }
 

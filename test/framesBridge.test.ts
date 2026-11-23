@@ -1,8 +1,29 @@
 import { createConnection } from "node:net";
 import { StringDecoder } from "node:string_decoder";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FramesBridge } from "../src/features/agents/host/framesBridge.js";
 import type { VideoFrameCapture } from "../src/features/conversations/contracts/videoFrames.js";
+import { VideoFrames } from "../src/features/conversations/host/videoFrames.js";
+import type { DextStorage } from "../src/platform/vscode/dextStorage.js";
+
+const createWebviewPanel = vi.hoisted(() => vi.fn());
+vi.mock("vscode", () => ({
+  ViewColumn: { Active: -1 },
+  Uri: { joinPath: (_: unknown, ...parts: string[]) => testUri(parts.join("/")) },
+  window: { createWebviewPanel },
+  workspace: { workspaceFolders: [] }
+}));
+vi.mock("../src/features/conversations/host/videoPlayback.js", () => ({
+  cachedVideo: async () => undefined,
+  videoCache: () => testUri("/cache")
+}));
+
+function testUri(path: string) {
+  return {
+    path, fsPath: path, toString: () => `test:${path}`,
+    with: (update: { path?: string; query?: string }) => testUri(update.path ?? `${path}?${update.query}`)
+  };
+}
 
 interface Answer {
   capture?: VideoFrameCapture;
@@ -79,5 +100,56 @@ describe("the video frame bridge", () => {
     expect(refused.error).toContain("at most 12 non-negative times");
     const failed = await request(endpointOf(started), { path: "a.mp4", times: [] });
     expect(failed.error).toContain("cannot be decoded");
+  });
+});
+
+describe("the video frame capture panel", () => {
+  function capturePanel() {
+    let receive: (message: unknown) => void = () => { throw new Error("Capture panel has not subscribed."); };
+    const unsubscribe = vi.fn();
+    const panel = {
+      dispose: vi.fn(),
+      webview: {
+        cspSource: "test:", html: "", asWebviewUri: (uri: unknown) => uri,
+        onDidReceiveMessage: (listener: typeof receive) => {
+          receive = listener;
+          return { dispose: unsubscribe };
+        }
+      }
+    };
+    createWebviewPanel.mockClear();
+    createWebviewPanel.mockReturnValue(panel);
+    const storage = { uriForReference: () => testUri("/attachments/clip.mp4") } as unknown as DextStorage;
+    const host = new VideoFrames({ extensionUri: {} as never, storage });
+    return { host, panel, unsubscribe, reply: (message: unknown) => receive(message) };
+  }
+
+  it("preserves focus and returns the frame order from the capture page", async () => {
+    const { host, panel, unsubscribe, reply } = capturePanel();
+    const pending = host.capture("clip.mp4", [1.5, 0.1]);
+    await vi.waitFor(() => expect(panel.webview.html).toContain('content="[1500,100]"'));
+    expect(createWebviewPanel).toHaveBeenCalledWith(
+      "dext.videoFrames", "Video frames", { viewColumn: -1, preserveFocus: true },
+      expect.objectContaining({ enableScripts: true, retainContextWhenHidden: true })
+    );
+    const capture = { durationMs: 2_000, width: 640, height: 360, frames: [
+      { timeMs: 1_500, data: "first" }, { timeMs: 100, data: "second" }
+    ] };
+    reply({ type: "frames", capture });
+    await expect(pending).resolves.toEqual(capture);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(panel.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("returns a decoding error and closes the temporary panel", async () => {
+    const { host, panel, unsubscribe, reply } = capturePanel();
+    const pending = host.capture("clip.mp4", [0]);
+    await vi.waitFor(() => expect(panel.webview.html).toContain("videoFrames.js"));
+    reply({ type: "unrelated" });
+    expect(panel.dispose).not.toHaveBeenCalled();
+    reply({ type: "frames", error: "The video's codec cannot be decoded." });
+    await expect(pending).rejects.toThrow("The video's codec cannot be decoded.");
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(panel.dispose).toHaveBeenCalledOnce();
   });
 });

@@ -66,14 +66,23 @@ describe("built-in Dext type definitions", () => {
     const lineChild = builtinTypeDefinition("ui.TraceLineChild")!;
     expect(node.alias).toContain("ui.TraceLine");
     expect(line.fields).toContainEqual({ name: "children", type: "list[ui.TraceLineChild]" });
-    expect(lineChild.alias).toContain('type: "Trace"; ordered?: boolean; children: list[ui.TraceLine]');
+    expect(lineChild.alias).toContain("ui.Trace |");
+    expect(builtinTypeDefinition("ui.Trace")?.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "children", type: "list[ui.TraceLine]" }),
+      expect.objectContaining({ name: "ordered", optional: true, description: "Defaults to false." })
+    ]));
+    const layout = builtinTypeDefinition("ui.LayoutChild")!;
+    expect(layout.alias).toContain("ui.Section");
+    expect(layout.alias).not.toContain("ui.TraceLine |");
+    expect(builtinTypeDefinition("ui.Stack")?.fields).toContainEqual(expect.objectContaining({ name: "children", type: "list[ui.LayoutChild]" }));
+    expect(builtinTypeDefinition("ui.Gap")?.alias).toBe('"sm" | "md" | "lg"');
     expect(builtinTypeDefinition("ViewResult")?.fields).toEqual([
       { name: "kind", type: '"view"' }, { name: "nodes", type: "list[ui.Node]" }
     ]);
     expect(RESERVED_UI_TYPE_DEFINITIONS).toHaveLength(12);
     for (const entry of RESERVED_UI_TYPE_DEFINITIONS) {
       expect(entry.status).toBe("reserved");
-      expect(node.alias).not.toContain(`"${entry.name}"`);
+      expect(node.alias?.split(" | ")).not.toContain(`ui.${entry.name}`);
       expect(builtinTypeDefinition(`ui.${entry.name}`)).toBeUndefined();
     }
   });

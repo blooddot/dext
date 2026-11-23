@@ -1,11 +1,13 @@
 import type { AgentStreamEvent, AgentTodoItem, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import { Badge, Spinner } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
+import { Markdown } from "../../../shared/lib/ui/content/contentComponents.js";
 import {
-  Badge, Markdown, Spinner, Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent,
-  TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle
-} from "../../../shared/lib/ui/traceComponents.js";
+  Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
+  TraceDescription, TraceIcon, TraceLine, TraceTitle
+} from "../../../shared/lib/ui/content/traceComponents.js";
 import type { MarkupAdapter } from "../../../shared/lib/ui/renderAdapter.js";
 import { htmlUiAdapter } from "../../../shared/lib/ui/htmlUiAdapter.js";
-import { Checkbox } from "../../../shared/lib/ui/nativeControls.js";
+import { Checkbox } from "../../../shared/lib/ui/input/nativeControls.js";
 
 // Plan tasks end with `verify: <check>`. Splitting on the last marker keeps the
 // task readable as a task instead of one long line.

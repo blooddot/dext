@@ -15,7 +15,8 @@ await runWebviewChecks(async ({ evaluate, settle }) => {
   const body = await readSidebarBody();
   await evaluate(`document.body.innerHTML=${JSON.stringify(body)};
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}
-    window.acquireVsCodeApi=()=>({postMessage:()=>{},getState:()=>({}),setState:()=>{}});
+    window.sent=[];
+    window.acquireVsCodeApi=()=>({postMessage:message=>sent.push(message),getState:()=>({}),setState:()=>{}});
     window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(await readFile('dist/webview/main.css', 'utf8'))};document.head.append(style);}`);
   await evaluate(await readFile('dist/webview/main.js', 'utf8'));
@@ -114,12 +115,23 @@ await runWebviewChecks(async ({ evaluate, settle }) => {
 
   // API forms park a workflow the same way, and land in the same card area.
   await evaluate(`form({sessionId:'active',turnId:'t1',requestId:'call',status:'waiting',form:{title:'Confirm',presentation:'inline',show_cancel:true,cancel_label:'Cancel',
-    actions:[{id:'submit',label:'Continue',primary:true,requires:[]}],fields:[{id:'note',type:'input',label:'Note',required:false}]}})`);
+    actions:[{id:'submit',label:'Continue',primary:true,requires:[]}],
+    fields:[{id:'scope',type:'radio',label:'Scope',required:true,options:[{value:'files',label:'Selected files'}]}]}})`);
   await settle();
   await settle();
   current = await evaluate('box()');
   assert.equal(current.visible, true, `a waiting API form is revealed too, got ${JSON.stringify(current)}`);
-  console.log('PASS a waiting API form is revealed');
+  await evaluate(`{
+    const form=[...document.querySelectorAll('.agent-input-card form')].at(-1);
+    form.querySelector('input[type=radio]').click();
+    form.requestSubmit();
+    form.requestSubmit();
+  }`);
+  assert.deepEqual(await evaluate(`sent.filter(message=>message.type==='uiResponse')`), [{
+    type: 'uiResponse', sessionId: 'active', turnId: 't1', requestId: 'call',
+    response: { kind: 'ui', type: 'form', status: 'submitted', action: 'submit', answers: { scope: { type: 'radio', selected: ['files'] } } }
+  }]);
+  console.log('PASS a waiting API form is revealed and replies once using its request identifiers');
 
   // A settled card has to keep the choices the question offered, not just the
   // answer: reopening a conversation is the only way to see what was on the

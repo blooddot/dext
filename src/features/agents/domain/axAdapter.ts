@@ -220,7 +220,14 @@ export class AxAdapter {
   validateInput(contract: AxMethodContract, value: Record<string, InvocationValue>): void {
     if (contract.methodId === "ui.render") {
       const parsed = contract.inputSchema.safeParse(value);
-      if (!parsed.success) throw new Error(formatDiagnostics(parsed.error));
+      if (!parsed.success) {
+        throw new Error(formatDiagnostics(parsed.error, {
+          formatPath: (path) => path.reduce<string>((prefix, key) =>
+            typeof key === "number" ? `${prefix}[${key}]` : prefix ? `${prefix}.${String(key)}` : String(key), ""),
+          // A bounded UI path can exceed the general diagnostic cap by itself.
+          maxChars: 1024
+        }));
+      }
       return;
     }
     contract.inputSchema.parse(value);

@@ -6,7 +6,9 @@ import type { ConversationSummary } from "../features/conversations/contracts/pr
 import { prepareHistoryTrace } from "../features/conversations/domain/agentTraceReplay.js";
 import { readHistoryResponse } from "../features/conversations/domain/historyResponse.js";
 import { renderTurnDisclosureSummary, renderTurnJson, renderTurnMarkdown, renderTurnResult } from "../features/conversations/presentation/turnComponents.js";
-import { CodeBlock, Markdown, TraceCollapsible, TraceCollapsibleContent, TraceIcon, TraceTitle } from "../shared/lib/ui/traceComponents.js";
+import { CodeBlock, Markdown } from "../shared/lib/ui/content/contentComponents.js";
+import { Button } from "../shared/lib/ui/input/nativeControls.js";
+import { TraceCollapsible, TraceCollapsibleContent, TraceIcon, TraceTitle } from "../shared/lib/ui/content/traceComponents.js";
 import { turnChanges } from "../features/conversations/domain/turnDiff.js";
 import {
   formatTurnTokenUsage,
@@ -50,12 +52,12 @@ import { AgentTraceView } from "../features/conversations/browser/agentTraceView
 import { ComposerDraftStore } from "../features/conversations/browser/composerController.js";
 import { observeComposerOverflow } from "../features/conversations/browser/composerOverflow.js";
 import {
-  bindComposerMenuKeys, composerMenuCategory, composerMenuChoice, composerMenuEmpty, composerMenuItem,
-  focusComposerMenuItem, focusComposerMenuSelection
+  composerMenuCategory, composerMenuChoice, composerMenuEmpty, composerMenuItem
 } from "../features/conversations/browser/composerMenu.js";
 import { ConversationBrowser, ConversationViewStore, conversationSignature } from "../features/conversations/browser/conversationController.js";
 import { enableConversationTabDrag } from "../features/conversations/browser/conversationTabDrag.js";
-import { renderConversationTabs, setTabSelected } from "../features/conversations/browser/conversationTabs.js";
+import { renderConversationTabs, selectRenderedConversationTab } from "../features/conversations/browser/conversationTabs.js";
+import { bindMenuKeys, focusMenuItem, focusMenuSelection, setTabSelected } from "../platform/browser/navigationBindings.js";
 import type { InteractionFileHost } from "../features/conversations/browser/interactionForm.js";
 import { OutputScrollController } from "../features/conversations/browser/outputScrollController.js";
 import { planActions, renderPlanToolbar as renderPlanToolbarView } from "../features/conversations/browser/planControls.js";
@@ -664,7 +666,7 @@ function composerPlaceholder(resource: ResourceSession | undefined): string {
   }
   if (inputMode === "plan") return activePlanPath ? "Describe changes to the selected plan…" : "Describe a new plan…";
   if (inputMode === "code") return "Write code to run…";
-  return inputMode === "ask" ? "Ask a question, / for skills, @ for files" : "Describe a task, / for skills, @ for files";
+  return inputMode === "ask" ? "Ask a question, / for skills" : "Describe a task, / for skills";
 }
 
 function renderPlanToolbar(): void {
@@ -810,10 +812,7 @@ function openConfirmationDialog(message: string, onConfirm: () => void): void {
 }
 
 function uiButton(label: string, secondary: boolean, onClick: () => void): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = label;
-  if (secondary) button.className = "secondary";
+  const button = Button(domUiAdapter(document), { class: secondary && "secondary" }, [label]) as HTMLButtonElement;
   button.addEventListener("click", onClick);
   return button;
 }
@@ -1395,10 +1394,7 @@ function selectConversation(sessionId: string): void {
   // below an already-selected tab.
   if (sidebarState) renderAgentControls(sidebarState);
   scheduleComposerDraftRestore(sessionId, switchId);
-  for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
-    const active = tab.dataset.sessionId === sessionId;
-    setTabSelected(tab, active);
-  }
+  selectRenderedConversationTab(elements.conversationTabs, elements.resultSection, sessionId);
   executing = false;
   stopping = false;
   activeTurnId = undefined;
@@ -1460,6 +1456,7 @@ function renderConversations(sessions: readonly ConversationSummary[], activeId:
   const activeTab = renderConversationTabs({
     document,
     container: elements.conversationTabs,
+    panel: elements.resultSection,
     actions: { select: selectConversation, close: closeConversation, pin: pinConversation }
   }, sessions, activeId);
   conversationTabDrag.refresh();
@@ -1480,23 +1477,23 @@ const composerMenus = [
 observeComposerOverflow(element<HTMLElement>("composer-controls"));
 
 for (const item of composerMenus) {
-  bindComposerMenuKeys(item.menu, {
+  bindMenuKeys(item.menu, {
     close: () => { closeComposerMenus(); item.control.focus(); },
     ...(item.menu === elements.modelMenu ? {
       openSubmenu: (choice: HTMLButtonElement) => {
         choice.click();
-        queueMicrotask(() => focusComposerMenuItem(elements.modelSubmenu, 0));
+        queueMicrotask(() => focusMenuItem(elements.modelSubmenu, 0));
       }
     } : {})
   });
 }
-bindComposerMenuKeys(elements.modelSubmenu, {
+bindMenuKeys(elements.modelSubmenu, {
   close: () => { closeComposerMenus(); elements.modelControl.focus(); },
   returnToParent: () => {
     elements.modelSubmenu.hidden = true;
     elements.modelSubmenu.replaceChildren();
     elements.modelMenu.hidden = false;
-    focusComposerMenuItem(elements.modelMenu, 0);
+    focusMenuItem(elements.modelMenu, 0);
   }
 });
 
@@ -1518,7 +1515,7 @@ function toggleComposerMenu(menu: HTMLElement): void {
   if (composerSelectionLocked()) return;
   closeComposerMenus(menu.hidden ? menu : undefined);
   if (!menu.hidden) {
-    queueMicrotask(() => focusComposerMenuSelection(menu, menu !== elements.skillsMenu));
+    queueMicrotask(() => focusMenuSelection(menu, menu !== elements.skillsMenu));
   }
 }
 
@@ -2598,10 +2595,7 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     if (activeChanged) scheduleComposerDraftRestore(message.activeId, message.switchId);
     if (message.resource) resourceSessions.set(message.activeId, message.resource);
     else resourceSessions.delete(message.activeId);
-    for (const tab of elements.conversationTabs.querySelectorAll<HTMLElement>(".conversation-tab")) {
-      const active = tab.dataset.sessionId === message.activeId;
-      setTabSelected(tab, active);
-    }
+    selectRenderedConversationTab(elements.conversationTabs, elements.resultSection, message.activeId);
     if (lastSidebarState) renderAgentControls({ ...lastSidebarState, agentSelection: message.selection });
     activePlanPath = message.planPath;
     planStatus = message.planStatus;

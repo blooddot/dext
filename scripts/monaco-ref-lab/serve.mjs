@@ -1,12 +1,35 @@
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const directory = dirname(fileURLToPath(import.meta.url));
 export async function readSidebarBody() {
-  const template = await readFile(join(directory, '../../src/app/sidebarProvider.ts'), 'utf8');
+  const workspace = resolve(directory, '../..');
+  const { outputFiles } = await build({
+    stdin: {
+      contents: `import { DextSidebarProvider } from './src/app/sidebarProvider.ts';
+        export function render() {
+          const provider = Object.create(DextSidebarProvider.prototype);
+          return provider.html({ cspSource: 'https://webview.test', asWebviewUri: uri => uri });
+        }`,
+      resolveDir: workspace,
+      sourcefile: 'sidebarFixture.ts'
+    },
+    absWorkingDir: workspace, bundle: true, write: false, platform: 'node', format: 'cjs', external: ['vscode']
+  });
+  const fixture = { exports: {} };
+  const require = createRequire(resolve(workspace, 'package.json'));
+  const vscode = {
+    Uri: { joinPath: (...parts) => ({ fsPath: '', toString: () => parts.slice(1).join('/'), with() { return this; } }) },
+    workspace: { getConfiguration: () => ({ get: () => undefined }) }
+  };
+  new Function('module', 'require', '__dirname', '__filename', outputFiles[0].text)(
+    fixture, name => name === 'vscode' ? vscode : require(name), workspace, resolve(workspace, 'sidebarFixture.ts')
+  );
+  const template = fixture.exports.render();
   const body = /<body\b[^>]*>([\s\S]*?)<\/body>/.exec(template)?.[1];
   if (body === undefined) throw new Error('Missing sidebar body template');
   return body.replace(/<script[\s\S]*?<\/script>/g, '');

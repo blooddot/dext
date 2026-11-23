@@ -317,18 +317,23 @@ describe("API reference catalog", () => {
       signature: "render(options: { nodes: UiNode[]; }): Promise<void>"
     });
     const nodes = shipped!.dext?.find((member) => member.name === "UiNode");
-    expect(nodes?.signature).toContain("children: UiTraceLine[]");
-    expect(nodes?.signature).not.toContain('"Tooltip"');
+    expect(nodes?.signature).toContain("UiTraceLine");
+    expect(nodes?.signature).not.toContain("UiTooltip");
+    expect(shipped!.dext?.find((member) => member.name === "UiTrace")?.signature).toContain("children: UiTraceLine[]");
     const apis = createApiDataSource({
       methods: () => BUILTIN_METHODS.map((method) => ({ ...method, source: "builtin" })),
       reference: async () => shipped
     });
     const detail = (await apis.definition("api:global:ui/render.ts"))!;
     const html = renderResourceDefinition({ ...detail, source: detail.entry.source });
-    for (const name of ["UiNode", "UiTraceLine", "UiTraceLineChild"]) {
+    const displayNames = ["Stack", "Inline", "Section", "Empty", "Trace", "TraceLine", "TraceIcon", "TraceTitle", "TraceDescription",
+      "Text", "Markdown", "Code", "CodeBlock", "Separator", "Badge", "Spinner", "Alert"];
+    for (const name of [...displayNames.map((node) => `Ui${node}`), "UiNode", "UiLayoutChild", "UiTraceLineChild", "UiGap"]) {
       expect(html).toContain(`data-resource-member="${name}"`);
+      expect(html).toContain(`href="#ui-type-${name}"`);
     }
     expect(html.replace(/<[^>]+>/g, "")).toContain("children: UiTraceLineChild[]");
+    expect(html).toContain('Defaults to &quot;sm&quot;.');
     for (const candidate of shipped!.modules) expect(candidate.members.length).toBeGreaterThan(0);
   });
 });

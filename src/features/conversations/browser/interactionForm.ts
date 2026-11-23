@@ -4,7 +4,9 @@ import { selectionGroupField, type FieldControl } from "./selectionGroupField.js
 import { selectField } from "./selectField.js";
 import { interactionMarkdown } from "./interactionMarkdown.js";
 import { interactionField, interactionTextInput } from "./interactionControls.js";
-import { Alert, Button } from "../../../shared/lib/ui/nativeControls.js";
+import { Alert } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
+import { Button } from "../../../shared/lib/ui/input/nativeControls.js";
+import { Form } from "../../../shared/lib/ui/input/formComponents.js";
 import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 
 /** Dropped files and pasted images reach a form field as the same `@path` text
@@ -49,7 +51,7 @@ export class InteractionForm {
     const head = element("div", { class: "interaction-head" }, [
       title, ...(definition.description ? [interactionMarkdown(definition.description)] : [])
     ]);
-    this.element = element("form", { class: "interaction-form", novalidate: true }, [head]) as HTMLFormElement;
+    this.element = Form(adapter, definition.title, [head], { class: "interaction-form", novalidate: true }) as HTMLFormElement;
     const error = Alert(adapter, "", { class: "interaction-error" });
     // The error only reports on the action the user actually pressed: showing every
     // unmet requirement up front made an untouched form look broken.

@@ -1,10 +1,11 @@
 import type { AgentStreamEvent, AgentToolKind, WorkflowStepResponse } from "../../../shared/contracts/types.js";
 import { agentMessageCopyText, presentAgentMessage } from "../presentation/agentMessagePresentation.js";
 import { renderTurnMessage } from "../presentation/turnComponents.js";
+import { CodeBlock, Markdown } from "../../../shared/lib/ui/content/contentComponents.js";
 import {
-  CodeBlock, Markdown, Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
+  Trace, TraceChevron, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger,
   TraceDescription, TraceIcon, TraceLine, TraceTitle
-} from "../../../shared/lib/ui/traceComponents.js";
+} from "../../../shared/lib/ui/content/traceComponents.js";
 import { renderMarkdownDiagrams } from "../../../platform/browser/markdownDiagrams.js";
 import { domUiAdapter } from "../../../platform/browser/domUiAdapter.js";
 

@@ -10,6 +10,10 @@ import { appearanceColorStyle } from "../../../platform/vscode/appearanceColors.
 import type { DextStorage } from "../../../platform/vscode/dextStorage.js";
 import type { DextAppearanceController } from "../../../platform/vscode/appearance.js";
 import { isDextAppearance, type DextAppearance } from "../../../shared/contracts/appearance.js";
+import { htmlUiAdapter } from "../../../shared/lib/ui/htmlUiAdapter.js";
+import { Stack, Toolbar } from "../../../shared/lib/ui/layout/layoutComponents.js";
+import { Input } from "../../../shared/lib/ui/input/formComponents.js";
+import { Empty } from "../../../shared/lib/ui/feedback/feedbackComponents.js";
 
 export class DextHistoryPanel implements vscode.Disposable {
   static readonly viewType = "dext.history";
@@ -207,7 +211,14 @@ export class DextHistoryPanel implements vscode.Disposable {
           ...(name ? { name } : {})
         });
       }).join("\n")
-      : `<div class="history-empty">${empty}</div>`;
+      : Empty(htmlUiAdapter, empty, { class: "history-empty" }, "div").html;
+    const search = Input(htmlUiAdapter, { type: "search", class: "history-search", "data-history-search": true,
+      placeholder: "Search conversations", "aria-label": "Search conversations" });
+    const content = Stack(htmlUiAdapter, [
+      Toolbar(htmlUiAdapter, "History controls", { class: "history-toolbar" }, [search]),
+      htmlUiAdapter.markup("div", { class: "history-content" }, body, []),
+      Empty(htmlUiAdapter, "No conversations match your search.", { class: "history-empty", "data-history-search-empty": true, hidden: true }, "div")
+    ], { tag: "section", attributes: { class: "history-view", "aria-label": "Dext History", "data-gap": false } });
     return `<!doctype html>
 <html lang="en">
 <head>
@@ -225,11 +236,7 @@ export class DextHistoryPanel implements vscode.Disposable {
   <title>Dext History</title>
 </head>
 <body class="history-panel" data-dext-theme="${this.appearance?.current ?? "auto"}">
-  <section class="history-view" aria-label="Dext History">
-    <div class="history-toolbar"><input type="search" class="history-search" data-history-search placeholder="Search conversations" aria-label="Search conversations"></div>
-    <div class="history-content">${body}</div>
-    <div class="history-empty" data-history-search-empty hidden>No conversations match your search.</div>
-  </section>
+  ${content.html}
   <script nonce="${nonce}" src="${diagrams.toString()}"></script>
   <script nonce="${nonce}" src="${appearanceScript.toString()}"></script>
   <script nonce="${nonce}">
