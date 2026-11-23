@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { DextApplication } from "./app/application.js";
 import { DextConversationPreferences } from "./features/conversations/host/conversationPreferences.js";
+import { defaultConversationSelection } from "./features/conversations/domain/agentSelection.js";
 import { createApiReferenceSource } from "./features/workflow/host/apiReference.js";
 import { describeApiSource } from "./features/workflow/host/apiSource.js";
 import { describeApiFlow } from "./features/workflow/host/apiFlow.js";
@@ -439,12 +440,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
   const forkConversation = async (source: DextHistorySession, turns: readonly DextHistoryRecord[]): Promise<void> => {
-    const forked = await history.fork(turns, source.providerSessions);
+    const selection = defaultConversationSelection(application.agents.currentSelection());
+    const forked = await history.fork(turns, source.providerSessions, selection.skillLoading);
     // A fork of a conversation the user took the trouble to name would be hard
     // to recognize under a name derived from its first message.
     const name = preferences.title(source.id);
     if (name) await preferences.setTitle(forked.id, `${name} (fork)`);
-    await sidebar.openConversation(forked);
+    await sidebar.openConversation(forked, selection);
     await focusSidebar();
     sidebar.showChat();
     historyPanel.refresh();

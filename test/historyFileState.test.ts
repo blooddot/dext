@@ -95,6 +95,34 @@ describe("file history storage", () => {
     expect((await reopened.sessions())[0]?.turns.map((entry) => entry.input)).toEqual(["original input", "new input"]);
   });
 
+  it("restores a fork's initial Skill loading policy from disk without a provider session", async () => {
+    const path = await directory();
+    const store = await openFileHistoryStore(path, new Memento());
+    const fork = await store.fork([turn("forked input")], undefined, "on-demand");
+
+    const reopened = await openFileHistoryStore(path, new Memento());
+    expect(await reopened.session(fork.id)).toMatchObject({
+      initialSkillLoading: "on-demand",
+      turns: [expect.objectContaining({ input: "forked input" })]
+    });
+  });
+
+  it("keeps initial Skill loading in the index when appending a conversation's first turn", async () => {
+    const path = await directory();
+    const store = await openFileHistoryStore(path, new Memento());
+    await store.updatePlanProgress("new", "task.plan.md", []);
+    const first = await store.addSuccess("first", [], workflow, "new", "plan", "first", { initialSkillLoading: "on-demand" });
+    expect(first).not.toHaveProperty("initialSkillLoading");
+    await store.addFailure("second", [], "Agent failed", "new", "plan", "second", { initialSkillLoading: "every-turn" });
+
+    const reopened = await openFileHistoryStore(path, new Memento());
+    expect(await reopened.session("new")).toMatchObject({
+      initialSkillLoading: "on-demand",
+      planProgress: { path: "task.plan.md" },
+      turns: [expect.objectContaining({ id: "first" }), expect.objectContaining({ id: "second" })]
+    });
+  });
+
   it("retries the index replace while Windows still holds the file", async () => {
     const path = await directory();
     const store = await openFileHistoryStore(path, new Memento());

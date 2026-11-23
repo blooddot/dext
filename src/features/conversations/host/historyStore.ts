@@ -2,7 +2,7 @@ import type { ResourceSession } from "../../resources/contracts/resourceSession.
 import { publicInteractionState } from "../presentation/uiInteractionPresentation.js";
 import { normalizeHistoryResponse } from "../domain/historyResponse.js";
 import { compactAgentEvents } from "../domain/agentEventLog.js";
-import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentTodoItem, ConversationSkillLoading, InputExecutionResponse, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
 import { normalizeInputReferenceSource } from "../../workspace/domain/fileReference.js";
 import {
   DEFAULT_HISTORY_LIMITS,
@@ -234,7 +234,8 @@ export class DextHistoryStore implements ConversationHistoryStore {
   // never appends to the conversation it came from.
   async fork(
     turns: readonly DextHistoryRecord[],
-    providerSessions?: Readonly<Record<string, string>>
+    providerSessions?: Readonly<Record<string, string>>,
+    initialSkillLoading?: ConversationSkillLoading
   ): Promise<DextHistorySession> {
     return this.mutate(async () => {
       const createdAt = Date.now();
@@ -248,7 +249,8 @@ export class DextHistoryStore implements ConversationHistoryStore {
         })),
         ...(providerSessions && Object.keys(providerSessions).length
           ? { forkProviderSessions: { ...providerSessions } }
-          : {})
+          : {}),
+        ...(initialSkillLoading ? { initialSkillLoading } : {})
       };
       await this.backend.writeTurns(session);
       return session;
@@ -278,15 +280,16 @@ export class DextHistoryStore implements ConversationHistoryStore {
     turnContext?: TurnRecordContext
   ): Promise<DextHistoryRecord> {
     const { maxOutputLength } = this.limits();
+    const { initialSkillLoading, ...recordContext } = turnContext ?? {};
     const spill: string[] = [];
     return this.add({
       input: clipped(input, maxOutputLength, spill),
       process: storedProcess(process, maxOutputLength, spill),
       output: serializeResponse(response, maxOutputLength, spill),
       ...(mode ? { mode } : {}),
-      ...turnContext,
+      ...recordContext,
       response
-    }, sessionId, turnId, spill);
+    }, sessionId, turnId, spill, initialSkillLoading);
   }
 
   async addFailure(
@@ -301,23 +304,25 @@ export class DextHistoryStore implements ConversationHistoryStore {
   ): Promise<DextHistoryRecord> {
     const message = error instanceof Error ? error.message : String(error);
     const { maxOutputLength } = this.limits();
+    const { initialSkillLoading, ...recordContext } = turnContext ?? {};
     const spill: string[] = [];
     return this.add({
       input: clipped(input, maxOutputLength, spill),
       process: storedProcess(process, maxOutputLength, spill),
       output: response ? serializeResponse(response, maxOutputLength, spill) : "",
       ...(mode ? { mode } : {}),
-      ...turnContext,
+      ...recordContext,
       error: bounded(message, maxOutputLength, spill),
       ...(response ? { response } : {})
-    }, sessionId, turnId, spill);
+    }, sessionId, turnId, spill, initialSkillLoading);
   }
 
   private async add(
     record: Omit<DextHistoryRecord, "id" | "createdAt">,
     requestedSessionId?: string,
     requestedTurnId?: string,
-    spill: readonly string[] = []
+    spill: readonly string[] = [],
+    initialSkillLoading?: ConversationSkillLoading
   ): Promise<DextHistoryRecord> {
     return this.mutate(async () => {
       const createdAt = Date.now();
@@ -331,7 +336,7 @@ export class DextHistoryStore implements ConversationHistoryStore {
       // A failed overflow write must never cost the turn: the clipped text stays.
       const spillPath = spill.length ? await this.backend.writeSpill?.(spill) : undefined;
       if (spillPath) turn.spillPath = spillPath;
-      await this.backend.appendTurn(requestedSessionId ?? `single-${turn.id}`, turn);
+      await this.backend.appendTurn(requestedSessionId ?? `single-${turn.id}`, turn, initialSkillLoading);
       await this.trim();
       return turn;
     });

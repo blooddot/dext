@@ -1,4 +1,7 @@
+import MarkdownIt from "markdown-it";
 import { parse as parseYaml } from "yaml";
+
+const markdown = new MarkdownIt("commonmark");
 
 /** The split of a Markdown document into optional YAML front matter and body.
  * Shared by SKILL.md and command templates so both understand folded (`>`)
@@ -114,6 +117,13 @@ function heading(body: string): string | undefined {
   return /^#\s+(.+)$/m.exec(body)?.[1]?.trim();
 }
 
+function conversationHeading(body: string): string | undefined {
+  const tokens = markdown.parse(body, {});
+  const headingIndex = tokens.findIndex((token, index) =>
+    token.type === "heading_open" && token.tag === "h1" && token.level === 0 && tokens[index + 1]?.content.trim());
+  return headingIndex === -1 ? undefined : tokens[headingIndex + 1]?.content.trim();
+}
+
 /** The first ordinary paragraph, used when front matter has no description.
  * Headings, list items, quotes and fences are not descriptions. */
 function paragraph(body: string): string | undefined {
@@ -138,7 +148,9 @@ function paragraph(body: string): string | undefined {
 
 export interface SkillMetadata {
   title: string;
+  conversationTitle: string;
   description: string;
+  declaredDescription?: string;
   body: string;
   frontMatter: Record<string, unknown>;
   hasFrontMatter: boolean;
@@ -153,20 +165,27 @@ export function parseSkillMetadata(source: string, fallback: string): SkillMetad
   const frontMatter = splitFrontMatter(source);
   const diagnostics = [...frontMatter.diagnostics];
   let name = scalar(frontMatter.data, "name", diagnostics);
-  let described = scalar(frontMatter.data, "description", diagnostics);
+  let declaredName = name;
+  let declaredDescription = scalar(frontMatter.data, "description", diagnostics);
+  let described = declaredDescription;
   const license = scalar(frontMatter.data, "license", diagnostics);
-  // Older Dext skills used bare `name:`/`description:` lines without the
-  // delimiters. Keep reading those, but never let them override real front
-  // matter or an H1.
+  // Preserve the resource catalog's legacy fallback. The conversation manifest
+  // accepts bare metadata only from the opening, unindented header.
   if (!frontMatter.present) {
     name ??= /^\s*name\s*:\s*["']?(.+?)["']?\s*$/mi.exec(source)?.[1]?.trim() || undefined;
     described ??= /^\s*description\s*:\s*["']?(.+?)["']?\s*$/mi.exec(source)?.[1]?.trim() || undefined;
+    declaredName = /^(?:[ \t]*\n)*(?:description[ \t]*:[^\n]*\n)?name[ \t]*:[ \t]*([^\n]*)/i
+      .exec(frontMatter.body)?.[1]?.trim().replace(/^(["'])(.*)\1$/, "$2").trim() || undefined;
+    declaredDescription = /^(?:[ \t]*\n)*(?:name[ \t]*:[^\n]*\n)?description[ \t]*:[ \t]*["']?([^\n]+?)["']?[ \t]*(?:\n|$)/i
+      .exec(frontMatter.body)?.[1]?.trim() || undefined;
   }
   const title = name ?? heading(frontMatter.body) ?? fallback;
   const description = described ?? paragraph(frontMatter.body) ?? "Standard project skill.";
   return {
     title,
+    conversationTitle: declaredName ?? conversationHeading(frontMatter.body) ?? fallback,
     description,
+    ...(declaredDescription ? { declaredDescription } : {}),
     body: frontMatter.body.trim(),
     frontMatter: frontMatter.data,
     hasFrontMatter: frontMatter.present,

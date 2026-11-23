@@ -2,6 +2,7 @@ import {
   historySessionOf, historySummaryOf, legacyHistorySession,
   type DextHistoryRecord, type DextHistorySession, type DextHistorySummary, type HistoryBackend
 } from "../src/features/conversations/contracts/history.js";
+import type { ConversationSkillLoading } from "../src/shared/contracts/types.js";
 
 export interface MemoryHistoryBackendOptions {
   /** The obsolete single-blob history an older workspace still holds. */
@@ -46,13 +47,14 @@ export class MemoryHistoryBackend implements HistoryBackend {
     return summary ? historySessionOf(structuredClone(summary), this.bodies.get(sessionId) ?? []) : undefined;
   }
 
-  async appendTurn(sessionId: string, turn: DextHistoryRecord): Promise<void> {
+  async appendTurn(sessionId: string, turn: DextHistoryRecord, initialSkillLoading?: ConversationSkillLoading): Promise<void> {
     await this.delay();
     const turns = [...(this.bodies.get(sessionId) ?? []), structuredClone(turn)];
     const summary = this.meta.get(sessionId) ?? { id: sessionId, createdAt: turn.createdAt, updatedAt: turn.createdAt, turnCount: 0 };
     this.written.push(sessionId);
     this.bodies.set(sessionId, turns);
     this.index({ ...summary, updatedAt: turn.createdAt, turnCount: turns.length, firstInput: turns[0]!.input,
+      ...(summary.turnCount === 0 && !summary.initialSkillLoading && initialSkillLoading ? { initialSkillLoading } : {}),
       ...(turn.spillPath ? { spills: { ...summary.spills, [turn.id]: turn.spillPath } } : {}) });
   }
 

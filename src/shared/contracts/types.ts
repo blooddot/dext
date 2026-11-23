@@ -3,6 +3,8 @@ import type { UiViewResult } from "./uiView.js";
 import type { WritableAgentPermission } from "./permissions.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
+export const CONVERSATION_SKILL_LOADING_MODES = ["on-demand", "every-turn"] as const;
+export type ConversationSkillLoading = typeof CONVERSATION_SKILL_LOADING_MODES[number];
 export type BuiltinOutputKind =
   | "ask"
   | "plan"
@@ -322,14 +324,15 @@ export interface ExecutionMetadata {
   speed?: string;
   serviceTier?: string;
   agentSessionId?: string;
-  /** Skills enabled for this turn. The host loads each SKILL.md before the
-   * provider call; unknown ids fail the turn instead of being ignored. */
+  /** Skills enabled for this ordinary conversation turn. */
   skills?: string[];
+  skillLoading?: ConversationSkillLoading;
   /** Pi packages this turn runs with. Absent means every installed package. */
   piPlugins?: string[];
   /** An expanded `/command` prompt template. Injected after the skills and
    * before Plan's own instructions. */
   commandInstruction?: string;
+  commandSkillId?: string;
   /** Where a new Skill resource came from. Import turns never call the model. */
   resourceSource?: "describe" | "import";
   /** Provider-native session to fork before the next turn, when available. */

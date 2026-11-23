@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DeepSeekHarnessRunner, acpMcpServers } from "../src/features/agents/host/deepseekHarnessRunner.js";
-import { DeepSeekHarnessTransport } from "../src/features/agents/host/deepseekHarnessTransport.js";
+import { DeepSeekHarnessTransport, HarnessConnection } from "../src/features/agents/host/deepseekHarnessTransport.js";
 import type { AgentInputRequest, AgentStreamEvent } from "../src/shared/contracts/types.js";
 import { decodeHarnessSession, encodeHarnessSession } from "../src/features/agents/host/deepseekHarnessPolicy.js";
 import type { AgentConversationRequest, AgentExecutionRequest } from "../src/features/agents/host/agentRunner.js";
@@ -29,6 +29,21 @@ function executionRequest(input: string): AgentExecutionRequest {
 afterEach(async () => { await Promise.all(runners.splice(0).map((value) => value.dispose())); });
 
 describe("Harness runner", { timeout: 15000 }, () => {
+  it("uses ACP text for on-demand Ask and keeps the host tool declaration", async () => {
+    const create = vi.spyOn(HarnessConnection.prototype, "newSession");
+    const send = vi.spyOn(HarnessConnection.prototype, "prompt");
+    const input = 'Available conversation Skills (JSON metadata):\n[{"path":".dext/skills/review/SKILL.md"}]\nRead the Skill.';
+    const mcpServers = [{ name: "existing-host", command: process.execPath, args: ["host.js"], env: {} }];
+    try {
+      await expect(runner().runConversation({ ...request(input), permission: "read-only", mcpServers })).resolves.toBe(input);
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ cwd: process.cwd(), mcpServers: acpMcpServers(mcpServers) }));
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ prompt: [{ type: "text", text: input }] }));
+    } finally {
+      create.mockRestore();
+      send.mockRestore();
+    }
+  });
+
   it("maps host-owned tool servers to the ACP stdio shape", () => {
     expect(acpMcpServers([{ name: "dext_structure", command: "C:\\Code.exe", args: ["server.js"], env: { ELECTRON_RUN_AS_NODE: "1" } }])).toEqual([
       { type: "stdio", name: "dext_structure", command: "C:\\Code.exe", args: ["server.js"], env: [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }] }

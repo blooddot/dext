@@ -494,8 +494,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
 
   // History hands over its own copy of a conversation; an already open one
   // keeps the in-memory instance so that a running turn stays attached to it.
-  async openConversation(session: DextHistorySession): Promise<void> {
-    await this.conversation.controller.open(session);
+  async openConversation(session: DextHistorySession, initialSelection?: AgentSelection): Promise<void> {
+    await this.conversation.controller.open(session, initialSelection);
   }
 
   async renameConversation(sessionId: string, title: string): Promise<void> {
@@ -911,6 +911,26 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         case "harnessPresetAction":
           await this.refreshHarnessPresets();
           break;
+        case "conversationSkillLoading": {
+          const { sessionId, skillLoading } = request;
+          const controller = this.conversation.controller;
+          const session = this.sessionInMap(sessionId);
+          const previous = controller.selection(sessionId);
+          if (!session || session.resource || !previous || this.running(sessionId) || previous.skillLoading === skillLoading) break;
+          const selection = { ...previous, skillLoading };
+          controller.setSelection(sessionId, selection);
+          try {
+            await this.preferences.setConversationSelection(sessionId, selection);
+          } catch (error) {
+            if (controller.selection(sessionId) === selection) {
+              controller.setSelection(sessionId, previous);
+              if (sessionId === this.activeSession.id) await this.refresh();
+            }
+            throw error;
+          }
+          if (sessionId === this.activeSession.id) await this.refresh();
+          break;
+        }
         case "agentSelection":
           {
           // Reject late menu clicks after execution has already started.
@@ -952,6 +972,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
             reasoningEffort: request.selection.reasoningEffort,
             speed: request.selection.speed,
             serviceTier: request.selection.serviceTier,
+            skillLoading: previousSelection?.skillLoading ?? "every-turn",
             ...(!this.activeSession.resource && requestedSkills?.length ? { skills: requestedSkills } : {}),
             ...(!this.activeSession.resource && requestedPlugins ? { piPlugins: requestedPlugins } : {})
           } satisfies AgentSelection;

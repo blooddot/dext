@@ -237,6 +237,7 @@ export class AgentProfileStore {
       ...(selection.speed !== undefined ? { speed: selection.speed } : {}),
       ...(selection.serviceTier !== undefined ? { serviceTier: selection.serviceTier } : {}),
       ...(selection.skills !== undefined ? { skills: [...selection.skills] } : {}),
+      ...(selection.skillLoading !== undefined ? { skillLoading: selection.skillLoading } : {}),
       ...(selection.piPlugins !== undefined ? { piPlugins: [...selection.piPlugins] } : {})
     };
     // Skills belong to one conversation, so they stay in memory and never leak

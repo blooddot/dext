@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,6 +55,9 @@ describe("SkillCatalog", () => {
       sourcePath: join(root, ".dext", "skills", "dev-feat", "SKILL.md")
     });
     expect(catalog.list().map((skill) => skill.id)).toEqual(["dev-feat"]);
+    await expect(catalog.describeForConversation("dev-feat", root, "codex")).resolves.toMatchObject({
+      title: "Feature", description: "No description provided.", path: ".dext/skills/dev-feat/SKILL.md", changed: false
+    });
   });
 
   it("accepts configured additional directories after project defaults", async () => {
@@ -64,6 +67,47 @@ describe("SkillCatalog", () => {
     const catalog = new SkillCatalog();
     await catalog.reload(root, ["shared"]);
     expect(catalog.list()).toMatchObject([{ id: "fix", title: "Fix", description: "Repair a bug" }]);
+    await expect(catalog.describeForConversation("fix", root, "codex")).resolves.toMatchObject({
+      title: "Fix", description: "Repair a bug", path: "shared/fix/SKILL.md"
+    });
+  });
+
+  it.each(["```yaml\ndescription: Configuration example\n```", "    description: Configuration example"])(
+    "keeps a code example's description out of the conversation manifest",
+    async (example) => {
+      const root = await tempRoot();
+      const skill = join(root, ".dext", "skills", "example");
+      await mkdir(skill, { recursive: true });
+      await writeFile(join(skill, "SKILL.md"), example);
+      const catalog = new SkillCatalog();
+      await catalog.reload(root);
+      expect(catalog.list()).toMatchObject([{ id: "example", description: "Configuration example" }]);
+      await expect(catalog.describeForConversation("example", root, "codex")).resolves.toMatchObject({
+        description: "No description provided."
+      });
+    }
+  );
+
+  it.each([
+    ["```yaml\nname: Example value\n```\n# Real title\n", "Real title"],
+    ["Intro\n\nname: Example value\n", "example"],
+    ["~~~md\n# Example title\n~~~\n", "example"],
+    ["    name: Example value\n    # Example title\n", "example"],
+    ["#\n\n# Real title\n", "Real title"],
+    ["---\nname: Declared name\n---\n# Other title\n", "Declared name"],
+    ["\nname: 'Legacy name'\ndescription: Legacy description\n# Other title\n", "Legacy name"]
+  ])("uses a declared Skill title for %j in the conversation manifest", async (source, title) => {
+    const root = await tempRoot();
+    const skill = join(root, ".dext", "skills", "example");
+    const file = join(skill, "SKILL.md");
+    await mkdir(skill, { recursive: true });
+    await writeFile(file, "# Initial title\n");
+    const catalog = new SkillCatalog();
+    await catalog.reload(root);
+    await writeFile(file, source);
+    await expect(catalog.describeForConversation("example", root, "codex")).resolves.toMatchObject({ title, changed: true });
+    await catalog.reload(root);
+    await expect(catalog.describeForConversation("example", root, "codex")).resolves.toMatchObject({ title, changed: false });
   });
 
   it("reads pack manifests and maps installed commands to their skills", async () => {
@@ -191,6 +235,51 @@ describe("SkillCatalog", () => {
     await catalog.reload(root, [], global);
     expect(catalog.list()).toMatchObject([{ id: "same", title: "Local" }]);
     await expect(catalog.load("same", root)).resolves.toMatchObject({ sourcePath: join(root, ".dext", "skills", "same", "SKILL.md") });
+    await expect(catalog.describeForConversation("same", root, "codex")).resolves.toMatchObject({
+      title: "Local", path: ".dext/skills/same/SKILL.md"
+    });
+    await rm(join(root, ".dext", "skills", "same", "SKILL.md"));
+    await expect(catalog.describeForConversation("same", root, "codex")).rejects.toThrow(/ENOENT/);
+    await catalog.reload(root, [], global);
+    await expect(catalog.describeForConversation("same", root, "codex")).resolves.toMatchObject({
+      title: "Global", path: join(global, "same", "SKILL.md")
+    });
+  });
+
+  it("rejects a linked replacement in a sibling with the same root prefix", async () => {
+    const root = await tempRoot();
+    const skills = join(root, ".dext", "skills");
+    const original = join(skills, "review");
+    const outside = join(root, ".dext", "skills-external", "review");
+    await mkdir(original, { recursive: true });
+    await writeFile(join(original, "SKILL.md"), "# Review");
+    const catalog = new SkillCatalog();
+    await catalog.reload(root);
+    await mkdir(join(root, ".dext", "skills-external"));
+    await rename(original, outside);
+    await symlink(outside, original, "junction");
+    await expect(catalog.describeForConversation("review", root, "codex")).rejects.toThrow("outside its registered root");
+  });
+
+  it("refreshes edited metadata and keeps a stable revision after the first lookup", async () => {
+    const root = await tempRoot();
+    const directory = join(root, ".dext", "skills", "review");
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "SKILL.md");
+    await writeFile(path, "---\nname: Old\ndescription: Before\n---\nOld body");
+    const catalog = new SkillCatalog();
+    await catalog.reload(root);
+    const before = await catalog.describeForConversation("review", root, "codex");
+    const newDescription = "x".repeat(320);
+    await writeFile(path, `---\nname: Updated\ndescription: |\n  First line\n  ${newDescription}\n---\nNEW_BODY`);
+    const after = await catalog.describeForConversation("review", root, "codex");
+    expect(after).toMatchObject({ title: "Updated", changed: true });
+    expect(after.description).toHaveLength(300);
+    expect(after.description).toMatch(/^First line x+…$/);
+    expect(after.revision).not.toBe(before.revision);
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual({ ...after, changed: false });
+    await catalog.reload(root);
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual({ ...after, changed: false });
   });
 
   it("keeps local commands over a global pack's command with the same id", async () => {

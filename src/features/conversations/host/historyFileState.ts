@@ -9,6 +9,7 @@ import {
   type ResourceSessionRef
 } from "../contracts/history.js";
 import type { ResourceSession } from "../../resources/contracts/resourceSession.js";
+import type { ConversationSkillLoading } from "../../../shared/contracts/types.js";
 import { compactAgentEvents } from "../domain/agentEventLog.js";
 import { DextHistoryStore } from "./historyStore.js";
 
@@ -237,7 +238,7 @@ export class HistoryFiles implements HistoryBackend {
     return historySessionOf(summary, turns, resource);
   }
 
-  async appendTurn(sessionId: string, turn: DextHistoryRecord): Promise<void> {
+  async appendTurn(sessionId: string, turn: DextHistoryRecord, initialSkillLoading?: ConversationSkillLoading): Promise<void> {
     await mkdir(this.directory, { recursive: true });
     const file = await open(bodyPath(this.directory, sessionId), "a");
     try {
@@ -254,6 +255,7 @@ export class HistoryFiles implements HistoryBackend {
       updatedAt: turn.createdAt,
       turnCount: summary.turnCount + 1,
       ...(summary.firstInput === undefined ? { firstInput: turn.input } : {}),
+      ...(summary.turnCount === 0 && !summary.initialSkillLoading && initialSkillLoading ? { initialSkillLoading } : {}),
       ...(spills && Object.keys(spills).length ? { spills } : {})
     });
     await this.writeIndex();

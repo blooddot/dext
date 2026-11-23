@@ -55,6 +55,16 @@ export interface SkillSummary {
   commandIds: string[];
 }
 
+/** The current installed file a conversation can offer to native read tools. */
+export interface ConversationSkillEntry {
+  id: string;
+  title: string;
+  description: string;
+  path: string;
+  revision: string;
+  changed: boolean;
+}
+
 /** A command the composer may offer once its skill is selected. */
 export interface SkillCommandSummary {
   id: string;

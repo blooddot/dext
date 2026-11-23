@@ -19,6 +19,7 @@ import {
 import { RESOURCE_DIRECTORIES, RESOURCE_ICONS, RESOURCE_LABELS, type ResourceKind, type ResourceScope, type ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import { FileSearchClient } from "../features/workspace/browser/fileSearchClient.js";
 import type { SidebarState, WebviewRequest, WebviewResponse } from "../platform/webviewProtocol.js";
+import { CONVERSATION_SKILL_LOADING_MODES } from "../shared/contracts/types.js";
 import type {
   AgentStreamEvent,
   AgentTokenUsage,
@@ -972,12 +973,25 @@ function renderSkillsMenu(state: SidebarState, selected: readonly string[], enab
     menu.append(composerMenuEmpty(state.skillsDisabledReason ?? "Skills are disabled in this workspace."));
     return;
   }
+  const loading = state.agentSelection.skillLoading ?? "every-turn";
+  for (const value of CONVERSATION_SKILL_LOADING_MODES) {
+    menu.append(composerMenuChoice(value === "on-demand" ? "按需加载" : "每轮应用", value === loading,
+      "menuitemradio", { "data-value": `loading:${value}` },
+      () => {
+        const sessionId = browser.activeId;
+        if (!sessionId || composerSelectionLocked()) return;
+        vscode.postMessage({ type: "conversationSkillLoading", sessionId, skillLoading: value });
+      }));
+  }
   if (!groups.length) {
     menu.append(composerMenuEmpty((state.skills ?? []).length
       ? "Every installed Skill is hidden from this menu. Toggle visibility in the Dext Resources page."
       : "No skills are installed. Add a SKILL.md package under .dext/skills or import a GitHub repository."));
     return;
   }
+  const separator = document.createElement("hr");
+  separator.className = "composer-skill-loading-separator";
+  menu.append(separator);
   const row = (options: {
     label: string;
     value: string;
@@ -1375,9 +1389,7 @@ function submitAgentSelection(change: Partial<SidebarState["agentSelection"]>, k
       reasoningEffort: change.reasoningEffort ?? selection?.reasoningEffort ?? "",
       speed: change.speed ?? selection?.speed ?? "",
       serviceTier: change.serviceTier ?? selection?.serviceTier ?? "",
-      ...(change.skills !== undefined || selection?.skills?.length
-        ? { skills: change.skills ?? selection?.skills ?? [] }
-        : {}),
+      ...(change.skills !== undefined ? { skills: change.skills } : {}),
       ...(change.piPlugins !== undefined || selection?.piPlugins
         ? { piPlugins: change.piPlugins ?? selection?.piPlugins ?? [] }
         : {})

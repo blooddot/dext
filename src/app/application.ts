@@ -503,6 +503,7 @@ export class DextApplication {
     this.refreshAgentProfiles();
     this.runtime.setAgentSelection(this.agents.currentSelection());
     this.runtime.setSkillLoader((skill, workspace, agent) => this.skills.load(skill, this.workspaceRoot, workspace.path, agent));
+    this.runtime.setConversationSkillLookup((id, workspaceRoot, agent) => this.skills.describeForConversation(id, workspaceRoot, agent));
     this.runtime.setRuleLoader(async (path) => {
       try {
         const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(path));

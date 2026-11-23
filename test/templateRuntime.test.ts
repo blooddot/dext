@@ -318,6 +318,9 @@ describe("template API", () => {
 describe("template formats at runtime", () => {
   it("renders valid JSON, keeps the option out of the contract and states the format in the instruction", async () => {
     await withTemplate(async (_root, runtime) => {
+      runtime.setAgentSelection({ profileId: "codex", skillLoading: "on-demand", skills: ["conversation-only"] });
+      runtime.setSkillLoader(async (skill) => ({ sourcePath: `${skill}/SKILL.md`, instructions: `BODY_${skill}` }));
+      runtime.setRuleLoader(async (path) => path.endsWith("first.md") ? "RULE_FIRST" : "RULE_SECOND");
       let instruction: string | undefined;
       let schema: { properties: Record<string, unknown> } | undefined;
       runtime.setAgentRunner({
@@ -330,7 +333,9 @@ describe("template formats at runtime", () => {
 
       const response = await runtime.execute(templateCall([
         { name: "input", value: "写一个 package.json" },
-        { name: "source", value: "templates/package.json.tpl" }
+        { name: "source", value: "templates/package.json.tpl" },
+        { name: "skills", value: ["first", "second"] },
+        { name: "rules", value: ["first.md", "second.md"] }
       ]));
 
       expect(response.result).toMatchObject({ kind: "template" });
@@ -341,6 +346,8 @@ describe("template formats at runtime", () => {
       // The format requirement reaches the model as its own instruction.
       expect(instruction).toContain("as JSON");
       expect(instruction).toContain("must parse as valid JSON");
+      expect(instruction).toMatch(/BODY_first[\s\S]*BODY_second[\s\S]*RULE_FIRST[\s\S]*RULE_SECOND[\s\S]*as JSON/);
+      expect(instruction).not.toContain("conversation-only");
     });
   });
 

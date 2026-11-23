@@ -8,6 +8,7 @@ describe("Harness policy", () => {
     const patch = JSON.parse(harnessPolicyPatch(permission, process.cwd())) as { id: string; config: { presets?: Record<string, { sandbox: string; approval: string }> } }[];
     const presets = Object.values(patch.find((item) => item.id === "permission")!.config.presets!);
     expect(presets).toHaveLength(3);
+    expect(patch.find((item) => item.id === "sandbox-policy")?.config).toMatchObject({ workspaceRoot: process.cwd() });
     expect(presets.every((item) => item.sandbox === (permission === "full-access" ? "danger-full-access" : permission))).toBe(true);
     if (permission !== "full-access") expect(presets.every((item) => item.approval === "never")).toBe(true);
   });

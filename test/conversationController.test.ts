@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InputExecutionResponse } from "../src/shared/contracts/types.js";
-import { conversation, createConversationHarness } from "./conversationHarness.js";
+import { defaultConversationSelection } from "../src/features/conversations/domain/agentSelection.js";
+import { conversation, createConversationHarness, defaultSelection } from "./conversationHarness.js";
 
 function deferredExecution() {
   let release!: () => void;
@@ -47,17 +48,117 @@ describe("ConversationController", () => {
   });
 
   it("starts a new tab and a resource tab with no skills", async () => {
-    const h = createConversationHarness();
-    await h.controller.start();
+    const h = createConversationHarness({ selection: { skillLoading: "every-turn", skills: ["inherited"] } });
+    await h.seed([]);
     const first = h.controller.active();
-    h.controller.setSelection(first.id, { ...h.controller.selection(first.id)!, skills: ["ponytail"] });
+    expect(h.controller.selection(first.id)?.skillLoading).toBe("on-demand");
+    expect(h.preferences.conversationSelection(first.id)?.skillLoading).toBe("on-demand");
+    expect(h.controller.selection(first.id)?.skills).toBeUndefined();
+    h.controller.setSelection(first.id, { ...h.controller.selection(first.id)!, skills: ["ponytail"], skillLoading: "every-turn" });
     const next = await h.controller.start();
+    expect(h.controller.selection(next.id)?.skillLoading).toBe("on-demand");
     expect(h.controller.selection(next.id)?.skills).toBeUndefined();
     expect(h.preferences.conversationSelection(next.id)?.skills).toBeUndefined();
+    h.controller.setSelection(next.id, { ...h.controller.selection(next.id)!, skillLoading: "every-turn", skills: ["ponytail"] });
+    const cleared = await h.controller.start(true);
+    expect(h.controller.ordered()).not.toContain(next.id);
+    expect(h.controller.selection(cleared.id)?.skills).toBeUndefined();
+    expect(h.preferences.conversationSelection(cleared.id)?.skillLoading).toBe("on-demand");
     const resource = await h.controller.start(false, { type: "skill", scope: "project" });
     expect(resource.resource).toEqual({ type: "skill", scope: "project" });
     expect(h.controller.selection(resource.id)?.skills).toBeUndefined();
     expect(h.controller.selection(resource.id)?.mode).toBe("ask");
+  });
+
+  it("hydrates an empty workspace despite a failed preference write and retries on the next request", async () => {
+    const h = createConversationHarness();
+    const update = vi.spyOn(h.state, "update").mockRejectedValueOnce(new Error("Temporary storage failure"));
+    await h.seed([]);
+    const initial = h.controller.active();
+    const selection = h.controller.selection(initial.id)!;
+    expect(selection.skillLoading).toBe("on-demand");
+    expect(h.controller.ordered()).toEqual([initial.id]);
+    expect(h.preferences.conversationSelection(initial.id)).toBeUndefined();
+    await h.controller.postConversationState();
+    expect(h.messages.at(-1)).toMatchObject({ type: "conversations", activeId: initial.id, selection });
+
+    const updated = { ...selection, model: "updated-model" };
+    h.controller.setSelection(initial.id, updated);
+    await Promise.all([h.controller.hydrate(), h.controller.hydrate()]);
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(h.controller.active()).toBe(initial);
+    expect(h.preferences.conversationSelection(initial.id)).toEqual(updated);
+    const next = await h.controller.start();
+    expect(h.controller.ordered()).toEqual([initial.id, next.id]);
+    expect(h.preferences.conversationSelection(next.id)?.skillLoading).toBe("on-demand");
+  });
+
+  it("restores legacy and explicitly switched selections on reopen and restart", async () => {
+    const h = createConversationHarness();
+    const legacy = conversation("legacy");
+    const missing = conversation("missing");
+    await h.state.update("dext.conversationSelections", { legacy: { skills: ["kept"] } });
+    await h.seed([missing, legacy]);
+    expect(h.controller.selection(legacy.id)).toMatchObject({ skillLoading: "every-turn", skills: ["kept"] });
+    await h.controller.open(missing);
+    expect(h.controller.selection(missing.id)?.skillLoading).toBe("every-turn");
+
+    const switched = { ...h.controller.selection(legacy.id)!, skillLoading: "on-demand" as const };
+    await h.preferences.setConversationSelection(legacy.id, switched);
+    h.controller.setSelection(legacy.id, switched);
+    await h.controller.close(legacy.id);
+    await h.controller.open(legacy);
+    expect(h.controller.selection(legacy.id)).toMatchObject(switched);
+    await h.controller.persistLayout();
+    const restarted = createConversationHarness({ state: h.state, layout: h.controller.layout() });
+    await restarted.seed([missing, legacy]);
+    expect(restarted.controller.selection(legacy.id)).toMatchObject(switched);
+    await restarted.controller.open(missing);
+    expect(restarted.controller.selection(missing.id)?.skillLoading).toBe("every-turn");
+  });
+
+  it.each(["success", "failure"])("restores the initial Skill loading after a first-turn %s without saved preferences", async (outcome) => {
+    const h = createConversationHarness({
+      executeConversation: async () => {
+        if (outcome === "failure") throw new Error("Agent failed");
+        return { kind: "workflow", executions: [] };
+      }
+    });
+    const update = vi.spyOn(h.state, "update")
+      .mockRejectedValueOnce(new Error("Storage unavailable"))
+      .mockRejectedValueOnce(new Error("Storage unavailable"));
+    await h.seed([]);
+    await h.controller.hydrate();
+    const initial = h.controller.active();
+    expect(update).toHaveBeenCalledTimes(2);
+    await h.coordinator.execute(initial, "agent", "first prompt");
+    expect(h.preferences.conversationSelection(initial.id)).toBeUndefined();
+
+    const persisted = await h.history.sessions();
+    expect(persisted[0]?.turns).toHaveLength(1);
+    const restarted = createConversationHarness();
+    await restarted.seed(persisted);
+    expect(restarted.controller.active().id).toBe(initial.id);
+    expect(restarted.controller.selection(initial.id)?.skillLoading).toBe("on-demand");
+
+    const explicit = { ...defaultSelection, skillLoading: "every-turn" as const };
+    await restarted.preferences.setConversationSelection(initial.id, explicit);
+    const reopened = createConversationHarness({ state: restarted.state });
+    await reopened.seed(persisted);
+    expect(reopened.controller.selection(initial.id)?.skillLoading).toBe("every-turn");
+  });
+
+  it("persists a new fork selection before opening its copied history", async () => {
+    const h = createConversationHarness();
+    const turn = { id: "turn", createdAt: 1, input: "prompt", process: [], output: "" };
+    const fork = await h.history.fork([turn]);
+    const selection = defaultConversationSelection({ ...defaultSelection, skillLoading: "every-turn", skills: ["inherited"] });
+    await h.preferences.setConversationSelection(fork.id, selection);
+    await h.controller.open(fork);
+    expect(h.controller.active()).toMatchObject({ id: fork.id, turns: [expect.objectContaining({ input: "prompt" })] });
+    expect(h.controller.selection(fork.id)?.skillLoading).toBe("on-demand");
+    expect(h.controller.selection(fork.id)?.skills).toBeUndefined();
+    expect(h.preferences.conversationSelection(fork.id)?.skillLoading).toBe("on-demand");
   });
 
   it("refuses to close a running conversation and selects a neighbour otherwise", async () => {

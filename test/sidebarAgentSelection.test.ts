@@ -18,6 +18,7 @@ import { MemoryHistoryBackend } from "./historyBackend.js";
 import { DextConversationPreferences } from "../src/features/conversations/host/conversationPreferences.js";
 import { ConversationController } from "../src/features/conversations/host/conversationController.js";
 import { conversation, createConversationHarness, defaultSelection, HarnessState } from "./conversationHarness.js";
+import { togglePack } from "../src/features/conversations/browser/skillSelection.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -38,6 +39,7 @@ function turn(id: string): DextHistoryRecord {
  * the VS Code surface is mocked.
  */
 async function sidebarHarness(options: {
+  beforePost?: (message: WebviewResponse) => Promise<void> | undefined;
   executeConversation?: () => Promise<InputExecutionResponse>;
   provider?: "deepseek-harness" | "pi";
 } = {}) {
@@ -54,7 +56,6 @@ async function sidebarHarness(options: {
   });
   const setAgentSelection = vi.fn((next: AgentSelection) => { selection = { ...next }; });
   const setConversationSelection = vi.fn(() => storage.promise);
-  preferences.setConversationSelection = setConversationSelection as never;
   const messages: WebviewResponse[] = [];
   const application = {
     state: () => ({ agentSelection: { ...selection }, agentProfiles: [{ id: options.provider ?? "deepseek-harness", models: [...models] }] }),
@@ -75,7 +76,11 @@ async function sidebarHarness(options: {
   };
   const sidebar = new DextSidebarProvider({} as never, application as never, history, preferences);
   Object.assign(sidebar as unknown as { post(message: WebviewResponse): Promise<void> }, {
-    post: async (message: WebviewResponse) => { messages.push(message); }
+    post: async (message: WebviewResponse) => {
+      const pending = options.beforePost?.(message);
+      if (pending) await pending;
+      messages.push(message);
+    }
   });
   const internals = sidebar as unknown as {
     receive(raw: unknown): Promise<void>;
@@ -92,6 +97,7 @@ async function sidebarHarness(options: {
     };
   };
   await internals.conversation.controller.hydrate();
+  preferences.setConversationSelection = setConversationSelection as never;
   const select = (profileId: string, patch: Partial<AgentSelection> = {}) => internals.receive({
     type: "agentSelection",
     selection: {
@@ -196,6 +202,80 @@ describe("sidebar agent selection synchronization", () => {
     expect(h.states().at(-1)?.agentSelection.skills).toEqual(["ponytail-review"]);
   });
 
+  it("preserves loading mode and pack selection across partial changes and Agent switches", async () => {
+    const h = await sidebarHarness();
+    h.storage.resolve();
+    const id = h.internals.conversation.controller.active().id;
+    const pack = ["ponytail", "ponytail-review"];
+    await h.select("codex", { skills: togglePack([], pack, true) });
+    expect(h.selection()).toMatchObject({ skillLoading: "on-demand", skills: pack });
+    await h.internals.receive({ type: "conversationSkillLoading", sessionId: id, skillLoading: "every-turn" });
+    expect(h.selection()).toMatchObject({ skillLoading: "every-turn", skills: pack });
+    await h.select("claude");
+    expect(h.states().at(-1)?.agentSelection).toMatchObject({ profileId: "claude", skillLoading: "every-turn", skills: pack });
+    await h.select("claude", { skills: togglePack(pack, pack, false) });
+    expect(h.selection().skills).toBeUndefined();
+    expect(h.setConversationSelection).toHaveBeenLastCalledWith(id, expect.objectContaining({ skillLoading: "every-turn" }));
+  });
+
+  it("only changes the target tab's Skill loading mode while its selection reply is delayed", async () => {
+    const reply = deferred();
+    const h = await sidebarHarness({
+      beforePost: (message) => message.type === "activeConversation" && message.switchId === 2 ? reply.promise : undefined
+    });
+    h.storage.resolve();
+    const { controller } = h.internals.conversation;
+    const first = controller.active().id;
+    const firstSelection = controller.selection(first);
+    const second = "second";
+    const secondSelection: AgentSelection = {
+      ...defaultSelection, profileId: "claude", model: "sonnet", permission: "full-access",
+      skills: ["ponytail"], skillLoading: "every-turn"
+    };
+    await h.sidebar.openConversation(conversation(second, [turn("t2")]), secondSelection);
+    await h.internals.receive({ type: "selectConversation", sessionId: first, switchId: 1 });
+    await h.internals.receive({ type: "selectConversation", sessionId: second, switchId: 2 });
+    expect(h.messages.some((message) => message.type === "activeConversation" && message.switchId === 2)).toBe(false);
+
+    const changed = { ...secondSelection, skillLoading: "on-demand" };
+    try {
+      await h.internals.receive({ type: "conversationSkillLoading", sessionId: second, skillLoading: "on-demand" });
+      expect(controller.selection(first)).toEqual(firstSelection);
+      expect(controller.selection(second)).toEqual(changed);
+      expect(h.selection()).toEqual(changed);
+      expect(h.setConversationSelection).toHaveBeenLastCalledWith(second, changed);
+    } finally {
+      reply.resolve();
+    }
+    await vi.waitFor(() => expect(h.messages).toContainEqual(expect.objectContaining({
+      type: "conversations", activeId: second, switchId: 2, selection: changed
+    })));
+
+    await h.internals.receive({ type: "selectConversation", sessionId: first, switchId: 3 });
+    await h.internals.receive({ type: "conversationSkillLoading", sessionId: second, skillLoading: "every-turn" });
+    expect(controller.selection(second)).toEqual(secondSelection);
+    expect(h.setConversationSelection).toHaveBeenLastCalledWith(second, secondSelection);
+    expect(h.selection()).toEqual(firstSelection);
+  });
+
+  it("retries the same Skill loading choice after a failed save", async () => {
+    const h = await sidebarHarness();
+    h.storage.resolve();
+    const controller = h.internals.conversation.controller;
+    const sessionId = controller.active().id;
+    const previous = controller.selection(sessionId);
+    const request = { type: "conversationSkillLoading", sessionId, skillLoading: "every-turn" };
+    h.setConversationSelection.mockRejectedValueOnce(new Error("临时保存失败"));
+
+    await h.internals.receive(request);
+    expect(controller.selection(sessionId)).toEqual(previous);
+    expect(h.messages).toContainEqual(expect.objectContaining({ type: "error", message: "临时保存失败" }));
+
+    await h.internals.receive(request);
+    expect(h.setConversationSelection).toHaveBeenCalledTimes(2);
+    expect(controller.selection(sessionId)).toEqual({ ...previous, skillLoading: "every-turn" });
+  });
+
   it("rejects a late agent selection while the active conversation is running", async () => {
     const gates: Array<() => void> = [];
     const h = await sidebarHarness({
@@ -215,6 +295,7 @@ describe("sidebar agent selection synchronization", () => {
     // A menu click that arrives after Send belongs to the running turn, not
     // to a new one: neither the controller nor storage may accept it.
     await h.select("claude", { model: "changed" });
+    await h.internals.receive({ type: "conversationSkillLoading", sessionId: active.id, skillLoading: "every-turn" });
     expect(controller.selection(active.id)).toEqual(before);
     expect(h.setAgentSelection).not.toHaveBeenCalled();
     expect(h.setConversationSelection).not.toHaveBeenCalled();
@@ -229,15 +310,15 @@ describe("conversation composer selection", () => {
   it("clears uninstalled Skills from active and closed saved conversations while preserving other controls", async () => {
     const h = createConversationHarness({ layout: { openConversationIds: ["one"], activeConversationId: "one" } });
     await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
-    const one = { ...defaultSelection, profileId: "codex", model: "one-model", skills: ["review", "keep"] };
-    const two = { ...defaultSelection, profileId: "claude", model: "two-model", skills: ["review"] };
+    const one = { ...defaultSelection, profileId: "codex", model: "one-model", skills: ["review", "keep"], skillLoading: "on-demand" as const };
+    const two = { ...defaultSelection, profileId: "claude", model: "two-model", skills: ["review"], skillLoading: "every-turn" as const };
     h.controller.setSelection("one", one);
     await h.preferences.setConversationSelection("one", one);
     await h.preferences.setConversationSelection("two", two);
     await h.controller.reconcileInstalledSkills(new Set(["keep"]));
     expect(h.controller.selection("one")).toEqual({ ...one, skills: ["keep"] });
     expect(h.preferences.conversationSelection("one")).toEqual({ ...one, skills: ["keep"] });
-    expect(h.preferences.conversationSelection("two")).toEqual({ ...defaultSelection, profileId: "claude", model: "two-model" });
+    expect(h.preferences.conversationSelection("two")).toEqual({ ...defaultSelection, profileId: "claude", model: "two-model", skillLoading: "every-turn" });
     h.dispose();
   });
 
@@ -269,8 +350,8 @@ describe("conversation composer selection", () => {
   it("keeps each conversation's controls isolated when switching tabs", async () => {
     const h = createConversationHarness({ layout: { openConversationIds: ["one", "two"], activeConversationId: "one" } });
     await h.seed([conversation("one", [turn("t1")]), conversation("two", [turn("t2")])]);
-    const one = { ...defaultSelection, profileId: "codex", model: "one-model" };
-    const two = { ...defaultSelection, profileId: "deepseek-harness", model: "two-model" };
+    const one = { ...defaultSelection, profileId: "codex", model: "one-model", skillLoading: "on-demand" as const };
+    const two = { ...defaultSelection, profileId: "deepseek-harness", model: "two-model", skillLoading: "every-turn" as const };
     h.controller.setSelection("one", one);
     h.controller.setSelection("two", two);
     await h.preferences.setConversationSelection("two", two);
@@ -290,7 +371,7 @@ describe("conversation composer selection", () => {
     const h = createConversationHarness();
     await h.controller.start();
     const id = h.controller.active().id;
-    const next = { ...defaultSelection, profileId: "deepseek-harness", model: "harness-model", agentPreset: "standard" };
+    const next = { ...defaultSelection, profileId: "deepseek-harness", model: "harness-model", agentPreset: "standard", skillLoading: "every-turn" as const };
     h.controller.setSelection(id, next);
     await h.preferences.setConversationSelection(id, next);
     await h.history.addSuccess("hello", [], emptyResponse(), id, "agent", "turn");

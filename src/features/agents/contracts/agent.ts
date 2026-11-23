@@ -5,6 +5,7 @@ import type {
   AgentPermission,
   WritableAgentPermission
 } from "../../../shared/contracts/permissions.js";
+import type { ConversationSkillLoading } from "../../../shared/contracts/types.js";
 
 export type { AgentPermission, WritableAgentPermission };
 
@@ -92,6 +93,7 @@ export interface AgentSelection {
   /** Skills enabled for this conversation. Empty or absent means none. A new
    * tab never inherits another tab's selection. */
   skills?: string[];
+  skillLoading?: ConversationSkillLoading;
   /** Pi packages enabled for this conversation, as their settings entries.
    * Absent means every installed package; empty means none. */
   piPlugins?: string[];

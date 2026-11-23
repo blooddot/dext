@@ -82,8 +82,8 @@ describe("conversation preferences", () => {
 
   it("keeps composer selections isolated by conversation id", async () => {
     const store = preferences();
-    const first = { mode: "ask" as const, permission: "workspace-write" as const, profileId: "codex", model: "gpt", reasoningEffort: "", speed: "standard", serviceTier: "default" };
-    const second = { mode: "agent" as const, permission: "full-access" as const, profileId: "claude", model: "sonnet", reasoningEffort: "high", speed: "", serviceTier: "" };
+    const first = { mode: "ask" as const, permission: "workspace-write" as const, profileId: "codex", model: "gpt", reasoningEffort: "", speed: "standard", serviceTier: "default", skillLoading: "on-demand" as const };
+    const second = { mode: "agent" as const, permission: "full-access" as const, profileId: "claude", model: "sonnet", reasoningEffort: "high", speed: "", serviceTier: "", skillLoading: "every-turn" as const };
 
     await store.setConversationSelection("first", first);
     await store.setConversationSelection("second", second);
@@ -97,10 +97,11 @@ describe("conversation preferences", () => {
   });
 
   it("normalizes skills per conversation, keeps legacy selections, and caps the list", async () => {
-    const store = preferences();
+    const state = new MemoryState();
+    const store = new DextConversationPreferences(state as never);
     const legacy = { mode: "agent" as const, permission: "workspace-write" as const, profileId: "codex", model: "gpt", reasoningEffort: "", speed: "", serviceTier: "" };
-    await store.setConversationSelection("legacy", legacy);
-    expect(store.conversationSelection("legacy")).toEqual(legacy);
+    await state.update("dext.conversationSelections", { legacy });
+    expect(store.conversationSelection("legacy")).toEqual({ ...legacy, skillLoading: "every-turn" });
 
     await store.setConversationSelection("skills", { ...legacy, skills: ["ponytail", " ponytail ", "ponytail", "bad/id"] });
     expect(store.conversationSelection("skills")?.skills).toEqual(["ponytail"]);
@@ -180,7 +181,7 @@ describe("conversation preferences", () => {
 
     await store.pruneConversations(["a"]);
 
-    expect(store.conversationSelection("a")).toEqual(selection);
+    expect(store.conversationSelection("a")).toEqual({ ...selection, skillLoading: "every-turn" });
     expect(store.title("a")).toBe("Title a");
     expect(store.pinned()).toEqual(["a"]);
     expect(store.favorites()).toEqual(["a"]);

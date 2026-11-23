@@ -109,22 +109,31 @@ describe("shared History and Conversation actions", () => {
     const activeTurn = provider.conversation.coordinator.execute(active, "agent", "running prompt");
     await vi.waitFor(() => expect(provider.conversation.coordinator.running("active")).toBe(true));
     const runSelection = { mode: "plan", permission: "full-access", profileId: "codex", model: "new-model", reasoningEffort: "high", speed: "", serviceTier: "" } as const;
+    const skillLoading = { type: "conversationSkillLoading", sessionId: "active", skillLoading: "on-demand" } as const;
 
     expect(provider.conversation.controller.active().id).toBe("active");
     expect((sidebar as unknown as { running(id: string): boolean }).running("active")).toBe(true);
     await internals.receive({ type: "agentSelection", selection: runSelection });
+    await internals.receive(skillLoading);
     expect(setConversationSelection).not.toHaveBeenCalled();
     expect(setAgentSelection).not.toHaveBeenCalled();
     expect(provider.conversation.controller.selection("active")?.model).toBe("model");
+    expect(provider.conversation.controller.selection("active")?.skillLoading).toBe("every-turn");
 
+    await vi.waitFor(() => expect(executeConversation).toHaveBeenCalledTimes(1));
     releaseActive();
     await activeTurn;
     const backgroundTurn = provider.conversation.coordinator.execute(background, "agent", "background prompt");
     await vi.waitFor(() => expect(provider.conversation.coordinator.running("background")).toBe(true));
     await internals.receive({ type: "agentSelection", selection: runSelection });
-    expect(setConversationSelection).toHaveBeenCalledExactlyOnceWith("active", runSelection);
-    expect(setAgentSelection).toHaveBeenCalledExactlyOnceWith(runSelection);
-    expect(provider.conversation.controller.selection("active")).toEqual(runSelection);
+    await internals.receive(skillLoading);
+    const expected = { ...runSelection, skillLoading: "on-demand" };
+    expect(setConversationSelection).toHaveBeenCalledTimes(2);
+    expect(setAgentSelection).toHaveBeenCalledTimes(2);
+    expect(setConversationSelection).toHaveBeenLastCalledWith("active", expected);
+    expect(setAgentSelection).toHaveBeenLastCalledWith(expected);
+    expect(provider.conversation.controller.selection("active")).toEqual(expected);
+    await vi.waitFor(() => expect(executeConversation).toHaveBeenCalledTimes(2));
     releaseActive();
     await backgroundTurn;
   });

@@ -275,19 +275,56 @@ describe("TurnExecutionCoordinator", () => {
     });
     await h.seed([conversation("session")]);
     h.controller.activate(h.controller.session("session")!);
-    h.controller.setSelection("session", { ...defaultSelection, skills: ["ponytail-review"] });
+    h.controller.setSelection("session", { ...defaultSelection, skills: ["ponytail-review"], skillLoading: "on-demand" });
     await h.coordinator.execute(h.controller.session("session")!, "agent", "/ponytail-review src/a.ts");
 
     expect(resolveSkillCommand).toHaveBeenCalledOnce();
     expect(resolveSkillCommand).toHaveBeenCalledWith("ponytail-review", ["ponytail-review"], "src/a.ts", "codex");
     expect(h.executeConversation.mock.calls[0]?.[1]).toBe("src/a.ts");
     expect(seen[0]?.commandInstruction).toContain("Review src/a.ts.");
+    expect(seen[0]?.commandSkillId).toBe("ponytail-review");
     expect(seen[0]?.skills).toEqual(["ponytail-review"]);
+    expect(seen[0]?.skillLoading).toBe("on-demand");
 
     const turn = (await h.history.sessions())[0]!.turns[0]!;
     expect(turn.input).toBe("/ponytail-review src/a.ts");
     expect(turn.command).toEqual({ id: "ponytail-review", skillId: "ponytail-review" });
     expect(turn.skills).toEqual(["ponytail-review"]);
+  });
+
+  it("keeps the command's Skill snapshot for Plan verification and drops the command next turn", async () => {
+    const resolveSkillCommand = vi.fn((_id: string, _skills: readonly string[], args: string) => ({
+      status: "ok" as const,
+      command: { id: "review", title: "Review", description: "", skillId: "reviewer", template: "$ARGUMENTS",
+        instruction: `Review ${args}`, arguments: args }
+    }));
+    const h = createConversationHarness({ resolveSkillCommand, executeConversation: async (mode, _source, metadata) => {
+      if (mode === "plan") {
+        const report = h.executeConversation.mock.calls.length === 1
+          ? { updates: [{ id: "plan-1", status: "completed" }] } : { verification: "passed" };
+        metadata.planTodo?.(report);
+      }
+      return { kind: "workflow", executions: [] };
+    } });
+    const session = { ...conversation("session"), activePlanPath: "plan.md", planStatus: "active" as const };
+    await h.seed([session]);
+    const active = h.controller.active();
+    h.controller.setSelection(active.id, { ...defaultSelection, skills: ["reviewer", "other"], skillLoading: "on-demand" });
+    await h.coordinator.execute(active, "plan", "/review this change\n\n## Tasks\n1. [ ] Review code", { executePlan: true });
+    expect(resolveSkillCommand).toHaveBeenCalledOnce();
+    expect(h.executeConversation).toHaveBeenCalledTimes(2);
+    const [first, second] = h.executeConversation.mock.calls;
+    for (const round of [first, second]) {
+      expect(round?.[2]).toMatchObject({ executePlan: true, commandSkillId: "reviewer", skillLoading: "on-demand", skills: ["reviewer", "other"] });
+      expect(round?.[2].commandInstruction).toContain("Review this change");
+    }
+    expect(second?.[1]).toContain("verification");
+    expect((await h.history.session(active.id))?.turns[0]?.planOutcome).toMatchObject({ status: "completed", rounds: 2 });
+    await h.coordinator.execute(active, "ask", "Another question");
+    expect(h.executeConversation.mock.lastCall?.[2]).toMatchObject({ skillLoading: "on-demand", skills: ["reviewer", "other"] });
+    expect(h.executeConversation.mock.lastCall?.[2].commandSkillId).toBeUndefined();
+    expect(h.executeConversation.mock.lastCall?.[2].commandInstruction).toBeUndefined();
+    expect(resolveSkillCommand).toHaveBeenCalledOnce();
   });
 
   it("fails a command whose skill is not selected or that is unsupported", async () => {
@@ -335,12 +372,13 @@ describe("TurnExecutionCoordinator", () => {
     ]);
     for (const id of ["code", "resource"]) {
       h.controller.activate(h.controller.session(id)!);
-      h.controller.setSelection(id, { ...defaultSelection, skills: ["ponytail-review"] });
+      h.controller.setSelection(id, { ...defaultSelection, skills: ["ponytail-review"], skillLoading: "on-demand" });
     }
     h.controller.activate(h.controller.session("code")!);
     await h.coordinator.execute(h.controller.session("code")!, "code", "/review src/a.ts");
     expect(executeInput.mock.calls[0]?.[0]).toBe("/review src/a.ts");
     expect(executeInput.mock.calls[0]?.[1].skills).toBeUndefined();
+    expect(executeInput.mock.calls[0]?.[1].skillLoading).toBeUndefined();
     expect(executeInput.mock.calls[0]?.[1].commandInstruction).toBeUndefined();
 
     h.controller.activate(h.controller.session("resource")!);
@@ -348,6 +386,7 @@ describe("TurnExecutionCoordinator", () => {
     expect(resolveSkillCommand).not.toHaveBeenCalled();
     expect(draftResource.mock.calls[0]?.[2]).toMatchObject({ resourceSource: "import" });
     expect(draftResource.mock.calls[0]?.[2].skills).toBeUndefined();
+    expect(draftResource.mock.calls[0]?.[2].skillLoading).toBeUndefined();
     expect(draftResource.mock.calls[0]?.[2].commandInstruction).toBeUndefined();
     expect((await h.history.sessions()).find((session) => session.id === "resource")?.turns[0]?.resourceSource).toBe("import");
   });

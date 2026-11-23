@@ -9,8 +9,7 @@ import type {
 } from "../contracts/protocol.js";
 import { orderedConversationIds } from "../domain/conversationOrder.js";
 import { conversationTitle, historyTurnTitle } from "../presentation/historyRender.js";
-import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
-import { withoutSkills } from "../domain/agentSelection.js";
+import { defaultConversationSelection, withoutSkills } from "../domain/agentSelection.js";
 import type { AgentTodoItem, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
 
 /** Everything the controller publishes. The sidebar implements it with the
@@ -57,12 +56,6 @@ function outputSession(): DextHistorySession {
   };
 }
 
-// New tabs always start in Agent mode with no skills, while keeping the
-// provider/model controls the user was using in the tab they came from.
-function defaultConversationSelection(previous: AgentSelection): AgentSelection {
-  return { ...withoutSkills(previous), mode: "agent", ...(previous.profileId === "deepseek-harness" ? { agentPreset: harnessPresetOrDefault(previous.agentPreset) } : {}) };
-}
-
 function sessionSignature(session: DextHistorySession): string {
   const last = session.turns.at(-1);
   return `${session.updatedAt}:${session.turns.length}:${last?.id ?? ""}:${last?.process.length ?? 0}`;
@@ -85,6 +78,7 @@ export class ConversationController {
   // without reading the conversation body.
   private readonly summaries = new Map<string, DextHistorySummary>();
   private hydration?: Promise<void>;
+  private readonly pendingSelectionSaves = new Map<string, Promise<void> | undefined>();
   private readonly postedSessionSignatures = new Map<string, string>();
   private layoutWriteTimer: ReturnType<typeof setTimeout> | undefined;
   private layoutWriteInFlight: Promise<void> | undefined;
@@ -120,9 +114,28 @@ export class ConversationController {
 
   /** Loads the conversations the user can see: the open tabs, the pinned ones
    * and the active one. Everything else stays on disk until it is opened. */
-  hydrate(): Promise<void> {
+  async hydrate(): Promise<void> {
     this.hydration ??= this.hydrateOnce();
-    return this.hydration;
+    await this.hydration;
+    await Promise.all([...this.pendingSelectionSaves.keys()].map((id) => this.savePendingSelection(id)));
+  }
+
+  private async savePendingSelection(sessionId: string): Promise<void> {
+    const inFlight = this.pendingSelectionSaves.get(sessionId);
+    if (inFlight) return inFlight;
+    const selection = this.conversationSelections.get(sessionId);
+    if (!selection) {
+      this.pendingSelectionSaves.delete(sessionId);
+      return;
+    }
+    const save = this.preferences.setConversationSelection(sessionId, selection).then(() => {
+      if (this.pendingSelectionSaves.get(sessionId) === save) this.pendingSelectionSaves.delete(sessionId);
+    }, () => {
+      // The tab is ready in memory. Retry the latest selection on the next request.
+      if (this.pendingSelectionSaves.get(sessionId) === save) this.pendingSelectionSaves.set(sessionId, undefined);
+    });
+    this.pendingSelectionSaves.set(sessionId, save);
+    return save;
   }
 
   private async hydrateOnce(): Promise<void> {
@@ -152,8 +165,9 @@ export class ConversationController {
       if (session.planStatus === "running" && status !== undefined) session.planStatus = status;
       this.sessions.set(session.id, session);
     }
-    if (!this.sessions.has(this.activeSession.id)) this.sessions.set(this.activeSession.id, this.activeSession);
+    const initialSession = this.activeSession;
     const latest = [...this.sessions.values()].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (!this.sessions.has(initialSession.id)) this.sessions.set(initialSession.id, initialSession);
     const restored = layout.openConversationIds.filter((id) => this.sessions.has(id));
     const previouslyActive = layout.activeConversationId
       ? this.sessions.get(layout.activeConversationId)
@@ -161,15 +175,29 @@ export class ConversationController {
     if (previouslyActive) this.activeSession = previouslyActive;
     else if (latest) this.activeSession = latest;
     const storedSelection = this.preferences.conversationSelection(this.activeSession.id);
-    const initialSelection = storedSelection
-      ?? { ...withoutSkills(this.options.application.currentSelection()), mode: "agent" as const };
+    const isNew = this.activeSession === initialSession && !this.summaries.has(initialSession.id);
+    const initialSelection = storedSelection ?? (isNew
+      ? defaultConversationSelection(this.options.application.currentSelection())
+      : this.restoredConversationSelection(this.activeSession));
+    if (isNew && initialSelection.skillLoading) initialSession.initialSkillLoading = initialSelection.skillLoading;
     this.conversationSelections.set(this.activeSession.id, initialSelection);
     this.options.application.setAgentSelection(initialSelection);
+    if (isNew && !storedSelection) {
+      this.pendingSelectionSaves.set(initialSession.id, undefined);
+    }
     // Keep every tab the user left open, including non-pinned ones. Pins still
     // provide a backwards-compatible fallback for layouts saved before this
     // state was introduced.
     const pinnedOpen = pinned.filter((id) => this.sessions.has(id));
     this.openConversations = [...new Set([...restored, ...pinnedOpen, this.activeSession.id])];
+  }
+
+  private restoredConversationSelection(session: DextHistorySession): AgentSelection {
+    return {
+      ...withoutSkills(this.options.application.currentSelection()),
+      mode: "agent",
+      skillLoading: session.initialSkillLoading ?? "every-turn"
+    };
   }
 
   /** A plan that was running when the window closed can never still be running.
@@ -300,7 +328,7 @@ export class ConversationController {
     const storedSelection = cachedSelection ? undefined : this.preferences.conversationSelection(session.id);
     const selection = cachedSelection
       ?? storedSelection
-      ?? { ...withoutSkills(this.options.application.currentSelection()), mode: "agent" as const };
+      ?? this.restoredConversationSelection(session);
     this.conversationSelections.set(session.id, selection);
     this.options.application.setAgentSelection(selection);
     if (!wasOpen) this.openConversations.push(session.id);
@@ -369,6 +397,7 @@ export class ConversationController {
     const selection = resource
       ? { ...defaultConversationSelection(previousSelection), mode: "ask" as const, agentPreset: "standard" }
       : defaultConversationSelection(previousSelection);
+    if (!resource && selection.skillLoading) session.initialSkillLoading = selection.skillLoading;
     this.conversationSelections.set(session.id, selection);
     this.options.application.setAgentSelection(selection);
     if (index === -1) this.openConversations.push(session.id);
@@ -382,11 +411,10 @@ export class ConversationController {
     return session;
   }
 
-  /** Replaces a conversation's composer controls and makes them the ones the
-   * application will execute with. */
+  /** Replaces a conversation's composer controls and synchronizes the active selection. */
   setSelection(sessionId: string, selection: AgentSelection): void {
     this.conversationSelections.set(sessionId, selection);
-    this.options.application.setAgentSelection(selection);
+    if (sessionId === this.activeSession.id) this.options.application.setAgentSelection(selection);
   }
 
   /** Explicit resource removal also clears saved checkboxes, so re-importing a
@@ -410,14 +438,16 @@ export class ConversationController {
 
   // History hands over its own copy of a conversation; an already open one
   // keeps the in-memory instance so that a running turn stays attached to it.
-  async open(session: DextHistorySession): Promise<void> {
+  async open(session: DextHistorySession, initialSelection?: AgentSelection): Promise<void> {
     await this.hydrate();
     const existing = this.sessions.get(session.id) ?? session;
     this.sessions.set(existing.id, existing);
     // Preserve the asynchronous command contract used by history actions;
     // the actual tab activation itself is deliberately detached from IPC.
     await Promise.resolve();
+    if (initialSelection) this.conversationSelections.set(existing.id, initialSelection);
     this.activate(existing, undefined, true);
+    if (initialSelection) void this.savePendingSelection(existing.id);
   }
 
   // Closing a tab only hides the conversation; history keeps it so that the
@@ -450,7 +480,7 @@ export class ConversationController {
     this.activeSession = session;
     const selection = this.conversationSelections.get(session.id)
       ?? this.preferences.conversationSelection(session.id)
-      ?? { ...withoutSkills(this.options.application.currentSelection()), mode: "agent" as const };
+      ?? this.restoredConversationSelection(session);
     this.conversationSelections.set(session.id, selection);
     this.options.application.setAgentSelection(selection);
     await this.preferences.setConversationSelection(session.id, selection);
@@ -499,6 +529,7 @@ export class ConversationController {
     await this.hydrate();
     this.sessions.delete(sessionId);
     this.summaries.delete(sessionId);
+    this.pendingSelectionSaves.delete(sessionId);
     this.conversationSelections.delete(sessionId);
     await this.preferences.forgetConversationSelection(sessionId);
     if (this.openConversations.includes(sessionId)) {

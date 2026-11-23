@@ -10,10 +10,11 @@ describe("conversation protocol", () => {
     expect(types).not.toContain("resolvePatch");
     expect(types).toContain("selectConversation");
     expect(types).toContain("agentSelection");
+    expect(types).toContain("conversationSkillLoading");
     expect(types).toContain("correctPlan");
     expect(types).toContain("composerDraft");
     expect(types).toContain("togglePlanAcceptance");
-    expect(types).toHaveLength(27);
+    expect(types).toHaveLength(28);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 
@@ -33,6 +34,7 @@ describe("conversation protocol", () => {
       { type: "pinConversation", sessionId: "a", pinned: true },
       { type: "agentSelection", selection },
       { type: "agentSelection", selection: { ...selection, skills: ["ponytail", "ponytail-review"] } },
+      { type: "conversationSkillLoading", sessionId: "session", skillLoading: "on-demand" },
       { type: "harnessPresetAction", action: "refresh" },
       { type: "openTurnDiff", sessionId: "session", turnId: "turn", path: "src/a.ts" },
       { type: "addTurnChangeToInput", sessionId: "session", turnId: "turn", path: "src/a.ts" },

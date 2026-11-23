@@ -1138,7 +1138,7 @@ describe("sidebar panel layout", () => {
   it("accepts host-initiated conversation switches without weakening local stale-response guards", async () => {
     const sidebar = await source("src/app/sidebarProvider.ts");
     const main = await source("src/webview/main.ts");
-    expect(sidebar).toMatch(/async openConversation\(session: DextHistorySession\): Promise<void> \{\s*await this\.conversation\.controller\.open\(session\);/);
+    expect(sidebar).toMatch(/async openConversation\(session: DextHistorySession, initialSelection\?: AgentSelection\): Promise<void> \{\s*await this\.conversation\.controller\.open\(session, initialSelection\);/);
     // History, new conversations and closing a tab are host-initiated: their
     // payloads carry hostInitiated so the Webview accepts an active-id change
     // it did not request, while ordinary stale responses keep their guards.

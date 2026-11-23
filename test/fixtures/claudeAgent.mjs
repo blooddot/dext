@@ -86,7 +86,11 @@ lines.on("line", (line) => {
   void (async () => {
     send({ type: "system", subtype: "init", session_id: sessionId, tools: ["AskUserQuestion", "Write"] });
     let answer;
-    try { answer = await (scenarios[input] ?? scenarios.plain)(); }
+    try {
+      answer = input.startsWith("Available conversation Skills (JSON metadata):")
+        ? JSON.stringify({ input, cwd: process.cwd(), args: process.argv.slice(2) })
+        : await (scenarios[input] ?? scenarios.plain)();
+    }
     catch (error) { answer = `failed: ${String(error?.message ?? error)}`; }
     if (answer === undefined) return; // The scenario emitted its own terminal frame.
     send(message("assistant", [{ type: "text", text: answer }]));

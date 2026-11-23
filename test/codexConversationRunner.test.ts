@@ -90,10 +90,14 @@ describe("Codex interactive conversations over stdio", () => {
     expect(events.find((e) => e.userInput?.status === "answered")?.userInput?.answers).toEqual({});
   });
   it("preserves model, permission gate, native resume/fork and context", async () => {
-    const { run } = setup("config", { allowWorkspaceWrite: false, permission: "full-access", model: "configured-model", reasoningEffort: "high" });
+    const input = 'Available conversation Skills (JSON metadata):\n[{"path":".dext/skills/review/SKILL.md"}]\nRead the Skill.';
+    const { run } = setup("config", { input, mode: "ask", allowWorkspaceWrite: false, permission: "full-access", model: "configured-model", reasoningEffort: "high" });
     const threadId = "01a15ec5-32fe-70d1-bc3a-9d2f481f51ed";
-    const reply = JSON.parse((await run({ resumeId: threadId, serviceTier: "priority" })).slice("Received: ".length)) as { config: unknown };
-    expect(reply.config).toMatchObject({ method: "thread/resume", threadId, sandbox: "read-only", model: "configured-model", approvalPolicy: "never", serviceTier: "priority" });
+    const reply = JSON.parse((await run({ resumeId: threadId, serviceTier: "priority" })).slice("Received: ".length));
+    expect(reply).toMatchObject({
+      config: { method: "thread/resume", threadId, cwd: process.cwd(), sandbox: "read-only", model: "configured-model", approvalPolicy: "never", serviceTier: "priority" },
+      input: [{ type: "text", text: input }]
+    });
   });
   it("surfaces process failure instead of leaving an empty Output", async () => {
     await expect(setup("exit").run()).rejects.toThrow(/exited/);

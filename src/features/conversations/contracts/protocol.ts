@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONVERSATION_SKILL_LOADING_MODES } from "../../../shared/contracts/types.js";
 import type { AgentStreamEvent, InputExecutionResponse, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 import { UI_LIMITS, uiFormResultSchema } from "../../../shared/contracts/uiForm.js";
 import type { AgentSelection } from "../../agents/contracts/agent.js";
@@ -73,6 +74,11 @@ const conversationSchemaList = [
     type: z.literal("pinConversation"),
     sessionId: z.string().min(1),
     pinned: z.boolean()
+  }),
+  z.object({
+    type: z.literal("conversationSkillLoading"),
+    sessionId: z.string().min(1),
+    skillLoading: z.enum(CONVERSATION_SKILL_LOADING_MODES)
   }),
   z.object({
     type: z.literal("agentSelection"),

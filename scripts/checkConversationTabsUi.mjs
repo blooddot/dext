@@ -14,7 +14,7 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   const css = await readFile('dist/webview/main.css', 'utf8');
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(css)};document.head.append(style);}`);
   await evaluate(await readFile('dist/webview/main.js', 'utf8'));
-  await evaluate(`window.selection={profileId:'codex',mode:'agent',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:''};
+  await evaluate(`window.selection={profileId:'codex',mode:'agent',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:'',skillLoading:'every-turn'};
     host({type:'state',state:{methods:[],diagnostics:[],mcpServers:[],globalDiagnostics:[],agentProfiles:[{id:'codex',provider:'codex',label:'Codex CLI',command:'codex',models:['test-model']}],agentSelection:selection}});
     window.tabs=running=>host({type:'conversations',sessions:[
       {id:'active',title:'Active conversation',updatedAt:1,turnCount:0,pinned:false,running},
@@ -76,6 +76,16 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   await assertPanel('pinned');
   assert.equal(await evaluate(`document.activeElement.matches('#code-editor textarea')`), true, 'restoring the selected draft focuses the composer');
   assert.equal(await input(), '', 'a tab without a draft opens empty');
+  // Leave the switch unanswered so the menu still renders the previous tab's controls.
+  await evaluate(`document.querySelector('#skills-control').click();
+    document.querySelector('[data-value="loading:on-demand"]').click();
+    document.querySelector('[data-value="loading:every-turn"]').click();`);
+  assert.deepEqual(await evaluate(`sent.filter(m=>m.type==='agentSelection'||m.type==='conversationSkillLoading')`), [
+    { type: 'conversationSkillLoading', sessionId: 'pinned', skillLoading: 'on-demand' },
+    { type: 'conversationSkillLoading', sessionId: 'pinned', skillLoading: 'every-turn' }
+  ], 'the loading choices target the highlighted tab and carry no stale Agent controls');
+  await key('Escape', 27);
+  await evaluate(`document.querySelector('#code-editor textarea').focus()`);
   await send('Input.insertText', { text: 'draftB' });await settle();
   await click('.conversation-tab[data-session-id="active"] .conversation-tab-label');
   await assertPanel('active');

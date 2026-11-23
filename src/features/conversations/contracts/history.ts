@@ -1,5 +1,5 @@
 import type { ResourceDocument, ResourceSession, ResourceTarget } from "../../resources/contracts/resourceSession.js";
-import type { AgentStreamEvent, AgentTodoItem, InputExecutionResponse, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import type { AgentStreamEvent, AgentTodoItem, ConversationSkillLoading, InputExecutionResponse, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
 
 /** Persisted conversation shape. This contract is safe to import from the
  * browser bundle: it has no VS Code, filesystem or timer dependency. */
@@ -70,7 +70,8 @@ export type TurnPlanContext = Pick<DextHistoryRecord, "executePlan" | "planPath"
 
 /** Everything the coordinator records beside a turn's result. */
 export type TurnRecordContext = TurnPlanContext
-  & Pick<DextHistoryRecord, "skills" | "command" | "resourceSource" | "changedFiles">;
+  & Pick<DextHistoryRecord, "skills" | "command" | "resourceSource" | "changedFiles">
+  & Pick<DextHistorySession, "initialSkillLoading">;
 
 export interface DextHistorySession {
   id: string;
@@ -83,6 +84,8 @@ export interface DextHistorySession {
   /** Provider session ids from the source conversation. A child consumes the
    * matching entry when its first turn is sent. */
   forkProviderSessions?: Record<string, string>;
+  /** A new conversation's fallback when its composer preferences are unavailable. */
+  initialSkillLoading?: ConversationSkillLoading;
   /** Explicit Plan target and lifecycle, kept with the conversation tab. */
   resource?: ResourceSession;
   activePlanPath?: string;
@@ -117,6 +120,7 @@ export interface DextHistorySummary {
   planProgress?: PlanProgress;
   providerSessions?: Record<string, string>;
   forkProviderSessions?: Record<string, string>;
+  initialSkillLoading?: ConversationSkillLoading;
   /** Where each turn's truncated text was spilled, keyed by turn id. Kept in
    * the index so pruning overflow never has to read a body. */
   spills?: Record<string, string>;
@@ -130,7 +134,7 @@ export interface HistoryBackend {
   summaries(): DextHistorySummary[];
   read(sessionId: string): Promise<DextHistorySession | undefined>;
   /** Appends one turn to a conversation, creating it when absent. */
-  appendTurn(sessionId: string, turn: DextHistoryRecord): Promise<void>;
+  appendTurn(sessionId: string, turn: DextHistoryRecord, initialSkillLoading?: ConversationSkillLoading): Promise<void>;
   /** Replaces a conversation's turns and its summary. */
   writeTurns(session: DextHistorySession): Promise<void>;
   /** Rewrites one conversation's metadata and leaves its body alone. */
@@ -162,6 +166,7 @@ export function historySummaryOf(session: DextHistorySession): DextHistorySummar
     ...(session.planProgress ? { planProgress: session.planProgress } : {}),
     ...(session.providerSessions ? { providerSessions: session.providerSessions } : {}),
     ...(session.forkProviderSessions ? { forkProviderSessions: session.forkProviderSessions } : {}),
+    ...(session.initialSkillLoading ? { initialSkillLoading: session.initialSkillLoading } : {}),
     ...(Object.keys(spills).length ? { spills } : {})
   };
 }
@@ -181,6 +186,7 @@ export function historySessionOf(summary: DextHistorySummary, turns: readonly De
     ...(summary.planProgress ? { planProgress: summary.planProgress } : {}),
     ...(summary.providerSessions ? { providerSessions: summary.providerSessions } : {}),
     ...(summary.forkProviderSessions ? { forkProviderSessions: summary.forkProviderSessions } : {}),
+    ...(summary.initialSkillLoading ? { initialSkillLoading: summary.initialSkillLoading } : {}),
     ...(summary.archivedAt !== undefined ? { archivedAt: summary.archivedAt } : {})
   };
 }
@@ -205,7 +211,11 @@ export interface ConversationHistoryStore {
   updatePlanContext(sessionId: string, activePlanPath: string | undefined, planStatus: PlanStatus): Promise<void>;
   updatePlanProgress(sessionId: string, path: string, todos: readonly AgentTodoItem[], acceptance?: readonly PlanAcceptanceItem[]): Promise<void>;
   removeTurn(sessionId: string, turnId: string, providerSessions?: Readonly<Record<string, string>>): Promise<boolean>;
-  fork(turns: readonly DextHistoryRecord[], providerSessions?: Readonly<Record<string, string>>): Promise<DextHistorySession>;
+  fork(
+    turns: readonly DextHistoryRecord[],
+    providerSessions?: Readonly<Record<string, string>>,
+    initialSkillLoading?: ConversationSkillLoading
+  ): Promise<DextHistorySession>;
   setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void>;
   /** Where this turn's truncated text was spilled, if it was. */
   spillPath(sessionId: string, turnId: string): string | undefined;

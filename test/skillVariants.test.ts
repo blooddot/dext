@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, open, rename, unlink, writeFile, rm } from "node:fs/promises";
+import type * as FsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,8 @@ import { importSkillPack } from "../src/features/resources/host/skillImporter.js
 import type { FetchedArchive } from "../src/features/resources/host/githubArchive.js";
 import { SkillCatalog } from "../src/features/workflow/host/skillCatalog.js";
 import { normalizeSkillPackManifest } from "../src/features/resources/domain/skillPack.js";
+
+vi.mock("node:fs/promises", { spy: true });
 
 const ROOT = "https://github.com/acme/pack";
 const skill = (name: string, body = "Shared instructions"): string => `---\nname: ${name}\ndescription: Work on ${name}.\n---\n${body}\n`;
@@ -49,7 +52,7 @@ describe("import all Skill versions and resolve per Agent", () => {
     const result = await install({
       "skills/review/SKILL.md": skill("review", "Shared review"),
       "skills/review/reference.md": "Shared support",
-      ".codex/skills/review/SKILL.md": skill("review", "Codex review"),
+      ".codex/skills/review/SKILL.md": skill("Codex Review", "Codex review"),
       ".codex/skills/review/reference.md": "Codex support",
       ".claude/skills/review/SKILL.md": skill("review", "Claude review"),
       "skills/deploy/SKILL.md": skill("deploy", "Shared deploy")
@@ -64,6 +67,12 @@ describe("import all Skill versions and resolve per Agent", () => {
     const codex = await result.catalog.load("review", result.root, ".", "codex");
     expect(codex.instructions).toContain("Codex review");
     expect(codex.sourcePath).toContain(join("variants", "codex", "skills", "review", "SKILL.md"));
+    await expect(result.catalog.describeForConversation("review", result.root, "codex")).resolves.toMatchObject({
+      title: "Codex Review", description: "Work on Codex Review.", path: expect.stringContaining("/variants/codex/skills/review/SKILL.md")
+    });
+    await expect(result.catalog.describeForConversation("review", result.root, "pi")).resolves.toMatchObject({
+      title: "review", description: "Work on review.", path: ".dext/skills/review/SKILL.md"
+    });
     expect(await result.catalog.load("review", result.root, ".", "claude")).toMatchObject({ instructions: expect.stringContaining("Claude review") });
     expect(await result.catalog.load("review", result.root, ".", "pi")).toMatchObject({ instructions: expect.stringContaining("Shared review") });
     expect(await result.catalog.load("deploy", result.root, ".", "codex")).toMatchObject({ instructions: expect.stringContaining("Shared deploy") });
@@ -76,7 +85,70 @@ describe("import all Skill versions and resolve per Agent", () => {
     expect(result.catalog.list("codex")[0]?.available).toBe(false);
     expect(result.catalog.list("claude")[0]?.available).toBe(true);
     await expect(result.catalog.load("review", result.root, ".", "codex")).rejects.toThrow("no 'codex' version or shared fallback");
+    await expect(result.catalog.describeForConversation("review", result.root, "codex")).rejects.toThrow("no 'codex' version or shared fallback");
     await expect(result.catalog.load("review", result.root, ".", "claude")).resolves.toMatchObject({ instructions: expect.stringContaining("Claude only") });
+  });
+
+  it("falls back to the shared version when the indexed Agent file is deleted without reloading", async () => {
+    const { catalog, root } = await install({
+      "skills/review/SKILL.md": skill("Shared review"),
+      ".codex/skills/review/SKILL.md": skill("Codex review")
+    });
+    const dedicated = await catalog.describeForConversation("review", root, "codex");
+    const shared = await catalog.describeForConversation("review", root, "shared");
+    expect(dedicated.title).toBe("Codex review");
+    expect(shared.title).toBe("Shared review");
+
+    await unlink(join(root, dedicated.path));
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual(shared);
+
+    await unlink(join(root, shared.path));
+    await expect(catalog.describeForConversation("review", root, "codex"))
+      .rejects.toThrow(/'codex' SKILL\.md.*ENOENT.*shared fallback.*ENOENT/);
+  });
+
+  it("falls back when the Agent file becomes a directory and reports both failures if shared is missing", async () => {
+    const { catalog, root } = await install({
+      "skills/review/SKILL.md": skill("Shared review"),
+      ".codex/skills/review/SKILL.md": skill("Codex review")
+    });
+    const dedicated = await catalog.describeForConversation("review", root, "codex");
+    const shared = await catalog.describeForConversation("review", root, "shared");
+    await unlink(join(root, dedicated.path));
+    await mkdir(join(root, dedicated.path));
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual(shared);
+
+    await unlink(join(root, shared.path));
+    await expect(catalog.describeForConversation("review", root, "codex"))
+      .rejects.toThrow(/'codex' SKILL\.md.*does not resolve to a SKILL\.md file.*shared fallback.*ENOENT/);
+  });
+
+  it("falls back when opening an unchanged Agent file for reading is denied", async () => {
+    const { catalog, root } = await install({
+      "skills/review/SKILL.md": skill("Shared review"),
+      ".codex/skills/review/SKILL.md": skill("Codex review")
+    });
+    const shared = await catalog.describeForConversation("review", root, "shared");
+    vi.mocked(open).mockRejectedValueOnce(Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }));
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual(shared);
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toMatchObject({ title: "Codex review" });
+  });
+
+  it("refreshes metadata when SKILL.md is atomically replaced just before opening", async () => {
+    const { catalog, root } = await install({ "SKILL.md": skill("Before") });
+    const before = await catalog.describeForConversation("pack", root, "codex");
+    const replacement = join(root, ".dext", "replacement.md");
+    await writeFile(replacement, skill("After replacement"));
+    const fs = await vi.importActual<typeof FsPromises>("node:fs/promises");
+    vi.mocked(open).mockImplementationOnce(async (path, flags, mode) => {
+      await rename(replacement, path);
+      return fs.open(path, flags, mode);
+    });
+
+    const after = await catalog.describeForConversation("pack", root, "codex");
+    expect(after).toMatchObject({ title: "After replacement", description: "Work on After replacement.", changed: true });
+    expect(after.revision).not.toBe(before.revision);
+    await expect(catalog.describeForConversation("pack", root, "codex")).resolves.toEqual({ ...after, changed: false });
   });
 
   it("keeps distinct Agent mappings even when their complete trees match", async () => {

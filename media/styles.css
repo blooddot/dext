@@ -4748,6 +4748,11 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
   max-height: 330px;
   overflow-y: auto;
 }
+.composer-skill-loading-separator {
+  margin: 4px;
+  border: 0;
+  border-top: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-widget-border));
+}
 .composer-skill-option {
   grid-template-columns: 14px minmax(0, 1fr);
 }

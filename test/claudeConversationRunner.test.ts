@@ -80,6 +80,17 @@ describe("Provider token usage", () => {
 });
 
 describe("Claude interactive conversations", () => {
+  it("forwards on-demand Ask text and uses the selected workspace", async () => {
+    const cwd = resolve("test");
+    const input = 'Available conversation Skills (JSON metadata):\n[{"path":".dext/skills/review/SKILL.md"}]\nRead the Skill.';
+    const { request } = setup({ input, mode: "ask", cwd, permission: "read-only" });
+    const args = claudeControlArguments({ permission: "read-only" });
+    const reply = await runClaudeConversation(request, {
+      command: process.execPath, args: [fixture, ...args], timeoutMs: 10_000, idleTimeoutMs: 5_000, onSession: vi.fn()
+    });
+    expect(JSON.parse(reply)).toMatchObject({ input, cwd, args });
+  });
+
   it("reports the turn's billed usage from the result frame", async () => {
     const { events, run } = setup();
     await run("plain");

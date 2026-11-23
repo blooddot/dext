@@ -207,7 +207,10 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       const session = this.options.sessions.session(sessionId);
       if (!session || (!error && !text.trim())) return;
       const changed = await this.options.changedFiles?.(wake.startedAt, sessionId, wake.turnId, writtenPaths(wake.events));
-      const turnContext: TurnRecordContext = changed?.length ? { changedFiles: changed } : {};
+      const turnContext: TurnRecordContext = {
+        ...(session.initialSkillLoading ? { initialSkillLoading: session.initialSkillLoading } : {}),
+        ...(changed?.length ? { changedFiles: changed } : {})
+      };
       if (error) {
         saved = await this.options.history.addFailure(wake.label, wake.events, new Error(error), sessionId, "agent", wake.turnId, turnContext);
         this.options.sessions.recordTurn(sessionId, saved);
@@ -281,14 +284,15 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     // Skills and commands belong to a conversation turn, never to Code or a
     // resource draft. Resolve the command once so every Plan round sees the
     // same expanded instruction.
-    const selectedSkills = mode === "code" || session.resource ? [] : [...(selection.skills ?? [])];
+    const useConversationSkills = mode !== "code" && !session.resource;
+    const selectedSkills = useConversationSkills ? [...(selection.skills ?? [])] : [];
     // Pi packages are a provider capability rather than conversation content,
     // so Code and resource turns keep their own default (every installed one).
     const selectedPlugins = session.resource ? undefined : selection.piPlugins;
     let command: TurnCommandSnapshot | undefined;
     let commandInstruction: string | undefined;
     let taskSource = source;
-    if (mode !== "code" && !session.resource && this.options.host.resolveSkillCommand) {
+    if (useConversationSkills && this.options.host.resolveSkillCommand) {
       const invocation = splitCommandInput(source);
       if (invocation) {
         const resolved = this.options.host.resolveSkillCommand(invocation.commandId, selectedSkills, invocation.arguments, profile?.provider);
@@ -333,6 +337,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       const changed = await this.options.changedFiles?.(startedAt, sessionId, turnId, writtenPaths(events));
       return {
         ...planExecution,
+        ...(session.initialSkillLoading ? { initialSkillLoading: session.initialSkillLoading } : {}),
         ...(selectedSkills.length ? { skills: selectedSkills } : {}),
         ...(command ? { command } : {}),
         ...(session.resource ? { resourceSource } : {}),
@@ -359,8 +364,9 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         ...(selection.serviceTier ? { serviceTier: selection.serviceTier } : {}),
         ...(selection.permission ? { agentPermission: selection.permission } : {}),
         ...(selectedSkills.length ? { skills: selectedSkills } : {}),
+        ...(useConversationSkills ? { skillLoading: selection.skillLoading ?? "every-turn" } as const : {}),
         ...(selectedPlugins ? { piPlugins: selectedPlugins } : {}),
-        ...(commandInstruction ? { commandInstruction } : {}),
+        ...(command && commandInstruction ? { commandInstruction, commandSkillId: command.skillId } : {}),
         ...(session.resource ? { resourceSource } : {}),
         agentPreset: harnessPresetOrDefault(selection.agentPreset),
         ...(mode === "code" ? { agentPermission: "full-access" as const } : {}),

@@ -41,6 +41,7 @@ export const defaultSelection: AgentSelection = {
 };
 
 export interface ConversationHarnessOptions {
+  state?: HarnessState;
   profiles?: AgentProfile[];
   sessions?: DextHistorySession[];
   layout?: Partial<ConversationLayout>;
@@ -58,7 +59,7 @@ export interface ConversationHarnessOptions {
 /** Builds the real conversation stack for tests: controller, coordinator, plan
  * and patch controllers, event stream and interactions, with no VS Code. */
 export function createConversationHarness(options: ConversationHarnessOptions = {}) {
-  const state = new HarnessState();
+  const state = options.state ?? new HarnessState();
   const backend = new MemoryHistoryBackend();
   const history = new DextHistoryStore(backend);
   const preferences = new DextConversationPreferences(state as never);

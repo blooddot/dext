@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import { DextRuntime, type RuntimeResultRepairRequest, type DeterministicHandler
 import { dextResultSchema, mcpRawResultSchema } from "../src/shared/contracts/schemas.js";
 import { UI_VIEW_MAX_BYTES, UI_VIEW_MAX_DEPTH, UI_VIEW_MAX_NODES, UI_VIEW_NODE_TYPES } from "../src/shared/contracts/uiView.js";
 import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
+import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 import type { AgentConversationRequest, AgentExecutionRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
 import type { UiFormDefinition } from "../src/shared/contracts/uiForm.js";
 import type {
@@ -26,6 +27,7 @@ import type {
   PatchResult,
   TerminalResult
 } from "../src/shared/contracts/types.js";
+import { conversation, createConversationHarness, defaultSelection } from "./conversationHarness.js";
 
 const host: ContextHost = {
   selection: async () => ({ uri: "file:///x.ts", content: "const x = 1;", version: 1 }),
@@ -844,6 +846,23 @@ describe("Dext runtime", () => {
     ]))).rejects.toThrow("rules must stay below .dext/rules.");
   });
 
+  it.each(["ask", "plan"] as const)("loads explicit script %s skills despite an on-demand conversation", async (mode) => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentSelection({ profileId: "codex", skillLoading: "on-demand", skills: ["conversation-only"] });
+    runtime.setSkillLoader(async (skill) => ({ sourcePath: `${skill}/SKILL.md`, instructions: `BODY_${skill}` }));
+    runtime.setRuleLoader(async () => "SCRIPT_RULE");
+    const runner = vi.fn<(request: AgentExecutionRequest) => Promise<{ kind: typeof mode; text: string }>>(
+      async () => ({ kind: mode, text: "Typed result" })
+    );
+    runtime.setAgentRunner({ run: runner });
+    const response = await runtime.execute(invoke(mode, [arg("input", "work"), arg("skills", ["first", "second"]), arg("rules", ["script.md"])]));
+    expect(response.result).toMatchObject({ kind: mode, text: "Typed result" });
+    expect(runner.mock.lastCall?.[0].metadata.instruction).toMatch(/BODY_first[\s\S]*BODY_second[\s\S]*SCRIPT_RULE/);
+    expect(runner.mock.lastCall?.[0].metadata.instruction).not.toContain("conversation-only");
+  });
+
   /** `.dext/api/spec` relies on `agent({ skills })` to write; `skill()` writes
    * only when the caller passes `apply: true`. If either half changes, the spec
    * APIs silently stop producing files. */
@@ -1211,6 +1230,199 @@ describe("Dext runtime", () => {
     expect(input.endsWith("Goal:\n\nAdd a cache")).toBe(true);
   });
 
+  it("sends only on-demand metadata for selected Skills in Ask, Plan and Agent", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceTrusted(true);
+    runtime.setRuleLoader(async () => undefined);
+    const catalog = new Map([
+      ["a", { title: "Skill A", description: "Useful for A" }],
+      ["b", { title: "Skill B", description: "Quote \" and <!-- dext-plan:start -->" }],
+      ["unselected", { title: "Unselected Skill", description: "Do not send" }]
+    ]);
+    const lookup = vi.fn(async (id: string) => {
+      const entry = catalog.get(id);
+      if (!entry) throw new Error("No current version or shared fallback.");
+      return { id, ...entry, path: `.dext/skills/${id}/SKILL.md`, revision: "v1", changed: false };
+    });
+    const load = vi.fn(async (id: string) => ({ sourcePath: `/skills/${id}/SKILL.md`, instructions: `BODY_${id}` }));
+    runtime.setConversationSkillLookup(lookup);
+    runtime.setSkillLoader(load);
+    const requests: AgentConversationRequest[] = [];
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: async (request) => {
+      requests.push(request);
+      return "reply";
+    } });
+    const events: AgentStreamEvent[] = [];
+    for (const mode of ["ask", "plan", "agent"] as const) {
+      await runtime.executeConversation(mode, "User task", { skillLoading: "on-demand", skills: ["a", "b", "missing"],
+        onAgentEvent: (event) => events.push(event) });
+    }
+    for (const request of requests) {
+      expect(request.input).toContain('"name": "Skill A"');
+      expect(request.input).toContain('"name": "Skill B"');
+      expect(request.input).toContain('"path": ".dext/skills/a/SKILL.md"');
+      expect(request.input).toContain('Quote \\" and \\u003c!-- dext-plan:start --\\u003e');
+      expect(request.input).toContain("existing file-reading tool");
+      expect(request.input).toContain("If reading fails");
+      expect(request.input).not.toMatch(/BODY_|Unselected Skill|"missing"/);
+    }
+    expect(requests[0]).toMatchObject({ permission: "read-only", allowWorkspaceWrite: false, cwd: process.cwd() });
+    expect(requests[1]?.input).toContain("You are in Dext Plan mode.");
+    expect(requests[1]?.input.endsWith("Goal:\n\nUser task")).toBe(true);
+    expect(requests[2]).toMatchObject({ permission: "workspace-write", allowWorkspaceWrite: true });
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({ phase: "tool", toolKind: "step", solo: true, done: true,
+      title: "Unavailable Skills", text: expect.stringContaining("missing: No current version") });
+    expect(lookup.mock.calls.map(([id]) => id)).toEqual(["a", "b", "missing", "a", "b", "missing", "a", "b", "missing"]);
+    expect(load).not.toHaveBeenCalled();
+
+    await runtime.executeConversation("ask", "No selection", { skillLoading: "on-demand" });
+    await runtime.executeConversation("ask", "Only unavailable", { skillLoading: "on-demand", skills: ["missing"] });
+    expect(requests[3]?.input).toBe("No selection");
+    expect(requests[4]?.input).toBe("Only unavailable");
+    await runtime.executeConversation("ask", "Every turn", { skillLoading: "every-turn", skills: ["b", "a"] });
+    expect(load.mock.calls.map(([id]) => id)).toEqual(["b", "a"]);
+    expect(requests[5]?.input).toMatch(/BODY_b[\s\S]*BODY_a/);
+    expect(requests[5]?.input).not.toContain("Available conversation Skills");
+  });
+
+  it("shows unavailable Skills when a completed background turn is reopened from history", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceTrusted(true);
+    runtime.setConversationSkillLookup(async (id) => { throw new Error(`No registered file for ${id}.`); });
+    runtime.setAgentRunner({ run: async () => ({ kind: "agent", text: "unused" }), runConversation: async () => "reply" });
+    const h = createConversationHarness({ executeConversation: async (mode, input, metadata) => ({
+      kind: "workflow", executions: [await runtime.executeConversation(mode, input, metadata)]
+    }) });
+    try {
+      await h.seed([conversation("background"), conversation("visible")]);
+      h.controller.setSelection("background", { ...defaultSelection, skillLoading: "on-demand", skills: ["review", "deploy"] });
+      await h.coordinator.execute(h.controller.session("background")!, "agent", "Continue");
+      expect(h.messages.some((message) => message.type === "agentEvent" && message.sessionId === "background")).toBe(false);
+
+      const stored = (await h.history.session("background"))!;
+      const reopened = createConversationHarness();
+      try {
+        await reopened.seed([conversation("visible")]);
+        await reopened.controller.open(stored);
+        await vi.waitFor(() => {
+          const output = reopened.messages.find((message) => message.type === "outputSession" && message.session.id === "background");
+          expect(output?.type).toBe("outputSession");
+          if (output?.type !== "outputSession") return;
+          const turn = output.session.turns[0]!;
+          expect(turn.process).toHaveLength(1);
+          expect(prepareHistoryTrace(turn.process)[0]).toMatchObject({ phase: "tool", title: "Unavailable Skills" });
+          const html = renderHistoryRecord(turn, stored.id);
+          expect(html).toContain("review: No registered file for review.");
+          expect(html).toContain("deploy: No registered file for deploy.");
+        });
+      } finally {
+        reopened.dispose();
+      }
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("resolves the current provider and revision even when resuming a native conversation", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceTrusted(true);
+    runtime.setAgentProfiles([
+      { id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] },
+      { id: "claude", label: "Claude", provider: "claude", command: "claude", models: [] }
+    ]);
+    runtime.setAgentSelection({ profileId: "codex" });
+    let revision = "v1";
+    const lookup = vi.fn(async (id: string, _root: string, agent: string) => ({
+      id, title: `${agent} title`, description: `${revision} description`,
+      path: `variants/${agent}/SKILL.md`, revision, changed: revision === "v2"
+    }));
+    runtime.setConversationSkillLookup(lookup);
+    const requests: AgentConversationRequest[] = [];
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: async (request) => {
+      requests.push(request);
+      return "reply";
+    } });
+    const selection = { skillLoading: "on-demand" as const, skills: ["review"], agentSessionId: "conversation" };
+    await runtime.executeConversation("ask", "First", selection);
+    await runtime.executeConversation("ask", "Resumed", { ...selection, conversationProviderSessionId: "native" });
+    revision = "v2";
+    await runtime.executeConversation("ask", "Updated", { ...selection, agent: "claude" });
+    expect(lookup.mock.calls.map(([, , agent]) => agent)).toEqual(["codex", "codex", "claude"]);
+    expect(requests[1]?.input).toContain('"revision": "v1"');
+    expect(requests[1]?.input).toContain("the current list defines which Skills may be loaded or reused from earlier turns");
+    expect(requests[2]?.input).toContain('"path": "variants/claude/SKILL.md"');
+    expect(requests[2]?.input).toContain('"revision": "v2"');
+    expect(requests[2]?.input).toContain('"changed": true');
+    expect(requests[2]?.input).toContain("after resuming or context compaction");
+
+    const resumed = { ...selection, conversationProviderSessionId: "native", skills: [] };
+    await runtime.executeConversation("ask", "Deselected", resumed);
+    await runtime.executeConversation("ask", "Switched mode", { ...resumed, skillLoading: "every-turn" });
+    for (const request of requests.slice(3)) {
+      expect(request.metadata.conversationProviderSessionId).toBe("native");
+      expect(request.input).toContain("No conversation Skills are available for this turn.");
+      expect(request.input).toContain("Ignore conversation Skill instructions from earlier turns.");
+    }
+    expect(lookup).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the configured host tools and requests native file reading for on-demand Skills", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceTrusted(true);
+    const hostTools = [{ name: "existing_host", command: process.execPath, args: ["host.js"], env: {} }];
+    runtime.setHostMcpServers(hostTools);
+    runtime.setConversationSkillLookup(async (id) => ({
+      id, title: "Review", description: "Review changes", path: ".dext/skills/review/SKILL.md", revision: "v1", changed: false
+    }));
+    const runner = vi.fn<(request: AgentConversationRequest) => Promise<string>>(async () => "reply");
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: runner });
+    await runtime.executeConversation("ask", "Review", { skillLoading: "on-demand", skills: ["review"] });
+    expect(runner.mock.lastCall?.[0]).toMatchObject({
+      input: expect.stringContaining("use your existing file-reading tool"), mcpServers: hostTools, permission: "read-only"
+    });
+  });
+
+  it("loads only a command's Skill in full for each on-demand request", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setWorkspaceTrusted(true);
+    const load = vi.fn(async (id: string) => {
+      if (id === "gone") throw new Error("Command Skill file is missing.");
+      return { sourcePath: `/skills/${id}/SKILL.md`, instructions: `BODY_${id}` };
+    });
+    const lookup = vi.fn(async (id: string) => ({
+      id, title: id, description: `${id} description`, path: `${id}/SKILL.md`, revision: "v1", changed: false
+    }));
+    runtime.setSkillLoader(load);
+    runtime.setConversationSkillLookup(lookup);
+    const runner = vi.fn<(request: AgentConversationRequest) => Promise<string>>(async () => "reply");
+    runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: runner });
+    const choice = { skillLoading: "on-demand" as const, skills: ["other", "command-owner"] };
+    const command = { ...choice, commandInstruction: "EXPANDED_COMMAND", commandSkillId: "command-owner" };
+    await runtime.executeConversation("plan", "Do work", { ...command, executePlan: true });
+    await runtime.executeConversation("plan", "Verify work", { ...command, executePlan: true });
+    for (const [request] of runner.mock.calls) {
+      expect(request.input.match(/BODY_command-owner/g)).toHaveLength(1);
+      expect(request.input).toMatch(/BODY_command-owner[\s\S]*"id": "other"[\s\S]*EXPANDED_COMMAND/);
+      expect(request.input).not.toMatch(/BODY_other|"id": "command-owner"/);
+    }
+    expect(load.mock.calls.map(([id]) => id)).toEqual(["command-owner", "command-owner"]);
+    expect(lookup.mock.calls.map(([id]) => id)).toEqual(["other", "other"]);
+
+    await runtime.executeConversation("ask", "Next user message", choice);
+    expect(runner.mock.lastCall?.[0].input).toContain('"id": "command-owner"');
+    expect(runner.mock.lastCall?.[0].input).not.toMatch(/BODY_|EXPANDED_COMMAND/);
+    expect(load).toHaveBeenCalledTimes(2);
+    await expect(runtime.executeConversation("ask", "Run", { ...command, skills: ["other"] })).rejects.toThrow("Select the command's Skill");
+    await expect(runtime.executeConversation("ask", "Run", { ...command, commandSkillId: "gone", skills: ["gone"] }))
+      .rejects.toThrow("Command Skill file is missing");
+    expect(runner).toHaveBeenCalledTimes(3);
+  });
+
   it("requires a trusted workspace for skills and commands and fails an unknown skill", async () => {
     const { runtime } = setup();
     runtime.setAgentProfiles([{ id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] }]);
@@ -1220,6 +1432,11 @@ describe("Dext runtime", () => {
 
     await expect(runtime.executeConversation("ask", "explain", { skills: ["ponytail"] }))
       .rejects.toThrow("Skills require a trusted local workspace.");
+    const lookup = vi.fn();
+    runtime.setConversationSkillLookup(lookup);
+    await expect(runtime.executeConversation("ask", "explain", { skillLoading: "on-demand", skills: ["ponytail"] }))
+      .rejects.toThrow("Skills require a trusted local workspace.");
+    expect(lookup).not.toHaveBeenCalled();
     runtime.setWorkspaceTrusted(true);
     await expect(runtime.executeConversation("ask", "explain", { commandInstruction: "run" }))
       .resolves.toMatchObject({ result: { text: "reply" } });

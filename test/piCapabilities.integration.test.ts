@@ -9,6 +9,7 @@ import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
 import { MethodRegistry } from "../src/features/workflow/domain/registry.js";
 import { DextRuntime } from "../src/features/workflow/host/runtime.js";
+import { SkillCatalog } from "../src/features/workflow/host/skillCatalog.js";
 import { parseMcpManifest } from "../src/features/mcp/domain/mcpManifest.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
 import type { AgentStreamEvent, ExecutionMetadata } from "../src/shared/contracts/types.js";
@@ -36,6 +37,29 @@ async function setup() {
 }
 
 describe("Pi with the actual Dext host modules", { timeout: 30000 }, () => {
+  it("forwards the on-demand catalog through Pi's native read-only request", async () => {
+    const h = await setup();
+    const directory = join(h.root, ".dext", "skills", "review");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "SKILL.md"), "---\nname: Review\ndescription: Review changes\n---\nPI_SKILL_BODY");
+    const catalog = new SkillCatalog();
+    await catalog.reload(h.root);
+    h.runtime.setConversationSkillLookup((id, cwd, agent) => catalog.describeForConversation(id, cwd, agent));
+    const result = await h.runtime.executeConversation("ask", "Explain the change", {
+      skillLoading: "on-demand", skills: ["review"], piPlugins: []
+    });
+    const log = await h.log();
+    const startup = log.find((record) => record.startup)?.startup as string[];
+    const prompt = log.find((record) => record.command === "prompt");
+    expect(startup[startup.indexOf("--tools") + 1]?.split(",")).toContain("read");
+    expect(startup[startup.indexOf("--tools") + 1]?.split(",")).not.toContain("write");
+    expect(startup).toContain("--no-skills");
+    expect(startup).toContain("--no-mcp");
+    expect(prompt?.message).toContain(".dext/skills/review/SKILL.md");
+    expect(prompt?.message).not.toContain("PI_SKILL_BODY");
+    expect(result.result).toMatchObject({ kind: "ask", text: prompt?.message });
+  });
+
   it("generates resource drafts and imports through the existing text fallback without saving files", async () => {
     const h = await setup();
     const application = Object.create(DextApplication.prototype) as DextApplication;
