@@ -37,7 +37,8 @@ export function renderConversationTabs(
 ): HTMLElement | undefined {
   const { document, container, panel, actions } = options;
   const adapter = domUiAdapter(document);
-  container.replaceChildren();
+  const row = adapter.element("div", { class: "conversation-tab-row", role: "presentation" }, []);
+  container.replaceChildren(row);
   container.hidden = sessions.length === 0;
   let activeTab: HTMLElement | undefined;
   let activeLabel: HTMLElement | undefined;
@@ -123,7 +124,7 @@ export function renderConversationTabs(
       activeTab = tab;
       activeLabel = label;
     }
-    container.append(tab);
+    row.append(tab);
   }
   labelPanel(panel, activeLabel);
   return activeTab;

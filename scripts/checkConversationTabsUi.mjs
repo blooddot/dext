@@ -11,7 +11,7 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
     {const meta=document.createElement('meta');meta.name='dext-editor-worker';meta.content='/assets/editor.worker.js';document.head.append(meta);}
     window.sent=[];window.acquireVsCodeApi=()=>({postMessage:m=>sent.push(m),getState:()=>({}),setState:()=>{}});
     window.host=m=>window.dispatchEvent(new MessageEvent('message',{data:m}));`);
-  const css = await readFile('dist/webview/main.css', 'utf8');
+  const css = `${await readFile('dist/webview/main.css', 'utf8')}\n${await readFile('media/appearance.css', 'utf8')}`;
   await evaluate(`{const style=document.createElement('style');style.textContent=${JSON.stringify(css)};document.head.append(style);}`);
   await evaluate(await readFile('dist/webview/main.js', 'utf8'));
   await evaluate(`window.selection={profileId:'codex',mode:'agent',permission:'full-access',model:'test-model',reasoningEffort:'',speed:'',serviceTier:'',skillLoading:'every-turn'};
@@ -28,6 +28,30 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   }))`);
   const idle = { running:false, spinner:false, action:true, disabled:false };
   await evaluate('tabs(false)');await settle();
+  for (const width of [320, 1460]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 1000, deviceScaleFactor: 1, mobile: false });
+    const bounds = await evaluate(`(() => {
+      const edges = selector => {
+        const { left, right } = document.querySelector(selector).getBoundingClientRect();
+        return [left, right];
+      };
+      return { band: edges('.dext-topbar'), tabs: edges('#conversation-tabs'), content: edges('.app-shell') };
+    })()`);
+    const gutter = Math.max(0, (width - 1200) / 2);
+    assert.deepEqual(bounds, { band: [0, width], tabs: [gutter, width - gutter], content: [gutter, width - gutter] });
+    const rail = await evaluate(`(() => {
+      const tabs = document.querySelector('#conversation-tabs');
+      const row = tabs.querySelector('.conversation-tab-row');
+      if (!row) return null;
+      const lastTab = row.lastElementChild.getBoundingClientRect();
+      const bounds = row.getBoundingClientRect();
+      const style = getComputedStyle(row);
+      return [getComputedStyle(tabs.parentElement).backgroundColor, bounds.left, bounds.height,
+        bounds.right - lastTab.right, style.borderBottomLeftRadius, style.borderBottomRightRadius];
+    })()`);
+    assert.deepEqual(rail, ['rgba(0, 0, 0, 0)', gutter, 32, 0, '0px', '6px'], 'the background rounds only the inactive outer edge');
+  }
+  await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 1000, deviceScaleFactor: 1, mobile: false });
   assert.deepEqual(await states(), [idle,idle], 'restored idle tabs hide activity indicators');
   const selectionState = () => evaluate(`[...document.querySelectorAll('#conversation-tabs [role=tab]')].map(tab=>[
     tab.parentElement.dataset.sessionId,tab.getAttribute('aria-selected'),tab.parentElement.classList.contains('active')
@@ -110,8 +134,12 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
       {id:'fresh',title:'New conversation',updatedAt:1,turnCount:0,pinned:false,running:false}],activeId:'fresh',selection,planStatus:'new',hostInitiated:true})`);await settle();
   assert.equal(await input(), '', 'a new tab starts empty instead of inheriting the previous draft');
   await assertPanel('fresh');
+  const dividers = () => evaluate(`[...document.querySelectorAll('.conversation-tab')]
+    .map(tab=>getComputedStyle(tab,'::before').width==='1px')`);
+  assert.deepEqual(await dividers(), [false,true,false], 'dividers only separate adjacent inactive tabs');
   await click('.conversation-tab[data-session-id="pinned"] .conversation-tab-label');
   assert.equal(await input(), 'draftB', 'the older tab still owns its draft');
+  assert.deepEqual(await dividers(), [false,false,false], 'the divider disappears when either tab becomes active');
   const order = () => evaluate(`[...document.querySelectorAll('.conversation-tab')].map(tab=>tab.dataset.sessionId)`);
   const point = (id, fraction) => evaluate(`(() => {
     const rect=document.querySelector('[data-session-id="${id}"] .conversation-tab-label').getBoundingClientRect();
@@ -138,7 +166,44 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   assert.deepEqual(await evaluate(`sent.filter(m=>m.type==='moveConversation')`), [
     { type: 'moveConversation', sessionId: 'fresh', beforeSessionId: 'active' }
   ]);
+  await send('Emulation.setDeviceMetricsOverride', { width: 320, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await evaluate(`host({type:'conversations', sessions:Array.from({length:8}, (_,i)=>({
+    id:'tab-'+i,title:'Conversation '+i,updatedAt:1,turnCount:0,pinned:false,running:false
+  })), activeId:'tab-7', selection, planStatus:'new', hostInitiated:true});`);
+  assert.ok(await evaluate(`(() => {
+    const tabs = document.querySelector('#conversation-tabs');
+    return tabs.scrollLeft > 0 && tabs.scrollWidth - tabs.clientWidth - tabs.scrollLeft <= 1;
+  })()`), 'the last active tab scrolls all the way into view');
+  assert.deepEqual(await evaluate(`(() => {
+    const row = document.querySelector('.conversation-tab-row');
+    const active = row.lastElementChild;
+    return [row.getBoundingClientRect().right - active.getBoundingClientRect().right,
+      getComputedStyle(row).borderBottomRightRadius, getComputedStyle(active).borderBottomRightRadius,
+      getComputedStyle(active,'::after').backgroundImage];
+  })()`), [0,'6px','6px','none'], 'an active last tab and its background end in the same rounded corner');
+  assert.ok(await evaluate(`(() => {
+    const tabs = document.querySelector('#conversation-tabs');
+    tabs.scrollLeft = 0;
+    tabs.scrollLeft = tabs.scrollWidth;
+    return tabs.scrollLeft > 0 && getComputedStyle(tabs).overflowX === 'auto';
+  })()`), 'long tab lists scroll inside the band');
+  await evaluate(`host({type:'conversations',sessions:[{id:'tab-0',title:'Conversation 0',updatedAt:1,turnCount:0,pinned:false,running:false}],
+    activeId:'tab-0',selection,planStatus:'new',hostInitiated:true})`);
+  assert.ok(await evaluate(`(() => {
+    const tabs = document.querySelector('#conversation-tabs');
+    const row = tabs.querySelector('.conversation-tab-row');
+    return row.childElementCount === 1 && row.offsetWidth < tabs.clientWidth
+      && getComputedStyle(row).borderBottomLeftRadius === '0px'
+      && row.offsetWidth === row.firstElementChild.offsetWidth;
+  })()`), 'a single active tab ends flush with the row');
+  await evaluate(`{
+    const tabs = document.querySelector('#conversation-tabs');
+    const {right, top} = tabs.getBoundingClientRect();
+    document.elementFromPoint(right-1, top+16).dispatchEvent(new MouseEvent('dblclick', {bubbles:true}));
+  }`);
+  assert.equal(await evaluate(`sent.filter(m=>m.type==='newConversation').length`), 1);
   await evaluate(`host({type:'conversations',sessions:[],activeId:'',selection,planStatus:'new',hostInitiated:true})`);
+  assert.equal(await evaluate(`document.querySelector('#conversation-tabs').getBoundingClientRect().width`), 0);
   assert.equal(await evaluate(`document.getElementById('result-section').hasAttribute('aria-labelledby')`), false);
-  console.log('PASS production tab roles, panel associations, focus, running state, close/pin, drafts, drag commit and Escape cancellation');
+  console.log('PASS rounded tab background, aligned and scrollable tabs, roles, focus, running state, close/pin, drafts and dragging');
 });

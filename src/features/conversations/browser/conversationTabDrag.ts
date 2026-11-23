@@ -73,7 +73,7 @@ export function enableConversationTabDrag(
     const before = current.before === null
       ? all.find((tab) => !tab.classList.contains("pinned") && source.classList.contains("pinned"))
       : all.find((tab) => tab.dataset.sessionId === current.before);
-    strip.insertBefore(source, before ?? null);
+    source.parentElement?.insertBefore(source, before ?? null);
     source.scrollIntoView({ block: "nearest", inline: "nearest" });
     move(current.sessionId, current.before);
   }

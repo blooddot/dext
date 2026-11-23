@@ -83,23 +83,29 @@ body {
 /* The History tab lives in the editor area, so it takes the editor ground. */
 body.history-panel { background: var(--vscode-editor-background); }
 
+body:has(> .dext-topbar) {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The top bar spans the panel while its tabs align with the content column. */
+.dext-topbar > .conversation-tabs,
 .app-shell {
-  position: relative;
   width: 100%;
-  /* One canvas width for every wide host state. A stretched sidebar and a
-     maximized/full-screen view both center this 1200px column instead of
-     letting the chrome keep expanding around a narrower reading column. */
   max-width: 1200px;
   margin-inline: auto;
-  height: 100%;
+}
+
+.app-shell {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-/* Sidebar content below the fixed top tab bar. Keeping this a flex column
-   preserves the old direct-children layout: the transcript takes the remaining
-   height and the composer stays pinned to the bottom. */
+/* The transcript takes the remaining height above the composer. */
 #dext-main {
   flex: 1 1 auto;
   min-height: 0;
@@ -114,9 +120,18 @@ body.history-panel { background: var(--vscode-editor-background); }
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background));
-  border-bottom: 1px solid var(--vscode-editorGroupHeader-tabsBorder, var(--vscode-sideBar-border, var(--vscode-widget-border)));
 }
+
+.conversation-tab-row {
+  flex: 0 0 auto;
+  display: flex;
+  border-radius: 6px;
+  overflow: clip;
+  background: var(--dext-tab-band, var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background)));
+}
+
+.conversation-tab-row:has(> .conversation-tab.active:first-child) { border-bottom-left-radius: 0; }
+
 .plan-toolbar {
   --plan-accent: var(--dext-plan-label);
   --plan-accent-fill: var(--dext-plan-fill);
@@ -295,9 +310,7 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
 .agent-acceptance-text.markdown-body code { font-size: 12px; }
 .agent-acceptance-check:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 
-/* Same shape as the workbench's connected tab strip: the whole bar is one band of
-   `editorGroupHeader.connectedTabsBackground`, idle tabs are only their labels,
-   and the open conversation is the one white chip with two rounded top corners. */
+/* Idle tabs share the row's background. The active tab opens into the page. */
 .conversation-tab {
   position: relative;
   user-select: none;
@@ -320,6 +333,15 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   font-size: 13px;
 }
 
+:where(.conversation-tab:not(.active) + .conversation-tab:not(.active))::before {
+  content: "";
+  position: absolute;
+  inset: 8px auto 8px -1px;
+  width: 1px;
+  background: var(--vscode-tab-border, var(--dext-quiet-divider));
+  pointer-events: none;
+}
+
 /* Three states, like the workbench: the band itself, a hover tint and the open
    chip. Hover is 6% of the foreground mixed into the band, not
    `tab.hoverBackground` — Light Modern leaves that near white, which turned a
@@ -339,6 +361,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   background: var(--dext-tab-chip);
 }
 
+.conversation-tab.active:last-child { border-bottom-right-radius: 6px; }
+
 /* The workbench flares the connected tab into the strip's bottom edge with an
    inverse shoulder; without it the chip ends in two square corners and reads as
    pasted on. The arc is tangent to the chip's edge and to the band's bottom
@@ -347,8 +371,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
    quarter is the band left above the arc. The drag drop markers reuse these
    pseudo elements and are declared later, so they take over while a tab is
    being dragged. */
-.conversation-tab.active::before,
-.conversation-tab.active::after {
+:where(.conversation-tab.active:not(:first-child))::before,
+:where(.conversation-tab.active:not(:last-child))::after {
   content: "";
   position: absolute;
   top: 0;
@@ -360,15 +384,13 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .agent-todo-item.act
   pointer-events: none;
 }
 
-/* `:where` keeps both shoulders at the lowest specificity so the drag drop
-   markers below replace them, and the first tab skips its left one: a strip has
-   no left edge to flare into, which is also what the workbench does. */
+/* Only draw shoulders towards another tab so the outer ends stay flush. */
 :where(.conversation-tab.active:not(:first-child))::before {
   left: -6px;
   background-image: radial-gradient(circle at 0 0, transparent 6px, var(--dext-tab-chip) 0);
 }
 
-:where(.conversation-tab.active)::after {
+:where(.conversation-tab.active:not(:last-child))::after {
   right: -6px;
   background-image: radial-gradient(circle at 100% 0, transparent 6px, var(--dext-tab-chip) 0);
 }

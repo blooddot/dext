@@ -1584,10 +1584,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   <title>Dext</title>
 </head>
 <body data-dext-theme="${theme}">
+  <div class="dext-topbar">
+    ${TabList(htmlUiAdapter, "Dext conversations", { id: "conversation-tabs", class: "conversation-tabs" }, [], "nav").html}
+  </div>
   ${Stack(htmlUiAdapter, [{ html: `
-    <div class="dext-topbar">
-      ${TabList(htmlUiAdapter, "Dext conversations", { id: "conversation-tabs", class: "conversation-tabs" }, [], "nav").html}
-    </div>
     <main id="dext-main">
     <section id="result-section" class="result-section" aria-live="polite">
       <div id="result-body" class="collapsible-body result-body" tabindex="-1"><div id="result"></div></div>

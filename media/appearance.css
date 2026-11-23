@@ -51,7 +51,7 @@ body { --resource-file-accent: var(--vscode-descriptionForeground, #a7b0bd); }
 [data-resource-type="skill"] { --resource-accent: var(--resource-skill-accent); }
 [data-resource-type="file"] { --resource-accent: var(--resource-file-accent); }
 
-.app-shell > .dext-topbar {
+.dext-topbar {
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
@@ -60,28 +60,17 @@ body { --resource-file-accent: var(--vscode-descriptionForeground, #a7b0bd); }
   /* `--dext-tab-band` is the strip's own colour: the hover tint of an idle tab
      is mixed from it, so band and hover cannot drift apart. */
   --dext-tab-band: var(--vscode-editorGroupHeader-connectedTabsBackground, var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-sideBar-background)));
-  background: var(--dext-tab-band);
-  /* No bottom border here: the active chip opens into the page and the workbench
-     draws no line across the empty tail of a connected tab strip. */
-  border-bottom: 0;
-  /* Light/Dark set this on the body scope, but a host theme can inject its own
-     topbar tint after our palette loads. Keep Dext's own bar on the palette. */
   color: var(--vscode-foreground);
 }
 
-body[data-dext-theme="light"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .app-shell > .dext-topbar {
+body[data-dext-theme="light"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .dext-topbar {
   --dext-tab-band: #e5e5e5;
 }
 
-body[data-dext-theme="dark"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .app-shell > .dext-topbar {
-  --dext-tab-band: #2b2b2b;
-}
-
-.app-shell > .dext-topbar .conversation-tabs {
-  flex: 1 1 auto;
-  min-width: 0;
-  border-bottom: 0;
-  background: transparent;
+body[data-dext-theme="dark"]:not(.vscode-high-contrast):not(.vscode-high-contrast-light) .dext-topbar,
+body.vscode-dark[data-dext-theme="auto"] .dext-topbar {
+  /* The cool tint yields #1b1c1f over black and keeps the active tab darker. */
+  --dext-tab-band: color-mix(in srgb, var(--vscode-tab-activeBackground, var(--vscode-editor-background, #000)), #d8e0f8 12.5%);
 }
 
 /* ---- Self-contained palettes -------------------------------------------------
