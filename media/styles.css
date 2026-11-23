@@ -4748,6 +4748,9 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .composer-menu-optio
   max-height: 330px;
   overflow-y: auto;
 }
+.composer-skills-popover > [role="menuitemradio"] {
+  grid-template-columns: minmax(0, 1fr) 14px;
+}
 .composer-skill-loading-separator {
   margin: 4px;
   border: 0;

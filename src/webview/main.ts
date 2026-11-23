@@ -975,8 +975,11 @@ function renderSkillsMenu(state: SidebarState, selected: readonly string[], enab
   }
   const loading = state.agentSelection.skillLoading ?? "every-turn";
   for (const value of CONVERSATION_SKILL_LOADING_MODES) {
-    menu.append(composerMenuChoice(value === "on-demand" ? "按需加载" : "每轮应用", value === loading,
-      "menuitemradio", { "data-value": `loading:${value}` },
+    const onDemand = value === "on-demand";
+    menu.append(composerMenuChoice(onDemand ? "Lazy" : "Always", value === loading, "menuitemradio", {
+      "data-value": `loading:${value}`,
+      title: onDemand ? "Load skills as needed (default for new conversations)" : "Load skills every turn"
+    },
       () => {
         const sessionId = browser.activeId;
         if (!sessionId || composerSelectionLocked()) return;

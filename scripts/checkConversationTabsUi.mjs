@@ -77,14 +77,24 @@ await runWebviewChecks(async ({ evaluate, settle, send, click, key }) => {
   assert.equal(await evaluate(`document.activeElement.matches('#code-editor textarea')`), true, 'restoring the selected draft focuses the composer');
   assert.equal(await input(), '', 'a tab without a draft opens empty');
   // Leave the switch unanswered so the menu still renders the previous tab's controls.
-  await evaluate(`document.querySelector('#skills-control').click();
-    document.querySelector('[data-value="loading:on-demand"]').click();
+  await send('Emulation.setDeviceMetricsOverride', { width: 460, height: 600, deviceScaleFactor: 1, mobile: false });
+  await settle();
+  await evaluate(`document.querySelector('#skills-control').click()`);
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('#skills-menu > [role=menuitemradio]')].map(row=>{
+    const label=row.querySelector('span');
+    const bounds=label.getBoundingClientRect();
+    return [label.textContent,row.getAttribute('aria-checked'),label.scrollWidth<=label.clientWidth&&bounds.right<=innerWidth];
+  })`), [['Lazy','false',true],['Always','true',true]], 'loading labels fit a narrow Skills menu');
+  assert.match(await evaluate(`document.querySelector('[data-value="loading:on-demand"]').title`), /default for new conversations/);
+  await evaluate(`document.querySelector('[data-value="loading:on-demand"]').click();
     document.querySelector('[data-value="loading:every-turn"]').click();`);
   assert.deepEqual(await evaluate(`sent.filter(m=>m.type==='agentSelection'||m.type==='conversationSkillLoading')`), [
     { type: 'conversationSkillLoading', sessionId: 'pinned', skillLoading: 'on-demand' },
     { type: 'conversationSkillLoading', sessionId: 'pinned', skillLoading: 'every-turn' }
   ], 'the loading choices target the highlighted tab and carry no stale Agent controls');
   await key('Escape', 27);
+  await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await settle();
   await evaluate(`document.querySelector('#code-editor textarea').focus()`);
   await send('Input.insertText', { text: 'draftB' });await settle();
   await click('.conversation-tab[data-session-id="active"] .conversation-tab-label');
