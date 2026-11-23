@@ -312,7 +312,8 @@ describe("Dext kernel host", () => {
       const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
       if (invocation.method === "agent") {
         expect(args).toMatchObject({ skills: ["openspec-archive-change"], apply: true, patch: false });
-        const input = String(args.input);
+        const input = args.input;
+        if (typeof input !== "string") throw new Error("Expected an Agent prompt string.");
         agentInputs.push(input);
         const receipt = { change: "example", root, cwd: root, store: null };
         const text = agentInputs.length === 1
@@ -321,7 +322,8 @@ describe("Dext kernel host", () => {
         return { ...response, result: { kind: "agent", text } };
       }
       expect(invocation.method).toBe("terminal");
-      const command = String(args.command);
+      const command = args.command;
+      if (typeof command !== "string") throw new Error("Expected a terminal command string.");
       const changes = command === "openspec list --all --json" ? [{ name: archiveName, archived: true }] : [{ name: "example" }];
       const stdout = command === "git status --porcelain -uall" ? "" : JSON.stringify({ changes, root: { path: root } });
       return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root, exit_code: 0, stdout,
