@@ -3,24 +3,44 @@
 把 `openspec` 技能包（`.dext/skill-packs/openspec`，由同目录的 `install.mjs` 生成）里的 6 个 skill 包成有类型提示的函数，省掉「记住 skill id」这一步。
 
 ```ts
-import { propose, apply, archive } from "dext/api/spec";
+import { spec } from "dext/api/spec/index";
 ```
 
-每次调用都是一次独立的 agent 运行，返回 `{ kind: "skill", text }`——**不接续当前对话**。想和 agent 来回讨论，就在 Input 里直接选 skill。
+每次调用启动一次独立的工作流，默认把结论写到 Output，同时返回 `{ kind: "skill", text }` 供脚本继续使用。想和 Agent 来回讨论，就在 Input 里直接选 skill。
 
 要写盘的那 5 个函数会在 `text` 末尾追加一段 git 观测结果：
 
 ```
-Files changed:
+Newly dirty paths:
 - openspec/changes/add-video-export/proposal.md
 - openspec/changes/add-video-export/tasks.md
 ```
 
-一行都没有时写 `Files changed: none — no file entered or left git's dirty set during this run.`，
-这就是「产物到底落盘没有」的答案。依据是 `git status --porcelain -uall` 的前后差集，不是
-`AgentResult.files`：后者是模型自己在 JSON 信封里填的字段，`patch: false` 时宿主没有落盘观测，
-它写什么都是自称。运行前已经脏的路径会单独提一句数量，不列成「本次改动」——git 归因不了。
+没有新增路径时写 `Newly dirty paths: none.`。这份清单基于 `git status --porcelain -uall`，只记录本轮新进入 Git 改动列表的路径。运行前已经有改动的路径会单独列数量，同一路径再次编辑要看任务进度或文件内容。
 工作区不是 git 仓库时这一段不出现，调用本身不受影响。
+
+`spec.apply(change)` 启动一次由 `openspec-apply-change` skill 指导的 Agent 执行。skill 负责逐项推进，直到完成任务或需要暂停。API 读取 OpenSpec 清单，Output 显示结束进度、剩余数、下一项和 Agent 执行说明。前后快照来自同一个根目录和 store 时，Output 也会显示开始进度。只有任务来源、描述和顺序保持一致，且每个来源内的任务描述唯一时，才列出本轮新增勾选。Agent CLI 发出的任务消息和进度工具事件通过 Process 显示。
+
+`spec.archive(change)` 需要确认时会打开对话框，显示产物或任务的警告，或列出各规格的同步评估。选择后，同一次调用会在原变更和 store 中继续。取消会结束本次调用。
+
+## 下一步
+
+每个 `spec.*` 的 Output 和返回的 `text` 最后都有 `### 下一步`。结果可核实时会给出可直接执行的命令，等待确认、受阻或状态未知时会说明应先处理的事项。
+
+| 调用 | 下一步 |
+|---|---|
+| `propose(input)` | 本轮新建且通过检查的 change 有任务清单时建议实施，缺任务时建议补齐 |
+| `apply(change)` | `ready` → 再跑 `spec.apply("<name>")`，从第一项未勾任务继续；`all_done` → 按 CLI 提示完成审查或验证及要求的人工验收，再运行 `spec.archive("<name>")`；`blocked` → `openspec status --change "<name>" --json` 看缺哪件产物 |
+| `archive(change)` | 确认目标已归档后，建议处理剩余变更或创建新变更 |
+| `update(change, input?)` | 修订已写入或无需修改时建议实施 |
+| `sync(change?)` | 确认所选变更已同步且主规格校验通过后，建议归档该变更 |
+| `explore(input)` | 结论要改行为就 `spec.propose("…")` |
+
+显式指定写入范围时，API 先用 CLI 验证范围，再从已验证的 `cwd` 启动 Agent。验证失败时调用停止。写入型 skill 报告实际处理的 change、根目录、store 和执行状态。`apply` 在执行前后查询已验证的显式范围，Agent 的报告可补充暂停状态。生成的后续调用带上已确认的范围。
+
+`apply` 根据 OpenSpec 的 `state` 和 skill 的暂停状态给出下一步。状态为 `ready` 时，重跑建议的 `spec.apply(...)` 即可从首项待办继续。
+
+`spec.propose`、`spec.update`、`spec.archive`、`spec.sync` 和 `spec.explore` 直接在 Output 展示对应 skill 的结论。产物、确认、校验与归档结果由 skill 按所选 OpenSpec store 报告。
 
 ## 函数
 
@@ -33,10 +53,9 @@ Files changed:
 | `update(change, input?)` | 修订还在规划中的 change | 改 change 目录 |
 | `sync(change?)` | 让 `specs/` 追上代码现状 | 改 `openspec/specs/` |
 
-`change` 是 change 名（`openspec/changes/<name>/` 里那个 `<name>`，CLI 的 `--change "<name>"`），
-单独一个参数，不混在 `input` 里；`input` 只放本次的额外要求。`propose` / `explore` 没有 change 名可给，
-仍然只有一个 `input`。
-`apply` / `archive` / `sync` 没有第二个参数：这三个 skill 的 input 契约里就只有 change 名，其余都自己问。
+`change` 是变更名，对应 CLI 的 `--change "<name>"`。`input` 用于本次的额外要求。
+五个写入型函数都接受一个可选的末尾参数 `{ store?, cwd?, root? }`。`store` 是已注册的 store ID，`cwd` 是工作区内运行 CLI 的目录，`root` 是预期的 OpenSpec 根目录。
+例如可用 `spec.apply("add-video-export", { store: "team-specs" })` 在指定 store 内读取实施前后的进度。`explore(input)` 维持原有调用方式。
 
 ## 权限
 
@@ -70,20 +89,21 @@ flowchart TD
 ```
 
 ```ts
-propose("给视频标注加导出按钮");
+spec.propose("给视频标注加导出按钮");
 // → openspec/changes/add-video-export/
 //     proposal.md  ← 先读这个：Capabilities 和 Impact 两节
 //     specs/video-annotation/spec.md
 //     design.md
 //     tasks.md
 // 这一步不改代码。
+// 下一步：spec.apply("add-video-export")
 
-apply("add-video-export");
+spec.apply("add-video-export");
 // 真改代码，逐条勾 tasks.md。
+// 中断了就再跑一遍同一条命令：从第一个未勾的任务继续。
 
-archive("add-video-export");
-// delta 合并进 openspec/specs/，change 挪进 changes/archive/。
-// 纯工具/文档改动加 --skip-specs（CLI 参数，skill 里会问）。
+spec.archive("add-video-export");
+// 有待同步的增量时，在对话框选择同步后归档或跳过同步。
 ```
 
 `openspec/specs/` 是唯一会长期留下的东西：它记「系统现在承诺什么行为」。`proposal.md` / `design.md` / `tasks.md` 都是这次改动的临时脚手架。
