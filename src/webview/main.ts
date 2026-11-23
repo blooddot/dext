@@ -343,6 +343,7 @@ let agentProgressState = "Thinking";
 let agentTokenUsage: AgentTokenUsage | undefined;
 let pendingAgentEventBatches: Array<{ sessionId: string; events: AgentStreamEvent[] }> = [];
 let agentEventBatchFrame: number | undefined;
+let pendingAgentInputFocus: Extract<WebviewResponse, { type: "focusAgentInput" }> | undefined;
 const attachments = new ImageAttachments({
   bar: elements.attachmentBar,
   post: (message) => vscode.postMessage(message),
@@ -491,6 +492,7 @@ function cacheRenderedConversation(): void {
  */
 function clearVisibleConversation(): void {
   browser.renderGeneration += 1;
+  pendingAgentInputFocus = undefined;
   scroll.beginSwitch();
   cacheRenderedConversation();
   if (agentRunTimer) clearInterval(agentRunTimer);
@@ -513,6 +515,25 @@ function clearVisibleConversation(): void {
 function finishConversationLoading(): void {
   delete elements.resultBody.dataset.loading;
   elements.resultBody.setAttribute("aria-busy", "false");
+  focusPendingAgentInput();
+}
+
+function focusPendingAgentInput(): void {
+  const target = pendingAgentInputFocus;
+  if (!target || elements.resultBody.dataset.loading) return;
+  // The transcript must be visible and the composer draft must have restored
+  // its focus before we hand focus to the requested card.
+  requestAnimationFrame(() => {
+    if (target !== pendingAgentInputFocus || target.sessionId !== browser.activeId || elements.resultBody.dataset.loading) return;
+    pendingAgentInputFocus = undefined;
+    if (agentEventBatchFrame !== undefined) cancelAnimationFrame(agentEventBatchFrame);
+    flushAgentEventBatches();
+    const turn = transcript.get(target.turnId);
+    if (!turn) return;
+    turn.hydrate?.();
+    turn.disclosure.open = true;
+    if (turn.questions.focusRequest(target.kind, target.requestId)) scroll.setFollowing(false);
+  });
 }
 
 function restoreCachedAgentRenders(cached: CachedConversationViewState): void {
@@ -2702,17 +2723,8 @@ window.addEventListener("message", (event: MessageEvent<WebviewResponse>) => {
     queueAgentEvents(message.sessionId, message.events);
   }
   if (message.type === "focusAgentInput" && message.sessionId === browser.activeId) {
-    if (agentEventBatchFrame !== undefined) cancelAnimationFrame(agentEventBatchFrame);
-    flushAgentEventBatches();
-    const turn = transcript.get(message.turnId);
-    if (turn) {
-      turn.hydrate?.();
-      turn.disclosure.open = true;
-      // The host is asking the reader to answer a card, and focusRequest brings
-      // that card to the middle of the viewport. Following the stream would
-      // pull the view straight back to the end, away from the question.
-      if (turn.questions.focusRequest(message.kind, message.requestId)) scroll.setFollowing(false);
-    }
+    pendingAgentInputFocus = message;
+    focusPendingAgentInput();
   }
   if (message.type === "executing"
     && (message.switchId === undefined || message.switchId === browser.switchId)

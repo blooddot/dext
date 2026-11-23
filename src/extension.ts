@@ -583,6 +583,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   updateHistoryContext();
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(DextSidebarProvider.viewType, sidebar),
+    vscode.commands.registerCommand(DextSidebarProvider.openInputNotificationCommand, (id: unknown) => sidebar.acceptInputNotification(id)),
     historyPanel,
     vscode.commands.registerCommand("dext.openHistory", () => historyPanel.showInActiveEditor()),
     vscode.commands.registerCommand("dext.history.continueConversation", (context?: ConversationContext) =>

@@ -59,12 +59,7 @@ function harness(options: { executeConversation?: (mode: "agent" | "ask" | "plan
   };
 }
 
-/**
- * A real sidebar is only used for the two host-surface behaviours that no
- * controller owns: revealing an off-screen view, and turning the interaction
- * controller's pending focus into the `focusAgentInput` message. Conversation
- * state still comes from the real controller/coordinator stack.
- */
+/** Exercise the notification link and the focus hand-off through the sidebar. */
 async function sidebarHarness(visible: boolean) {
   const state = new HarnessState();
   const history = new DextHistoryStore(new MemoryHistoryBackend());
@@ -114,11 +109,20 @@ async function sidebarHarness(visible: boolean) {
   internals.messageQueue.markReady();
   await internals.conversation.controller.hydrate();
   internals.conversation.controller.activate(internals.conversation.controller.session("foreground"));
-  let choose!: (action?: string) => void;
-  host.showInformationMessage.mockImplementation(() => new Promise<string | undefined>((resolve) => { choose = resolve; }));
+  let dismiss!: () => void;
+  host.showInformationMessage.mockImplementation(() => new Promise<void>((resolve) => { dismiss = resolve; }));
   return {
-    internals, messages, executeConversation, gates,
-    choose: (action: string) => choose(action),
+    internals, messages, executeConversation,
+    clickLink: () => {
+      const call = host.showInformationMessage.mock.calls[0]!;
+      expect(call).toHaveLength(1);
+      const uri = new URL((call[0] as string).match(/\[View question\]\((command:[^)]+)\)/)![1]!);
+      expect(uri.pathname).toBe(DextSidebarProvider.openInputNotificationCommand);
+      const [id] = JSON.parse(decodeURIComponent(uri.search.slice(1))) as [string];
+      sidebar.acceptInputNotification(id);
+    },
+    dismiss: () => dismiss(),
+    dispose: () => sidebar.dispose(),
     release: () => gates.shift()?.()
   };
 }
@@ -215,7 +219,7 @@ describe("sidebar input notifications", () => {
     h.dispose();
   });
 
-  it.each([false, true])("never asks the host to reveal Dext, so a maximized layout stays (visible: %s)", async (visible) => {
+  it.each([false, true])("opens the notification link without asking the host to reveal Dext (visible: %s)", async (visible) => {
     const h = await sidebarHarness(visible);
     const background = h.internals.conversation.controller.session("background");
     const execution = h.internals.conversation.coordinator.execute(background, "agent", "background question");
@@ -223,7 +227,7 @@ describe("sidebar input notifications", () => {
     await vi.waitFor(() => expect(host.showInformationMessage).toHaveBeenCalledOnce());
     const turnId = h.internals.conversation.coordinator.turnOf("background")!;
 
-    h.choose("View question");
+    h.clickLink();
     await vi.waitFor(() => expect(h.messages.some((message): message is ConversationWebviewResponse & { type: "focusAgentInput" } =>
       message.type === "focusAgentInput" && message.sessionId === "background"
       && message.turnId === turnId && message.requestId === "question" && message.kind === "agent"
@@ -248,5 +252,24 @@ describe("sidebar input notifications", () => {
     await vi.waitFor(() => expect(h.executeConversation).toHaveBeenCalled());
     h.release();
     await execution;
+    h.dismiss();
+    h.dispose();
+  });
+
+  it("ignores a notification link after the notification has been dismissed", async () => {
+    const h = await sidebarHarness(true);
+    const background = h.internals.conversation.controller.session("background");
+    const execution = h.internals.conversation.coordinator.execute(background, "agent", "background question");
+    await vi.waitFor(() => expect(host.showInformationMessage).toHaveBeenCalledOnce());
+
+    h.dismiss();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    h.clickLink();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(h.messages.some((message) => message.type === "activeConversation" && message.activeId === "background")).toBe(false);
+
+    h.release();
+    await execution;
+    h.dispose();
   });
 });

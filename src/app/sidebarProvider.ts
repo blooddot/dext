@@ -83,8 +83,10 @@ const MAX_TURN_BASELINES = 64;
  * Conversation state lives in the controllers created by conversationSetup. */
 export class DextSidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "dext.sidebar";
+  static readonly openInputNotificationCommand = "dext.openInputNotification";
   private view: vscode.WebviewView | undefined;
   private readonly messageQueue = new ReadyMessageQueue<WebviewResponse>();
+  private readonly inputNotificationActions = new Map<string, (accepted: boolean) => void>();
   /** The Output channel that says whether the composer's types were sent. */
   private composerLog: vscode.OutputChannel | undefined;
   private readonly attachments = new AttachmentStore();
@@ -171,9 +173,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
         if (this.turnBaselines.size >= MAX_TURN_BASELINES) this.turnBaselines.delete(this.turnBaselines.keys().next().value!);
         this.turnBaselines.set(turnId, dirtyBaseline());
       },
-      notifyInput: async () => await vscode.window.showInformationMessage(
-        "Dext: AI needs your response. Choose an option or enter an answer.", "View question"
-      ) === "View question",
+      notifyInput: () => this.notifyInput(),
       openInputTarget: (target) => this.openInputTarget(target),
       postActiveExecution: (sessionId, switchId, hostInitiated) => this.postActiveExecution(sessionId, switchId, hostInitiated),
       flushAttachmentDeletes: () => this.flushAttachmentDeletes(),
@@ -702,6 +702,8 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
   dispose(): void {
     this.fileSearch.dispose();
     this.disposed = true;
+    for (const resolve of this.inputNotificationActions.values()) resolve(false);
+    this.inputNotificationActions.clear();
     void this.flushComposerDrafts();
     this.conversation.dispose();
     for (const session of this.conversation.controller.sessionsList()) {
@@ -1309,6 +1311,25 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
     const focus = this.conversation.interactions.pendingFocus(sessionId, execution.turnId);
     if (focus) this.postWhenReady({ type: "focusAgentInput", ...focus });
+  }
+
+  private async notifyInput(): Promise<boolean> {
+    const id = randomBytes(12).toString("hex");
+    const args = encodeURIComponent(JSON.stringify([id]));
+    const action = new Promise<boolean>((resolve) => this.inputNotificationActions.set(id, resolve));
+    try {
+      // Closing a focused toast can restore the editor before the extension
+      // sees the button selection. Clicking a message link leaves it open.
+      const message = `Dext: AI needs your response. [View question](command:${DextSidebarProvider.openInputNotificationCommand}?${args})`;
+      const dismissed = Promise.resolve(vscode.window.showInformationMessage(message)).then(() => false);
+      return await Promise.race([action, dismissed]);
+    } finally {
+      this.inputNotificationActions.delete(id);
+    }
+  }
+
+  acceptInputNotification(id: unknown): void {
+    if (typeof id === "string") this.inputNotificationActions.get(id)?.(true);
   }
 
   private async openInputTarget(target: InputNotificationTarget): Promise<void> {

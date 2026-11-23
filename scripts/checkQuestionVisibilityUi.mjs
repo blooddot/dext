@@ -168,4 +168,20 @@ await runWebviewChecks(async ({ evaluate, settle }) => {
   assert.deepEqual(rows.map(row => [row.selected, row.custom]), [[false, false], [true, false]],
     `a settled API form keeps its options, got ${JSON.stringify(rows)}`);
   console.log('PASS a settled API form keeps its options');
+
+  await evaluate(`{
+    const sessionId='background';
+    const turnId='notification-turn';
+    const userInput=${JSON.stringify({ ...question, id: 'notification-question', blocking: false })};
+    host({type:'activeConversation',activeId:sessionId,selection,planStatus:'new',hostInitiated:true});
+    host({type:'outputSession',session:{id:sessionId,updatedAt:1,turns:[]},hostInitiated:true});
+    host({type:'executing',value:true,sessionId,turnId,source:'Background turn',startedAt:Date.now()});
+    host({type:'agentEvents',sessionId,events:[{phase:'input',text:'',userInput}]});
+    host({type:'focusAgentInput',sessionId,turnId,requestId:userInput.id,kind:'agent'});
+  }`);
+  await settle();
+  await settle();
+  assert.equal(await evaluate(`document.activeElement.matches('.agent-input-card input[type=radio]')`), true,
+    'opening a background question leaves focus on its card after the composer draft is restored');
+  console.log('PASS a notification keeps focus on the background question after a tab switch');
 });
