@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rename, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -279,6 +279,28 @@ describe("SkillCatalog", () => {
     expect(after.revision).not.toBe(before.revision);
     await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual({ ...after, changed: false });
     await catalog.reload(root);
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual({ ...after, changed: false });
+  });
+
+  it("changes the revision for same-size body edits and keeps it stable when only timestamps change", async () => {
+    const root = await tempRoot();
+    const directory = join(root, ".dext", "skills", "review");
+    const path = join(directory, "SKILL.md");
+    await mkdir(directory, { recursive: true });
+    await writeFile(path, "# Review\nBefore\n");
+    const catalog = new SkillCatalog();
+    await catalog.reload(root);
+    const before = await catalog.describeForConversation("review", root, "codex");
+
+    const timestamp = new Date("2020-01-01T00:00:00Z");
+    await utimes(path, timestamp, timestamp);
+    await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual(before);
+
+    await writeFile(path, "# Review\nAfter!\n");
+    await utimes(path, timestamp, timestamp);
+    const after = await catalog.describeForConversation("review", root, "codex");
+    expect(after).toMatchObject({ title: before.title, changed: true });
+    expect(after.revision).not.toBe(before.revision);
     await expect(catalog.describeForConversation("review", root, "codex")).resolves.toEqual({ ...after, changed: false });
   });
 

@@ -73,11 +73,13 @@ function unique<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
 }
 
-async function fileRevision(handle: FileHandle): Promise<string> {
+async function readSkillFile(handle: FileHandle): Promise<{ content: Buffer; revision: string }> {
   const file = await handle.stat();
   if (!file.isFile()) throw new Error("The registered path does not resolve to a SKILL.md file.");
-  return createHash("sha256").update(`${file.dev}:${file.ino}:${file.size}:${file.mtimeMs}:${file.ctimeMs}`)
-    .digest("hex").slice(0, 16);
+  // Filesystems can report identical timestamps for consecutive same-size edits.
+  const content = await handle.readFile();
+  const revision = createHash("sha256").update(content).digest("hex").slice(0, 16);
+  return { content, revision };
 }
 
 function isSkillFile(path: string): boolean {
@@ -88,8 +90,8 @@ function isSkillFile(path: string): boolean {
 async function readSkillSource(sourcePath: string, id: string) {
   const handle = await open(sourcePath, SKILL_READ_FLAGS);
   try {
-    const revision = await fileRevision(handle);
-    const { title, conversationTitle, description, declaredDescription, diagnostics } = parseSkillMetadata(await handle.readFile("utf8"), id);
+    const { content, revision } = await readSkillFile(handle);
+    const { title, conversationTitle, description, declaredDescription, diagnostics } = parseSkillMetadata(content.toString("utf8"), id);
     return { title, conversationTitle, description, declaredDescription, diagnostics, revision };
   } finally {
     await handle.close();
@@ -216,13 +218,12 @@ export class SkillCatalog {
       throw new Error("The registered path does not resolve to a SKILL.md file.");
     }
     const path = !source.global && insideRoot(workspace, file) ? relative(workspace, file).split(sep).join("/") : file;
-    // Read access can change independently of the indexed revision.
     const handle = await open(file, SKILL_READ_FLAGS);
     try {
-      const revision = await fileRevision(handle);
+      const { content, revision } = await readSkillFile(handle);
       const changed = revision !== source.revision;
       if (changed) {
-        const metadata = parseSkillMetadata(await handle.readFile("utf8"), id);
+        const metadata = parseSkillMetadata(content.toString("utf8"), id);
         const { title, conversationTitle, description, declaredDescription } = metadata;
         Object.assign(source, { title, conversationTitle, description, declaredDescription, revision });
       }
