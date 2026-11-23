@@ -60,7 +60,9 @@ export class PlanController {
     const previousTodos = session.planProgress && session.planProgress.path === executionPlanPath
       ? session.planProgress.todos
       : previousPlan ? [...previousPlan.process].reverse().find((event) => event.phase === "todo")?.todos ?? [] : [];
-    const planRun = new PlanExecution(resumePlanTodos(planTodoItems(source), previousTodos));
+    const tasks = planTodoItems(source);
+    const unchanged = previousTodos.filter((previous) => tasks.some((task) => task.id === previous.id && task.text === previous.text));
+    const planRun = new PlanExecution(resumePlanTodos(tasks, unchanged));
     // Acceptance identity is derived from the wording, so reordering the section
     // keeps each check on its own requirement.
     const storedAcceptance = session.planProgress && session.planProgress.path === executionPlanPath
@@ -151,7 +153,7 @@ export class PlanController {
     // checks made while the turn runs survive each write. The first write of a
     // run falls back to the list the document seeded.
     const stored = session.planProgress?.path === executionPlanPath ? session.planProgress.acceptance : undefined;
-    const acceptance = stored ?? seeded;
+    const acceptance = seeded ? mergePlanAcceptance(seeded, stored ?? []) : stored;
     session.planProgress = { path: executionPlanPath, todos: [...todos], ...(acceptance ? { acceptance: [...acceptance] } : {}) };
     await this.options.sessions.savePlanProgress(session.id, executionPlanPath, todos, acceptance);
     // The panel needs the seeded list before the run ends, so a user can start

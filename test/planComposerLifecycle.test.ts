@@ -55,6 +55,8 @@ describe("Plan composer after execution", () => {
       planProgress: { path: "a.plan.md", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] }
     };
     expect(h.plans.startRun(session, planSource, true, "a.plan.md").todoProgress?.snapshot()[0]?.status).toBe("completed");
+    expect(h.plans.startRun(session, planSource.replace("Implement and verify", "Implement a revised contract"), true, "a.plan.md")
+      .todoProgress?.snapshot()[0]?.status).toBe("pending");
     session.planProgress = { path: "b.plan.md", todos: [{ id: "plan-1", text: "Implement and verify", status: "completed" }] };
     expect(h.plans.startRun(session, planSource, true, "a.plan.md").todoProgress?.snapshot()[0]?.status).toBe("pending");
   });
