@@ -3,21 +3,26 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import type { AgentConversationRequest } from "../src/features/agents/host/agentRunner.js";
+import type { AgentConversationRequest, AgentExecutionRequest } from "../src/features/agents/host/agentRunner.js";
 import type { AgentStreamEvent, AgentWakeReport } from "../src/shared/contracts/types.js";
 import { PiAgentRunner, prunePiSessions, type PiRunnerOptions } from "../src/features/agents/host/piAgentRunner.js";
 import { PiRpcTransport } from "../src/features/agents/host/piRpcTransport.js";
 import { decodePiSession, encodePiSession } from "../src/features/agents/domain/piModels.js";
+import type { NativeConversationBaseline } from "../src/shared/contracts/conversationInstructions.js";
+import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
+import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
 
 const roots: string[] = [], runners: PiAgentRunner[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(runners.splice(0).map((runner) => runner.dispose()));
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })));
 });
-async function setup(flags: string[] = []) {
+async function setup(flags: string[] = [], version?: string) {
   const root = await mkdtemp(join(tmpdir(), "dext-pi-runner-")); roots.push(root);
   const logPath = join(root, "commands.jsonl");
-  const options: PiRunnerOptions = { extensionPath: resolve("media/pi-extension.mjs"), sessionDirectory: join(root, "sessions"), versionProbe: async () => {},
+  const options: PiRunnerOptions = { extensionPath: resolve("media/pi-extension.mjs"), sessionDirectory: join(root, "sessions"), versionProbe: async () => version,
+    ...(version ? { plugins: () => [] } : {}),
     transportFactory: (_command, args, cwd, env) => new PiRpcTransport(process.execPath, [resolve("test/fixtures/piAgent.mjs"), ...flags, ...args], cwd, { ...env, PI_FIXTURE_LOG: logPath }) };
   const create = () => { const runner = new PiAgentRunner(options); runners.push(runner); return runner; };
   const request = (input: string, fields: Partial<AgentConversationRequest> = {}): AgentConversationRequest => ({
@@ -28,6 +33,82 @@ async function setup(flags: string[] = []) {
   return { root, runner: create(), create, request, log };
 }
 describe("Pi conversation runner", { timeout: 30000 }, () => {
+  it("reuses the live baseline and reinstalls it after process restart against the same persisted session", async () => {
+    const h = await setup([], "1.5.2");
+    vi.stubEnv("PI_CODING_AGENT_DIR", h.root);
+    const extra = ["--append-system-prompt", "explicit user appendix"];
+    let stored = "", native: NativeConversationBaseline | undefined;
+    await h.runner.runConversation(h.request("first", {
+      cliArguments: extra, conversationInstructions: { outputLanguage: "zh-CN" },
+      metadata: { agentSessionId: "chat", onAgentSessionId: (_provider, id, baseline) => { stored = id; native = baseline; } }
+    }));
+    expect(native).toEqual({ outputLanguage: "zh-CN", version: 1 });
+    expect(stored).toMatch(/^pi1:/);
+    await h.runner.runConversation(h.request("second", { cliArguments: extra, conversationInstructions: { outputLanguage: "en" } }));
+    expect((await h.log()).filter((entry) => entry.startup)).toHaveLength(1);
+    await h.runner.dispose();
+    const restarted = h.create();
+    await restarted.runConversation(h.request("continued", {
+      cliArguments: extra, conversationInstructions: { outputLanguage: null },
+      metadata: { agentSessionId: "chat", conversationProviderSessionId: stored, conversationInstructionBaseline: { ...native!, sessionId: stored } }
+    }));
+    await restarted.runConversation(h.request("branched", {
+      cliArguments: extra, conversationInstructions: { outputLanguage: "ja" },
+      metadata: { agentSessionId: "branch", conversationForkFrom: stored, conversationContext: "Fork context" }
+    }));
+    const log = await h.log(), prompts = log.filter((entry) => entry.command === "prompt").map((entry) => String(entry.message));
+    const launches = log.filter((entry) => Array.isArray(entry.startup)).map((entry) => entry.startup as string[]);
+    const resumed = launches.find((args) => args.includes("--session"))!;
+    expect(resumed).toContain(decodePiSession(stored).path);
+    expect(resumed.slice(0, 3)).toEqual([...extra, "--append-system-prompt"]);
+    expect(resumed[3]).toContain("Simplified Chinese (zh-CN)");
+    expect(prompts[0]).toBe("first");
+    expect(prompts[1]).toContain("Dext conversation language override: Use English (en)");
+    expect(prompts[2]).toContain("Clear Dext's language preference");
+    expect(prompts[3]).toContain("Fork context");
+    expect(prompts.slice(1).every((prompt) => !prompt.includes("current turn's conversation Skill manifest"))).toBe(true);
+    expect(launches.at(-1)?.[3]).toContain("Japanese (ja)");
+  });
+
+  it("keeps automatic discovery and sends inline rules when its file cannot be preserved", async () => {
+    const h = await setup([], "1.5.2");
+    vi.stubEnv("PI_CODING_AGENT_DIR", h.root);
+    await mkdir(join(h.root, "APPEND_SYSTEM.md"));
+    await h.runner.runConversation(h.request("fallback", { conversationInstructions: { outputLanguage: "en" } }));
+    const log = await h.log();
+    expect(log[0]?.startup).not.toContain("--append-system-prompt");
+    expect(log.find((entry) => entry.command === "prompt")?.message).toContain("Dext instruction source for this turn: inline.");
+  });
+  it("opens a separate structured Pi process per call and preserves the user's append and result tool", async () => {
+    const h = await setup([], "1.5.2");
+    vi.stubEnv("PI_CODING_AGENT_DIR", h.root);
+    const method = { ...BUILTIN_METHODS.find((item) => item.id === "ask")!, source: "builtin" as const };
+    const request: AgentExecutionRequest = { profile: h.request("").profile, cwd: h.root, method, structuredApi: true, metadata: {},
+      contract: new AxAdapter().compile(method), workspaceTrusted: true,
+      resolved: { method, arguments: { input: "structured" }, context: [], metadata: {},
+        invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] } },
+      cliArguments: ["--append-system-prompt", "User appendix"]
+    };
+    for (const instruction of ["First call rule", "Second call rule"]) {
+      const reply = await h.runner.run({ ...request, metadata: { agentSessionId: "no-reuse", instruction } });
+      expect(JSON.parse(reply as string)).toEqual({ kind: "ask", text: "fixture answer" });
+    }
+    const log = await h.log();
+    expect(log.filter((entry) => entry.startup)).toHaveLength(2);
+    for (const record of log.filter((entry) => entry.startup)) {
+      const args = record.startup as string[];
+      expect(args.slice(0, 3)).toEqual(["--append-system-prompt", "User appendix", "--append-system-prompt"]);
+      expect(args[3]?.split("Read the labeled Dext JSON payload")).toHaveLength(2);
+      expect(args).toContain("--no-session");
+      expect(args[args.indexOf("--tools") + 1]).toContain("dext_submit_result");
+    }
+    const prompts = log.filter((entry) => entry.command === "prompt").map((entry) => String(entry.message));
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("First call rule");
+    expect(prompts[1]).toContain("Second call rule");
+    expect(prompts[1]).not.toContain("First call rule");
+    expect(prompts.every((prompt) => !prompt.includes("Read the labeled Dext JSON payload"))).toBe(true);
+  });
   it("reuses one process, bootstraps only a fresh session and resets explicit defaults", async () => {
     const h = await setup();
     expect(await h.runner.runConversation(h.request("first", { reasoningEffort: "off", metadata: { agentSessionId: "chat", conversationContext: "older visible context" } }))).toContain("older visible context");

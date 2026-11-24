@@ -3,9 +3,11 @@ import { publicInteractionState } from "../presentation/uiInteractionPresentatio
 import { normalizeHistoryResponse } from "../domain/historyResponse.js";
 import { compactAgentEvents } from "../domain/agentEventLog.js";
 import type { AgentStreamEvent, AgentTodoItem, ConversationSkillLoading, InputExecutionResponse, PlanAcceptanceItem } from "../../../shared/contracts/types.js";
+import type { NativeConversationBaseline, ProviderInstructionBaseline } from "../../../shared/contracts/conversationInstructions.js";
 import { normalizeInputReferenceSource } from "../../workspace/domain/fileReference.js";
 import {
   DEFAULT_HISTORY_LIMITS,
+  recordProviderSession,
   type ConversationHistoryStore,
   type DextHistoryLimits,
   type DextHistoryRecord,
@@ -235,7 +237,8 @@ export class DextHistoryStore implements ConversationHistoryStore {
   async fork(
     turns: readonly DextHistoryRecord[],
     providerSessions?: Readonly<Record<string, string>>,
-    initialSkillLoading?: ConversationSkillLoading
+    initialSkillLoading?: ConversationSkillLoading,
+    providerInstructionBaselines?: Readonly<Record<string, ProviderInstructionBaseline>>
   ): Promise<DextHistorySession> {
     return this.mutate(async () => {
       const createdAt = Date.now();
@@ -250,6 +253,8 @@ export class DextHistoryStore implements ConversationHistoryStore {
         ...(providerSessions && Object.keys(providerSessions).length
           ? { forkProviderSessions: { ...providerSessions } }
           : {}),
+        ...(providerInstructionBaselines && Object.keys(providerInstructionBaselines).length
+          ? { providerInstructionBaselines: { ...providerInstructionBaselines } } : {}),
         ...(initialSkillLoading ? { initialSkillLoading } : {})
       };
       await this.backend.writeTurns(session);
@@ -257,11 +262,11 @@ export class DextHistoryStore implements ConversationHistoryStore {
     });
   }
 
-  async setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void> {
+  async setProviderSession(sessionId: string, provider: string, providerSessionId: string, baseline?: NativeConversationBaseline): Promise<void> {
     await this.mutate(async () => {
       const summary = this.summary(sessionId);
       if (!summary) return;
-      summary.providerSessions = { ...(summary.providerSessions ?? {}), [provider]: providerSessionId };
+      recordProviderSession(summary, provider, providerSessionId, baseline);
       await this.backend.writeMeta(summary);
     });
   }

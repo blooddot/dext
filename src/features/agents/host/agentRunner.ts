@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, extname, isAbsolute, join } from "node:path";
 import { isDextResult, serializeResultForAgent } from "../../../shared/protocol/resultSerialization.js";
@@ -18,6 +18,8 @@ import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS }
 import { trackCliToolActivity } from "../domain/agentToolActivity.js";
 import { runCodexConversation } from "./codexConversationRunner.js";
 import { codexErrorMessage } from "../domain/codexError.js";
+import { conversationInstructionDelivery, type ConversationInstructions } from "../domain/conversationInstructions.js";
+import { nativeStructuredApiInstructions, structuredApiInput, structuredApiInstructions } from "../domain/structuredInstructions.js";
 
 export interface AgentExecutionRequest {
   workspaceTrusted?: boolean;
@@ -32,6 +34,8 @@ export interface AgentExecutionRequest {
   resolved: ResolvedInvocation;
   contract: AxMethodContract;
   metadata: Readonly<ExecutionMetadata>;
+  /** Isolated ask/plan/agent/template API with a Dext-owned instruction. */
+  structuredApi?: true;
   /** Only agent(apply=true) may receive a trusted writable sandbox. */
   allowWorkspaceWrite?: boolean;
   /** The composer-selected write tier. The write gate above still controls
@@ -61,6 +65,7 @@ export interface AgentConversationRequest {
   serviceTier?: string;
   cwd: string;
   input: string;
+  conversationInstructions?: Readonly<ConversationInstructions>;
   metadata: Readonly<ExecutionMetadata>;
   allowWorkspaceWrite: boolean;
   /** The tier the composer asked for. `allowWorkspaceWrite` stays the single
@@ -748,6 +753,30 @@ export function claudeControlArguments(
   ];
 }
 
+/** Claude 2.1.251 accepts one appended prompt. Keep file forms and ambiguous
+ * arguments intact by leaving Dext's instruction in the user message. */
+function claudeAppendArguments(extra: readonly string[], instructions: string): string[] | undefined {
+  const args = [...extra];
+  let appendIndex = -1;
+  let appendLength = 0;
+  let existing = "";
+  for (const [index, value] of extra.entries()) {
+    const name = value.split("=", 1)[0]!;
+    if (["--", "--append-system-prompt-file", "--system-prompt-snapshot", "--resume", "-r",
+      "--continue", "-c", "--fork-session", "--teleport", "--from-pr"].includes(name)) return undefined;
+    if (name !== "--append-system-prompt") continue;
+    if (appendIndex !== -1) return undefined;
+    appendIndex = index;
+    const equals = value.indexOf("=");
+    appendLength = equals < 0 ? 2 : 1;
+    existing = equals < 0 ? extra[index + 1] ?? "" : value.slice(equals + 1);
+    if (!existing || (equals < 0 && existing.startsWith("-"))) return undefined;
+  }
+  if (appendIndex === -1) args.push("--append-system-prompt", instructions);
+  else args.splice(appendIndex, appendLength, "--append-system-prompt", `${existing}\n\n${instructions}`);
+  return args;
+}
+
 /** Claude asks by tool call rather than by question id, so Dext synthesizes
  * stable ids and keeps the question text that its answer map is keyed by. */
 export function claudeAskUserQuestion(input: unknown): { questions: AgentInputQuestion[]; texts: Map<string, string> } | undefined {
@@ -1260,6 +1289,7 @@ export class CliAgentRunner implements AgentRunner {
   /** Claude's session UUID is likewise kept separate from Dext's conversation
    * id so a provider-native fork can target the source session. */
   private readonly claudeConversationSessions = new Map<string, string>();
+  private readonly claudeVersions = new Map<string, { identity: string; supportsAppend: boolean }>();
 
   constructor(
     private timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
@@ -1295,6 +1325,26 @@ export class CliAgentRunner implements AgentRunner {
     return agentProcessEnvironment(request.profile.provider, this.codexUsesChatGpt);
   }
 
+  private async claudeSupportsNativeInstructions(command: string, cwd: string, signal?: AbortSignal): Promise<boolean> {
+    if (/\.(cmd|bat)$/i.test(command)) return false;
+    try {
+      const info = await stat(command);
+      const identity = `${info.size}:${info.mtimeMs}`;
+      const cached = this.claudeVersions.get(command);
+      if (cached?.identity === identity) return cached.supportsAppend;
+      const timeout = AbortSignal.timeout(10_000);
+      const result = await this.processRunner(command, ["--version"], "", cwd, signal ? AbortSignal.any([signal, timeout]) : timeout);
+      // With append on this version both -p transports rebuild the prompt on
+      // resume and fork, as verified against a local model endpoint.
+      const supportsAppend = result.code === 0 && /^2\.1\.251\s+\(Claude Code\)$/.test(result.stdout.trim());
+      this.claudeVersions.set(command, { identity, supportsAppend });
+      return supportsAppend;
+    } catch {
+      if (signal?.aborted) throw new ExecutionCancelledError();
+      return false;
+    }
+  }
+
   async run(request: AgentExecutionRequest): Promise<unknown> {
     if (request.profile.provider !== "codex" && request.profile.provider !== "claude") {
       throw new Error("This provider requires its own Agent runner.");
@@ -1315,24 +1365,29 @@ export class CliAgentRunner implements AgentRunner {
     const input = agentPayload(request);
     const progressInstruction = "While working, emit concise progress updates that summarize what you are inspecting and why, without exposing hidden chain-of-thought. The final agent message must contain only JSON matching the native structured-output schema.";
     const includePatch = request.includePatch !== false;
-    const prompt = request.method.id === "agent" && request.allowWorkspaceWrite
-        ? `Read the Dext JSON payload from stdin. You may modify files only inside the current trusted workspace. Do not install packages or change files outside this workspace. Return an AgentResult${includePatch ? ", including an auditable patch whenever changes can be represented" : " without a patch; report conclusions in text only"}. ${progressInstruction}`
+    const instruction = request.method.id === "agent" && request.allowWorkspaceWrite
+        ? `You may modify files only inside the current trusted workspace. Do not install packages or change files outside this workspace. Return an AgentResult${includePatch ? ", including an auditable patch whenever changes can be represented" : " without a patch; report conclusions in text only"}.`
         : request.method.id === "agent"
-          ? `Read the Dext JSON payload from stdin. This is preview-only: do not modify workspace files, install packages, or run state-changing commands. Return an AgentResult${includePatch ? ". When the task requests a change, include a complete applicable patch with exact before and after content." : " without a patch; report conclusions in text only."} ${progressInstruction}`
+          ? `This is preview-only: do not modify workspace files, install packages, or run state-changing commands. Return an AgentResult${includePatch ? ". When the task requests a change, include a complete applicable patch with exact before and after content." : " without a patch; report conclusions in text only."}`
           : request.method.id === "template"
-            ? `Read the Dext JSON payload from stdin. Do not modify workspace files, install packages, or run state-changing commands. Answer with the template's fields and nothing else: every field's value carries only that field's content, so never repeat the template's headings or section structure, which Dext renders from the template itself. A field declared as a line list takes one item per line and no list markers. Fields with fixed allowed values must use one of them verbatim. ${progressInstruction}`
-            : `Read the Dext JSON payload from stdin. Values tagged kind=dext-result are prior typed API results; inspect their value field. Execute the requested API ${request.allowWorkspaceWrite ? "and modify files only inside the current trusted workspace; do not install packages or change files outside it" : "without modifying workspace files, installing packages, or running state-changing commands"}. ${progressInstruction}`;
+            ? "Do not modify workspace files, install packages, or run state-changing commands. Answer with the template's fields and nothing else: every field's value carries only that field's content, so never repeat the template's headings or section structure, which Dext renders from the template itself. A field declared as a line list takes one item per line and no list markers. Fields with fixed allowed values must use one of them verbatim."
+            : `Execute the requested API ${request.allowWorkspaceWrite ? "and modify files only inside the current trusted workspace; do not install packages or change files outside it" : "without modifying workspace files, installing packages, or running state-changing commands"}.`;
     const serviceTier = request.speed === "fast" ? "priority" : request.speed === "standard" ? "default" : request.serviceTier || undefined;
     const processEnv = await this.processEnvironment(command, request);
     const permission = permissionForWrite(request.allowWorkspaceWrite, request.permission);
     const extraArguments = request.cliArguments ?? [];
-    const args: string[] = request.profile.provider === "codex"
-      ? codexCliArguments(request, schemaPath, permission, serviceTier, extraArguments)
-      : claudeCliArguments({ ...request, permission }, outputSchema, extraArguments);
     try {
-      const stdin = request.profile.provider === "codex"
-        ? `${prompt}\n\n${input}`
-        : `${prompt}\n\nDext JSON payload:\n${input}`;
+      const fixed = request.structuredApi ? structuredApiInstructions("provider-schema") : undefined;
+      const appended = fixed && request.profile.provider === "claude" &&
+        !extraArguments.some((arg) => /^--(?:json-schema|output-format|input-format|session-id)(?:=|$)/.test(arg))
+        ? claudeAppendArguments(extraArguments, nativeStructuredApiInstructions(fixed)) : undefined;
+      const native = appended && await this.claudeSupportsNativeInstructions(command, request.cwd, request.signal);
+      const args = request.profile.provider === "codex"
+        ? codexCliArguments(request, schemaPath, permission, serviceTier, extraArguments)
+        : claudeCliArguments({ ...request, permission }, outputSchema, native ? appended : extraArguments);
+      const stdin = request.structuredApi
+        ? structuredApiInput(`${instruction}\n\nDext JSON payload:\n${input}`, native ? undefined : fixed)
+        : `Read the Dext JSON payload from stdin. ${["agent", "template"].includes(request.method.id) ? "" : "Values tagged kind=dext-result are prior typed API results; inspect their value field. "}${instruction} ${progressInstruction}\n\n${request.profile.provider === "codex" ? "" : "Dext JSON payload:\n"}${input}`;
       const result = await this.runStreamingCli({
         provider: request.profile.provider,
         label: request.profile.label,
@@ -1515,24 +1570,41 @@ export class CliAgentRunner implements AgentRunner {
       return runCodexConversation(request, {
         command, env: await this.processEnvironment(command, request), resumeId, forkFromId, serviceTier,
         timeoutMs: this.timeoutMs, idleTimeoutMs: this.idleTimeoutMs,
-        onThread: (id) => {
+        onThread: (id, baseline) => {
           if (conversationKey) providerSessions.set(conversationKey, id);
-          request.metadata.onAgentSessionId?.("codex", id);
+          if (baseline) request.metadata.onAgentSessionId?.("codex", id, baseline);
+          else request.metadata.onAgentSessionId?.("codex", id);
         }
       });
     }
+    const sourceId = resumeId ?? forkFromId;
+    const proposed = conversationInstructionDelivery(request.input, request.conversationInstructions, "install");
+    const appended = request.profile.provider === "claude" && proposed.nativeInstructions
+      && (!sourceId || request.metadata.conversationInstructionBaseline?.sessionId === sourceId)
+      ? claudeAppendArguments(extraArguments, proposed.nativeInstructions)
+      : undefined;
+    const native = appended && await this.claudeSupportsNativeInstructions(command, request.cwd, request.signal);
+    const delivery = native ? proposed : conversationInstructionDelivery(request.input, request.conversationInstructions);
+    const cliArguments = native ? appended : extraArguments;
+    const reportSession = (id: string): void => {
+      if (conversationKey) providerSessions.set(conversationKey, id);
+      if (delivery.baseline) request.metadata.onAgentSessionId?.(request.profile.provider, id, delivery.baseline);
+      else request.metadata.onAgentSessionId?.(request.profile.provider, id);
+    };
+    const input = sourceId ? delivery.input : bootstrappedConversationInput(request.metadata.conversationContext, delivery.input);
+    const claudeOptions = {
+      ...request, permission, ...(sourceId ? { resumeId: sourceId } : {}),
+      forkSession: Boolean(forkFromId)
+    };
     // The control protocol needs a Dext surface to answer with; without one the
     // CLI keeps its own print-mode behaviour rather than being denied everything.
     if (request.profile.provider === "claude" && request.metadata.requestAgentInput && request.metadata.ui) {
-      return runClaudeConversation(request, {
+      return runClaudeConversation({ ...request, input }, {
         command,
-        args: claudeControlArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), forkSession: Boolean(forkFromId), ...(request.mcpServers?.length ? { mcpServers: request.mcpServers } : {}) }, extraArguments),
+        args: claudeControlArguments(claudeOptions, cliArguments),
         env: await this.processEnvironment(command, request),
         timeoutMs: this.timeoutMs, idleTimeoutMs: this.idleTimeoutMs,
-        onSession: (id) => {
-          if (conversationKey) providerSessions.set(conversationKey, id);
-          request.metadata.onAgentSessionId?.("claude", id);
-        }
+        onSession: reportSession
       });
     }
     const args = request.profile.provider === "codex"
@@ -1542,7 +1614,7 @@ export class CliAgentRunner implements AgentRunner {
           extraArguments,
           { persist: Boolean(conversationKey), ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkFromId } : {}), ...(request.mcpServers?.length ? { mcpServers: request.mcpServers } : {}) }
         )
-      : claudeConversationArguments({ ...request, permission, ...(resumeId ? { resumeId } : {}), ...(forkFromId ? { forkSession: true } : {}), ...(request.mcpServers?.length ? { mcpServers: request.mcpServers } : {}) }, extraArguments);
+      : claudeConversationArguments(claudeOptions, cliArguments);
     const processEnv = await this.processEnvironment(command, request);
     const controller = new AbortController();
     const timeout = agentTimeout(controller, this.timeoutMs, this.idleTimeoutMs);
@@ -1562,10 +1634,7 @@ export class CliAgentRunner implements AgentRunner {
         const providerSessionId = request.profile.provider === "codex"
           ? extractCodexThreadId(line)
           : extractClaudeSessionId(line);
-        if (conversationKey && providerSessionId) {
-          providerSessions.set(conversationKey, providerSessionId);
-          request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
-        }
+        if (conversationKey && providerSessionId) reportSession(providerSessionId);
         if (request.profile.provider === "codex") {
           const event = parseCodexStreamLine(line, streamPhases);
           if (event) request.onEvent?.(event);
@@ -1575,9 +1644,6 @@ export class CliAgentRunner implements AgentRunner {
       }
     };
     try {
-      const input = (resumeId || forkFromId)
-        ? request.input
-        : bootstrappedConversationInput(request.metadata.conversationContext, request.input);
       const result = await this.processRunner(command, args, input, request.cwd, controller.signal, onStdout, processEnv,
         { consume: cliCompletion(request.profile.provider) }, timeout.activity);
       if (eventBuffer) {
@@ -1585,10 +1651,7 @@ export class CliAgentRunner implements AgentRunner {
         const providerSessionId = request.profile.provider === "codex"
           ? extractCodexThreadId(eventBuffer)
           : extractClaudeSessionId(eventBuffer);
-        if (conversationKey && providerSessionId) {
-          providerSessions.set(conversationKey, providerSessionId);
-          request.metadata.onAgentSessionId?.(request.profile.provider, providerSessionId);
-        }
+        if (conversationKey && providerSessionId) reportSession(providerSessionId);
         if (request.profile.provider === "codex") {
           const event = parseCodexStreamLine(eventBuffer, streamPhases);
           if (event) request.onEvent?.(event);

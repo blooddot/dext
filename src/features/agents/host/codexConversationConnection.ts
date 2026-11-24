@@ -15,12 +15,15 @@ export class CodexConversationConnection {
   private buffer = "";
   private nextId = 0;
   private closed = false;
+  private serverVersion?: string;
   private readonly pending = new Map<number, {
     resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void;
     timer: ReturnType<typeof setTimeout>;
   }>();
 
   constructor(private readonly onMessage: (message: CodexRpcMessage) => void, private readonly onError: (error: Error) => void) {}
+
+  get version(): string | undefined { return this.serverVersion; }
 
   async start(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<void> {
     const child = spawn(command, args, {
@@ -36,10 +39,13 @@ export class CodexConversationConnection {
     child.on("error", () => this.fail(new Error("Unable to launch Codex App Server. Check the configured CLI executable.")));
     child.on("exit", () => this.fail(new Error("Codex App Server exited before completing the turn.")));
     child.stdin.on("error", () => this.fail(new Error("Codex App Server input pipe closed.")));
-    await this.request("initialize", {
+    const { userAgent } = await this.request("initialize", {
       clientInfo: { name: packageName, title: displayName, version: packageVersion },
       capabilities: { experimentalApi: true }
     });
+    if (typeof userAgent === "string" && userAgent.startsWith(`${packageName}/`)) {
+      this.serverVersion = userAgent.slice(packageName.length + 1).split(" ", 1)[0]!;
+    }
     this.write({ method: "initialized", params: {} });
   }
 

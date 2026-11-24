@@ -443,6 +443,24 @@ describe("CLI command resolution", () => {
     expect(inputs[1]).toBe("next");
   });
 
+  it.each(["cancelled", "transport failed"])("does not dispatch a submitted conversation again after it is %s", async (failure) => {
+    const inputs: string[] = [];
+    const controller = new AbortController();
+    const runner = new CliAgentRunner(1_000, async (_command, args, input) => {
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      inputs.push(input);
+      if (failure === "cancelled") controller.abort();
+      throw new Error(failure);
+    });
+    const request = conversationRequest("Write once", "single-turn");
+    request.conversationInstructions = { outputLanguage: "en" };
+    request.signal = controller.signal;
+    await expect(runner.runConversation(request)).rejects.toThrow(failure);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toContain("Dext instruction source for this turn: inline.");
+    expect(inputs[0]).toContain("Write once");
+  });
+
   it("bootstraps Claude conversations from Dext context", async () => {
     const inputs: string[] = [];
     const request = conversationRequest("continue", "claude-session");
@@ -456,6 +474,107 @@ describe("CLI command resolution", () => {
     await runner.runConversation(request);
     expect(inputs[0]).toContain("User: prior");
     expect(inputs[0]).toContain("New user message:\ncontinue");
+  });
+
+  it("rebuilds a supported Claude print-mode prompt for new, resumed and forked sessions", async () => {
+    const calls: { args: string[]; input: string }[] = [];
+    const report = vi.fn();
+    const runner = new CliAgentRunner(1_000, async (_command, args, input, _cwd, _signal, onStdout) => {
+      if (args[0] === "--version") return { stdout: "2.1.251 (Claude Code)\n", stderr: "", code: 0 };
+      calls.push({ args: [...args], input });
+      const id = args.includes("--fork-session") ? "forked" : "native";
+      const stdout = JSON.stringify({ type: "result", result: "ok", session_id: id });
+      onStdout?.(`${stdout}\n`);
+      return { stdout, stderr: "", code: 0 };
+    });
+    const request = conversationRequest("Task", "claude-print");
+    request.profile = { ...request.profile, id: "claude", provider: "claude", label: "Claude" };
+    request.cliArguments = ["--append-system-prompt=User Appendix", "--add-dir", process.cwd()];
+    await runner.runConversation({ ...request, conversationInstructions: { outputLanguage: "zh-CN" }, metadata: { ...request.metadata, onAgentSessionId: report } });
+    const baseline = { version: 1, outputLanguage: "zh-CN", sessionId: "native" } as const;
+    await runner.runConversation({
+      ...request, conversationInstructions: { outputLanguage: "en" },
+      metadata: { ...request.metadata, conversationProviderSessionId: "native", conversationInstructionBaseline: baseline, onAgentSessionId: report }
+    });
+    await runner.runConversation({
+      ...request, conversationInstructions: { outputLanguage: null },
+      metadata: { agentSessionId: "claude-fork", conversationForkFrom: "native", conversationInstructionBaseline: baseline, onAgentSessionId: report }
+    });
+    expect(calls.map((call) => call.input)).toEqual(["Task", "Task", "Task"]);
+    const append = calls.map(({ args }) => args[args.indexOf("--append-system-prompt") + 1]);
+    expect(append.every((text) => text?.startsWith("User Appendix\n\n"))).toBe(true);
+    expect(append[0]).toContain("Simplified Chinese (zh-CN)");
+    expect(append[1]).toContain("English (en)");
+    expect(append[2]).not.toMatch(/English|Simplified Chinese/);
+    expect(calls[1]?.args).toEqual(expect.arrayContaining(["--resume", "native"]));
+    expect(calls[2]?.args.slice(calls[2].args.indexOf("--resume"), calls[2].args.indexOf("--resume") + 3)).toEqual(["--resume", "native", "--fork-session"]);
+    expect(report.mock.calls).toEqual([
+      ["claude", "native", { version: 1, outputLanguage: "zh-CN" }],
+      ["claude", "native", { version: 1, outputLanguage: "en" }],
+      ["claude", "forked", { version: 1, outputLanguage: null }]
+    ]);
+  });
+
+  it.each([
+    { version: "2.1.200", extra: ["--append-system-prompt", "User Appendix"], resumeId: undefined },
+    { version: "2.1.251", extra: ["--append-system-prompt-file", "user.txt"], resumeId: undefined },
+    { version: "2.1.251", extra: ["--system-prompt-snapshot=on"], resumeId: "has-snapshot" },
+    { version: "2.1.251", extra: [], resumeId: "legacy-session" }
+  ])("keeps the user's Claude arguments on the ambiguous path %j", async ({ version, extra, resumeId }) => {
+    const launch = vi.fn<(command: string, args: readonly string[], input: string) => Promise<{ stdout: string; stderr: string; code: number }>>(async (_command, args) => ({
+      stdout: args[0] === "--version" ? `${version} (Claude Code)` : JSON.stringify({ type: "result", result: "ok" }),
+      stderr: "", code: 0
+    }));
+    const runner = new CliAgentRunner(1_000, launch);
+    const request = conversationRequest("Task", "claude-print");
+    request.profile = { ...request.profile, id: "claude", provider: "claude", label: "Claude" };
+    await runner.runConversation({
+      ...request, cliArguments: extra, conversationInstructions: { outputLanguage: "en" },
+      metadata: {
+        ...request.metadata, ...(resumeId ? { conversationProviderSessionId: resumeId } : {}),
+        ...(resumeId === "has-snapshot" ? { conversationInstructionBaseline: { sessionId: resumeId, version: 1, outputLanguage: "zh-CN" } } : {})
+      }
+    });
+    const [, args, input] = launch.mock.lastCall!;
+    expect(args).toEqual(claudeConversationArguments({ permission: "read-only", ...(resumeId ? { resumeId } : {}) }, extra));
+    expect(input).toContain("Dext instruction source for this turn: inline.");
+    expect(input).toContain("English (en)");
+  });
+
+  it.each(["codex", "claude"] as const)("delivers one structured instruction source with %s and retains its schema", async (provider) => {
+    const launched: { args: string[]; stdin: string }[] = [];
+    const runner = new CliAgentRunner(2_000, async (_command, args, stdin) => {
+      if (args[0] === "--version") return { stdout: "2.1.251 (Claude Code)", stderr: "", code: 0 };
+      if (args[0] === "login") return { stdout: "", stderr: "", code: 1 };
+      launched.push({ args: [...args], stdin });
+      const value = { kind: "ask", text: "ok" };
+      const frame = provider === "claude" ? { type: "result", structured_output: value }
+        : { type: "item.completed", item: { type: "agent_message", text: JSON.stringify(value) } };
+      return { stdout: JSON.stringify(frame), stderr: "", code: 0 };
+    });
+    const base = request();
+    const extra = provider === "claude" ? ["--append-system-prompt", "User appendix"] : ["--config", 'developer_instructions="User appendix"'];
+    const calls = [extra, provider === "claude" ? ["--append-system-prompt-file", "existing.txt"] : []];
+    for (const [index, cliArguments] of calls.entries()) {
+      await runner.run({
+        ...base, cwd: process.cwd(), structuredApi: true, cliArguments, metadata: { instruction: `Call-only rule ${index}` },
+        profile: { ...base.profile, provider, command: process.execPath }
+      });
+    }
+    const [first, second] = launched;
+    const fixed = "Read the labeled Dext JSON payload";
+    expect(first?.args).toContain(provider === "claude" ? "--json-schema" : "--output-schema");
+    expect(first?.args.join(" ")).toContain("User appendix");
+    expect(first?.stdin).toContain("Call-only rule 0");
+    expect(second?.stdin).toContain("Call-only rule 1");
+    expect(second?.stdin).not.toContain("Call-only rule 0");
+    const attached = first?.args.join(" ") ?? "";
+    if (provider === "claude") {
+      expect(attached.split(fixed)).toHaveLength(2);
+      expect(first?.stdin).not.toContain(fixed);
+      expect(second?.args).toEqual(expect.arrayContaining(["--append-system-prompt-file", "existing.txt", "--no-session-persistence"]));
+    } else expect(first?.stdin.split(fixed)).toHaveLength(2);
+    expect(second?.stdin.split(fixed)).toHaveLength(2);
   });
 
   it("maps each permission tier onto the flag its provider understands", () => {

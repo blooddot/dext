@@ -174,6 +174,8 @@ describe("template API", () => {
       let schema: { properties: Record<string, unknown>; required: string[] } | undefined;
       runtime.setAgentRunner({
         run: async (request) => {
+          expect(request).toMatchObject({ structuredApi: true, allowWorkspaceWrite: false, permission: "read-only" });
+          expect(request.metadata.instruction).toContain("Dext renders your field values");
           schema = request.contract.outputJsonSchema as typeof schema;
           return FIELD_VALUES;
         }

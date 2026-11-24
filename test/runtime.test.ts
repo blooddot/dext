@@ -3,6 +3,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
+import { CONVERSATION_SKILL_MANIFEST_HEADER, conversationInstructionDelivery, inlineConversationInput } from "../src/features/agents/domain/conversationInstructions.js";
+import { DefaultAgentRunner } from "../src/features/agents/host/agentRouter.js";
+import { PiAgentRunner } from "../src/features/agents/host/piAgentRunner.js";
+import { DeepSeekHarnessRunner } from "../src/features/agents/host/deepseekHarnessRunner.js";
+import type { ResolvedOutputLanguage } from "../src/shared/contracts/conversationInstructions.js";
 import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { ContextResolver } from "../src/features/workflow/host/contextResolver.js";
 import type { ContextHost } from "../src/shared/contracts/context.js";
@@ -15,7 +20,7 @@ import { dextResultSchema, mcpRawResultSchema } from "../src/shared/contracts/sc
 import { UI_VIEW_MAX_BYTES, UI_VIEW_MAX_DEPTH, UI_VIEW_MAX_NODES, UI_VIEW_NODE_TYPES } from "../src/shared/contracts/uiView.js";
 import { prepareHistoryTrace } from "../src/features/conversations/domain/agentTraceReplay.js";
 import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
-import type { AgentConversationRequest, AgentExecutionRequest, AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
+import { agentPayload, CliAgentRunner, type AgentConversationRequest, type AgentExecutionRequest, type AgentStructuredRequest } from "../src/features/agents/host/agentRunner.js";
 import type { UiFormDefinition } from "../src/shared/contracts/uiForm.js";
 import type {
   AgentResult,
@@ -863,6 +868,42 @@ describe("Dext runtime", () => {
     expect(runner.mock.lastCall?.[0].metadata.instruction).not.toContain("conversation-only");
   });
 
+  it("isolates each script call's full resources in its payload and stops before dispatch on read failures", async () => {
+    const { runtime } = setup();
+    runtime.setWorkspaceRoot(process.cwd());
+    runtime.setWorkspaceTrusted(true);
+    selectFakeAgent(runtime);
+    runtime.setAgentSelection({ profileId: "codex", skillLoading: "on-demand", skills: ["composer-only"] });
+    runtime.setSkillLoader(async (skill) => {
+      if (skill === "missing") throw new Error("SKILL.md unavailable");
+      return { sourcePath: `skills/${skill}/SKILL.md`, instructions: `# ${skill}\n\nRead the full ${skill} body.` };
+    });
+    runtime.setRuleLoader(async (path) => path.endsWith("missing.md") ? undefined : `Full rule ${path.split(/[\\/]/).at(-1)}.\nSecond line.`);
+    const run = vi.fn(async (request: AgentExecutionRequest) => ({ kind: request.method.id, text: "done" }));
+    runtime.setAgentRunner({ run });
+    const call = (skill: string, rule: string) => invoke("ask", [arg("input", "work"), arg("skills", [skill]), arg("rules", [rule])]);
+    await runtime.execute(call("one", "one.md"), [], { instruction: "Caller instruction." });
+    await runtime.execute(call("two", "two.md"));
+    await runtime.execute(invoke("plan", [arg("input", "outline")]));
+    const [one, two, plan] = run.mock.calls.map(([request]) => {
+      expect(request).toMatchObject({ structuredApi: true, allowWorkspaceWrite: false, permission: "read-only" });
+      const data = JSON.parse(agentPayload(request)) as { instruction?: string };
+      expect(data).not.toHaveProperty("structuredApi");
+      expect(JSON.stringify(data)).not.toMatch(/Read the labeled Dext JSON payload|composer-only/);
+      return data;
+    });
+    expect(one?.instruction).toMatch(/^Caller instruction\.[\s\S]*# one\n\nRead the full one body\.[\s\S]*Full rule one\.md\.\nSecond line\.$/);
+    expect(two?.instruction).toMatch(/# two\n\nRead the full two body\.[\s\S]*Full rule two\.md\.\nSecond line\.$/);
+    expect(two?.instruction).not.toMatch(/Caller instruction|one body|one\.md/);
+    expect(plan).not.toHaveProperty("instruction");
+    await expect(runtime.execute(call("missing", "one.md"))).rejects.toThrow("SKILL.md unavailable");
+    await expect(runtime.execute(call("one", "missing.md"))).rejects.toThrow("Unable to read rule 'missing.md'");
+    await expect(runtime.execute(call("one", "../outside.md"))).rejects.toThrow("rules must stay below .dext/rules.");
+    runtime.setWorkspaceTrusted(false);
+    await expect(runtime.execute(call("one", "one.md"))).rejects.toThrow("Skills require a trusted local workspace.");
+    expect(run).toHaveBeenCalledTimes(3);
+  });
+
   /** `.dext/api/spec` relies on `agent({ skills })` to write; `skill()` writes
    * only when the caller passes `apply: true`. If either half changes, the spec
    * APIs silently stop producing files. */
@@ -928,7 +969,7 @@ describe("Dext runtime", () => {
   });
 
   it.each(["codex", "claude", "deepseek-harness", "pi"] as const)(
-    "injects the resolved interaction language into %s Ask, Agent, and Plan turns",
+    "separates the fixed language instruction from %s Ask, Agent, and Plan input",
     async (provider) => {
       const { runtime } = setup();
       runtime.setWorkspaceTrusted(true);
@@ -946,15 +987,16 @@ describe("Dext runtime", () => {
       });
 
       const tasks = ["Explain the cache", "Update the cache", "Add a cache", "Implement the saved plan"];
-      await runtime.executeConversation("ask", tasks[0]!);
-      await runtime.executeConversation("agent", tasks[1]!);
-      await runtime.executeConversation("plan", tasks[2]!);
-      await runtime.executeConversation("plan", tasks[3]!, { executePlan: true });
+      await runtime.executeConversation("ask", tasks[0]!, {}, {});
+      await runtime.executeConversation("agent", tasks[1]!, {}, {});
+      await runtime.executeConversation("plan", tasks[2]!, {}, {});
+      await runtime.executeConversation("plan", tasks[3]!, { executePlan: true }, {});
 
       expect(requests).toHaveLength(4);
       for (const [index, request] of requests.entries()) {
-        expect(request.input).toContain("Interaction language set by Dext:");
-        expect(request.input).toContain("Simplified Chinese (zh-CN)");
+        expect(request.conversationInstructions?.outputLanguage).toBe("zh-CN");
+        expect(request.input).not.toContain("Interaction language set by Dext:");
+        expect(inlineConversationInput(request.input, request.conversationInstructions)).toContain("Simplified Chinese (zh-CN)");
         // The user's own sentence is not rewritten by the instruction.
         expect(request.input).toContain(tasks[index]!);
       }
@@ -1015,9 +1057,146 @@ describe("Dext runtime", () => {
       }
     });
 
-    await runtime.executeConversation("ask", "Explain the cache", { skills: ["review"] });
-    expect(requests[0]?.input).toContain("Simplified Chinese (zh-CN)");
-    expect(requests[0]?.input).not.toContain("English (en)");
+    await runtime.executeConversation("ask", "Explain the cache", { skills: ["review"] }, {});
+    const translation = "Reply in Japanese and translate 'cache'.";
+    await runtime.executeConversation("ask", translation, {}, {});
+    await runtime.executeConversation("ask", "Current language", {}, { outputLanguage: null });
+    expect(requests.map((request) => request.conversationInstructions?.outputLanguage)).toEqual(["zh-CN", "en", null]);
+    expect(requests[1]?.input).toBe(translation);
+    const message = inlineConversationInput(requests[1]!.input, requests[1]!.conversationInstructions);
+    expect(message).toContain("If the user explicitly asks for another language or a translation in this turn, follow that request instead.");
+    expect(message).toContain("Never translate machine-readable output");
+    expect(inlineConversationInput(requests[2]!.input, requests[2]!.conversationInstructions)).not.toContain("English (en)");
+  });
+
+  it("keeps direct resource draft prompts on the legacy inline contract", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    runtime.setOutputLanguage("en");
+    const runConversation = vi.fn<(request: AgentConversationRequest) => Promise<string>>(async () => "draft");
+    runtime.setAgentRunner({ run: async () => undefined, runConversation });
+    await runtime.executeConversation("ask", "Draft the resource");
+    const request = runConversation.mock.calls[0]![0];
+    expect(request.conversationInstructions).toBeUndefined();
+    expect(request.input).toContain("English (en)");
+    expect(request.input).toContain("Draft the resource");
+  });
+
+  it("persists a native instruction baseline against its provider session and removes it when that ID changes", async () => {
+    const { runtime } = setup();
+    selectFakeAgent(runtime);
+    const profile = { id: "codex", label: "Codex", provider: "codex", command: "codex", models: [] } as const;
+    const runConversation = vi.fn(async (request: AgentConversationRequest) => {
+      if (!request.metadata.conversationProviderSessionId) {
+        request.metadata.onAgentSessionId?.("codex", "native", { version: 1, outputLanguage: "zh-CN" });
+      } else {
+        request.metadata.onAgentSessionId?.("codex", "replacement");
+      }
+      return "done";
+    });
+    runtime.setAgentRunner({ run: async () => undefined, runConversation });
+    const executeConversation: NonNullable<Parameters<typeof createConversationHarness>[0]>["executeConversation"] =
+      async (mode, input, metadata, context) => ({
+        kind: "workflow", executions: [await runtime.executeConversation(mode, input, metadata, context)]
+      });
+    const h = createConversationHarness({ profiles: [{ ...profile, models: [] }], executeConversation });
+    try {
+      await h.seed([conversation("rules")]);
+      await h.coordinator.execute(h.controller.active(), "ask", "Start");
+      const stored = (await h.history.session("rules"))!;
+      expect(stored.providerInstructionBaselines?.codex).toEqual({ sessionId: "native", version: 1, outputLanguage: "zh-CN" });
+      const reopened = createConversationHarness({ profiles: [{ ...profile, models: [] }], executeConversation });
+      try {
+        await reopened.seed([stored]);
+        await reopened.coordinator.execute(reopened.controller.active(), "ask", "Resume");
+        expect(runConversation.mock.lastCall?.[0].metadata).toMatchObject({
+          conversationProviderSessionId: "native", conversationInstructionBaseline: stored.providerInstructionBaselines?.codex
+        });
+        const replaced = await reopened.history.session("rules");
+        expect(replaced?.providerSessions?.codex).toBe("replacement");
+        expect(replaced?.providerInstructionBaselines?.codex).toBeUndefined();
+      } finally { reopened.dispose(); }
+    } finally { h.dispose(); }
+  });
+
+  it("keeps provider sessions, Skill scope, Plan output, command and usage together through the composer", async () => {
+    const { runtime } = setup();
+    const providers = ["codex", "pi", "claude", "deepseek-harness"] as const;
+    const profiles = providers.map((provider) => ({ id: provider, provider, command: provider, label: provider, models: [] }));
+    runtime.setAgentProfiles(profiles);
+    runtime.setWorkspaceTrusted(true);
+    let revision = "v1", language: ResolvedOutputLanguage | undefined = "zh-CN";
+    runtime.setConversationSkillLookup(async (id, _root, provider) => ({
+      id, title: id, description: `Review with ${provider}`, revision, path: `skills/${provider}/${id}/SKILL.md`, changed: false
+    }));
+    runtime.setSkillLoader(async (id) => ({ sourcePath: `skills/${id}/SKILL.md`, instructions: "COMMAND_SKILL_BODY" }));
+    const cli = new CliAgentRunner(), pi = new PiAgentRunner(), harness = new DeepSeekHarnessRunner();
+    const router = new DefaultAgentRunner(cli, harness, pi);
+    const seen: { request: AgentConversationRequest; delivery: ReturnType<typeof conversationInstructionDelivery> }[] = [];
+    const usage = { inputTokens: 19, cachedInputTokens: 5, totalTokens: 23 };
+    const planOutput = "<!-- dext-plan:start -->\n# Cache Plan\n\n## Tasks\n- [ ] Check cache\n<!-- dext-plan:end -->";
+    const handle = async (request: AgentConversationRequest): Promise<string> => {
+      const provider = request.profile.provider;
+      const prior = request.metadata.conversationInstructionBaseline;
+      const native = provider === "claude" ? undefined : prior ?? "install";
+      const delivery = conversationInstructionDelivery(request.input, request.conversationInstructions, native);
+      seen.push({ request, delivery });
+      request.metadata.onAgentSessionId?.(provider, request.metadata.conversationProviderSessionId ?? `${provider}-native`, delivery.baseline);
+      request.onEvent?.({ phase: "status", text: "", usage });
+      return request.mode === "plan" ? planOutput : `Answer from ${provider}`;
+    };
+    vi.spyOn(cli, "runConversation").mockImplementation(handle);
+    vi.spyOn(pi, "runConversation").mockImplementation(handle);
+    vi.spyOn(harness, "runConversation").mockImplementation(handle);
+    runtime.setAgentRunner(router);
+    const h = createConversationHarness({
+      profiles, outputLanguage: () => language,
+      executeConversation: async (mode, input, metadata, context) => ({
+        kind: "workflow", executions: [await runtime.executeConversation(mode, input, metadata, context)]
+      }),
+      resolveSkillCommand: (_id, _skills, args) => ({
+        status: "ok", command: { id: "review", title: "Review", description: "", skillId: "command", template: "$ARGUMENTS",
+          instruction: `Review ${args}`, arguments: args }
+      })
+    });
+    try {
+      await h.seed([conversation("switching")]);
+      const session = h.controller.active();
+      const turn = async (provider: string, mode: "ask" | "plan" | "agent", source: string, skills: string[]) => {
+        h.controller.setSelection(session.id, { ...defaultSelection, profileId: provider, mode, skills, skillLoading: "on-demand" });
+        await h.coordinator.execute(session, mode, source);
+      };
+      await turn("codex", "ask", "Explain the cache", ["review", "old"]);
+      revision = "v2";
+      await turn("pi", "plan", "Plan the cache change", ["review"]);
+      await turn("claude", "agent", "/review cache.ts", ["review", "command"]);
+      await turn("deepseek-harness", "ask", "Summarize", []);
+      language = undefined;
+      revision = "v3";
+      await turn("codex", "ask", "Review the current version", ["review"]);
+      expect(seen.map(({ request }) => request.profile.provider)).toEqual([...providers, "codex"]);
+      expect(seen.slice(0, 4).every(({ request }) => !request.metadata.conversationProviderSessionId)).toBe(true);
+      expect(seen[0]?.delivery.nativeInstructions).toContain("Simplified Chinese (zh-CN)");
+      expect(seen[0]?.delivery.input).toContain('"name":"old"');
+      expect(seen[1]?.delivery.input).toMatch(/skills\/pi\/review\/SKILL\.md[\s\S]*dext-plan:start/);
+      expect(seen[1]?.request.allowWorkspaceWrite).toBe(false);
+      expect(seen[2]?.delivery.input).toMatch(/Dext instruction source for this turn: inline\.[\s\S]*COMMAND_SKILL_BODY[\s\S]*Review cache\.ts/);
+      expect(seen[2]?.request.allowWorkspaceWrite).toBe(true);
+      expect(seen[3]?.delivery.input).toContain(`${CONVERSATION_SKILL_MANIFEST_HEADER}\n[]`);
+      expect(seen[4]?.request.metadata).toMatchObject({
+        conversationProviderSessionId: "codex-native", conversationInstructionBaseline: { sessionId: "codex-native", outputLanguage: "zh-CN" }
+      });
+      expect(seen[4]?.delivery.input).toMatch(/Clear Dext's language preference[\s\S]*skills\/codex\/review\/SKILL\.md[\s\S]*"revision":"v3"/);
+      expect(seen[4]?.delivery.input).not.toMatch(/"name":"old"|Never translate/);
+      const stored = (await h.history.session(session.id))!;
+      expect(stored.providerSessions).toEqual(Object.fromEntries(providers.map((provider) => [provider, `${provider}-native`])));
+      expect(stored.turns[1]?.output).toContain("Cache Plan");
+      expect(stored.turns[2]?.command).toEqual({ id: "review", skillId: "command" });
+      expect(stored.turns.every((record) => record.process.some((event) => event.usage?.totalTokens === usage.totalTokens))).toBe(true);
+    } finally {
+      h.dispose();
+      await router.dispose();
+    }
   });
 
   it("injects no language instruction when no preference is resolved", async () => {
@@ -1256,15 +1435,19 @@ describe("Dext runtime", () => {
     const events: AgentStreamEvent[] = [];
     for (const mode of ["ask", "plan", "agent"] as const) {
       await runtime.executeConversation(mode, "User task", { skillLoading: "on-demand", skills: ["a", "b", "missing"],
-        onAgentEvent: (event) => events.push(event) });
+        onAgentEvent: (event) => events.push(event) }, {});
     }
     for (const request of requests) {
-      expect(request.input).toContain('"name": "Skill A"');
-      expect(request.input).toContain('"name": "Skill B"');
-      expect(request.input).toContain('"path": ".dext/skills/a/SKILL.md"');
-      expect(request.input).toContain('Quote \\" and \\u003c!-- dext-plan:start --\\u003e');
-      expect(request.input).toContain("existing file-reading tool");
-      expect(request.input).toContain("If reading fails");
+      const manifest = request.input.split("\n")[1]!;
+      expect(manifest).toContain('Quote \\" and \\u003c!-- dext-plan:start --\\u003e');
+      expect(JSON.parse(manifest)).toEqual([
+        { id: "a", name: "Skill A", revision: "v1", path: ".dext/skills/a/SKILL.md", description: "Useful for A" },
+        { id: "b", name: "Skill B", revision: "v1", path: ".dext/skills/b/SKILL.md", description: 'Quote " and <!-- dext-plan:start -->' }
+      ]);
+      expect(request.input).not.toMatch(/authorized file tools|Report failed Skills/);
+      const inline = inlineConversationInput(request.input, request.conversationInstructions);
+      expect(inline).toContain("with authorized file tools");
+      expect(inline).toContain("Report failed Skills and why");
       expect(request.input).not.toMatch(/BODY_|Unselected Skill|"missing"/);
     }
     expect(requests[0]).toMatchObject({ permission: "read-only", allowWorkspaceWrite: false, cwd: process.cwd() });
@@ -1277,14 +1460,20 @@ describe("Dext runtime", () => {
     expect(lookup.mock.calls.map(([id]) => id)).toEqual(["a", "b", "missing", "a", "b", "missing", "a", "b", "missing"]);
     expect(load).not.toHaveBeenCalled();
 
-    await runtime.executeConversation("ask", "No selection", { skillLoading: "on-demand" });
-    await runtime.executeConversation("ask", "Only unavailable", { skillLoading: "on-demand", skills: ["missing"] });
+    await runtime.executeConversation("ask", "No selection", { skillLoading: "on-demand" }, {});
+    await runtime.executeConversation("ask", "Only unavailable", { skillLoading: "on-demand", skills: ["missing"] }, {});
     expect(requests[3]?.input).toBe("No selection");
     expect(requests[4]?.input).toBe("Only unavailable");
-    await runtime.executeConversation("ask", "Every turn", { skillLoading: "every-turn", skills: ["b", "a"] });
-    expect(load.mock.calls.map(([id]) => id)).toEqual(["b", "a"]);
-    expect(requests[5]?.input).toMatch(/BODY_b[\s\S]*BODY_a/);
-    expect(requests[5]?.input).not.toContain("Available conversation Skills");
+    for (const mode of ["ask", "plan", "agent"] as const) {
+      await runtime.executeConversation(mode, "No selection", { skillLoading: "on-demand" }, {});
+      await runtime.executeConversation(mode, "Every turn", { skillLoading: "every-turn", skills: ["b", "a"] }, {});
+    }
+    expect(load.mock.calls.map(([id]) => id)).toEqual(["b", "a", "b", "a", "b", "a"]);
+    for (const request of requests.slice(5)) {
+      expect(request.input).not.toContain(CONVERSATION_SKILL_MANIFEST_HEADER);
+      if (request.input.endsWith("Every turn")) expect(request.input).toMatch(/BODY_b[\s\S]*BODY_a/);
+      else expect(request.input).not.toMatch(/BODY_/);
+    }
   });
 
   it("shows unavailable Skills when a completed background turn is reopened from history", async () => {
@@ -1293,8 +1482,8 @@ describe("Dext runtime", () => {
     runtime.setWorkspaceTrusted(true);
     runtime.setConversationSkillLookup(async (id) => { throw new Error(`No registered file for ${id}.`); });
     runtime.setAgentRunner({ run: async () => ({ kind: "agent", text: "unused" }), runConversation: async () => "reply" });
-    const h = createConversationHarness({ executeConversation: async (mode, input, metadata) => ({
-      kind: "workflow", executions: [await runtime.executeConversation(mode, input, metadata)]
+    const h = createConversationHarness({ executeConversation: async (mode, input, metadata, context) => ({
+      kind: "workflow", executions: [await runtime.executeConversation(mode, input, metadata, context)]
     }) });
     try {
       await h.seed([conversation("background"), conversation("visible")]);
@@ -1345,28 +1534,35 @@ describe("Dext runtime", () => {
       requests.push(request);
       return "reply";
     } });
-    const selection = { skillLoading: "on-demand" as const, skills: ["review"], agentSessionId: "conversation" };
-    await runtime.executeConversation("ask", "First", selection);
-    await runtime.executeConversation("ask", "Resumed", { ...selection, conversationProviderSessionId: "native" });
+    const selection = { skillLoading: "on-demand" as const, skills: ["review", "deploy"], agentSessionId: "conversation" };
+    await runtime.executeConversation("ask", "First", selection, {});
+    await runtime.executeConversation("ask", "Resumed", { ...selection, skills: ["review"], conversationProviderSessionId: "native" }, {});
     revision = "v2";
-    await runtime.executeConversation("ask", "Updated", { ...selection, agent: "claude" });
-    expect(lookup.mock.calls.map(([, , agent]) => agent)).toEqual(["codex", "codex", "claude"]);
-    expect(requests[1]?.input).toContain('"revision": "v1"');
-    expect(requests[1]?.input).toContain("the current list defines which Skills may be loaded or reused from earlier turns");
-    expect(requests[2]?.input).toContain('"path": "variants/claude/SKILL.md"');
-    expect(requests[2]?.input).toContain('"revision": "v2"');
-    expect(requests[2]?.input).toContain('"changed": true');
-    expect(requests[2]?.input).toContain("after resuming or context compaction");
+    await runtime.executeConversation("ask", "Updated", { ...selection, skills: ["review"], agent: "claude" }, {});
+    expect(lookup.mock.calls.map(([id, , agent]) => [id, agent])).toEqual([
+      ["review", "codex"], ["deploy", "codex"], ["review", "codex"], ["review", "claude"]
+    ]);
+    expect(requests[0]?.input).toContain('"id":"deploy"');
+    expect(requests[1]?.input).toContain('"revision":"v1"');
+    expect(requests[1]?.input).not.toContain('"id":"deploy"');
+    expect(requests[2]?.input).toContain('"path":"variants/claude/SKILL.md"');
+    expect(requests[2]?.input).toContain('"revision":"v2"');
+    expect(requests[2]?.input).not.toContain('"changed"');
+    for (const request of requests.slice(1)) {
+      expect(request.input).not.toContain("authorized file tools");
+      const message = inlineConversationInput(request.input, request.conversationInstructions);
+      expect(message).toContain("unless the full text for the same path and revision is in context");
+      expect(message).toContain("If the text or revision cannot be confirmed after recovery or compaction, read the current file.");
+    }
 
     const resumed = { ...selection, conversationProviderSessionId: "native", skills: [] };
-    await runtime.executeConversation("ask", "Deselected", resumed);
-    await runtime.executeConversation("ask", "Switched mode", { ...resumed, skillLoading: "every-turn" });
+    await runtime.executeConversation("ask", "Deselected", resumed, {});
+    await runtime.executeConversation("ask", "Switched mode", { ...resumed, skillLoading: "every-turn" }, {});
     for (const request of requests.slice(3)) {
       expect(request.metadata.conversationProviderSessionId).toBe("native");
-      expect(request.input).toContain("No conversation Skills are available for this turn.");
-      expect(request.input).toContain("Ignore conversation Skill instructions from earlier turns.");
+      expect(request.input).toContain(`${CONVERSATION_SKILL_MANIFEST_HEADER}\n[]`);
     }
-    expect(lookup).toHaveBeenCalledTimes(3);
+    expect(lookup).toHaveBeenCalledTimes(4);
   });
 
   it("keeps the configured host tools and requests native file reading for on-demand Skills", async () => {
@@ -1380,9 +1576,9 @@ describe("Dext runtime", () => {
     }));
     const runner = vi.fn<(request: AgentConversationRequest) => Promise<string>>(async () => "reply");
     runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: runner });
-    await runtime.executeConversation("ask", "Review", { skillLoading: "on-demand", skills: ["review"] });
+    await runtime.executeConversation("ask", "Review", { skillLoading: "on-demand", skills: ["review"] }, {});
     expect(runner.mock.lastCall?.[0]).toMatchObject({
-      input: expect.stringContaining("use your existing file-reading tool"), mcpServers: hostTools, permission: "read-only"
+      input: expect.stringContaining(".dext/skills/review/SKILL.md"), mcpServers: hostTools, permission: "read-only"
     });
   });
 
@@ -1401,20 +1597,20 @@ describe("Dext runtime", () => {
     runtime.setConversationSkillLookup(lookup);
     const runner = vi.fn<(request: AgentConversationRequest) => Promise<string>>(async () => "reply");
     runtime.setAgentRunner({ run: async () => ({ kind: "ask", text: "unused" }), runConversation: runner });
-    const choice = { skillLoading: "on-demand" as const, skills: ["other", "command-owner"] };
+    const choice = { skillLoading: "on-demand" as const, skills: ["other", "command-owner"], agentSessionId: "conversation" };
     const command = { ...choice, commandInstruction: "EXPANDED_COMMAND", commandSkillId: "command-owner" };
-    await runtime.executeConversation("plan", "Do work", { ...command, executePlan: true });
-    await runtime.executeConversation("plan", "Verify work", { ...command, executePlan: true });
+    await runtime.executeConversation("plan", "Do work", { ...command, executePlan: true }, {});
+    await runtime.executeConversation("plan", "Verify work", { ...command, executePlan: true }, {});
     for (const [request] of runner.mock.calls) {
       expect(request.input.match(/BODY_command-owner/g)).toHaveLength(1);
-      expect(request.input).toMatch(/BODY_command-owner[\s\S]*"id": "other"[\s\S]*EXPANDED_COMMAND/);
-      expect(request.input).not.toMatch(/BODY_other|"id": "command-owner"/);
+      expect(request.input).toMatch(/BODY_command-owner[\s\S]*"name":"other"[\s\S]*EXPANDED_COMMAND/);
+      expect(request.input).not.toMatch(/BODY_other|"name":"command-owner"|"id"/);
     }
     expect(load.mock.calls.map(([id]) => id)).toEqual(["command-owner", "command-owner"]);
     expect(lookup.mock.calls.map(([id]) => id)).toEqual(["other", "other"]);
 
-    await runtime.executeConversation("ask", "Next user message", choice);
-    expect(runner.mock.lastCall?.[0].input).toContain('"id": "command-owner"');
+    await runtime.executeConversation("ask", "Next user message", choice, {});
+    expect(runner.mock.lastCall?.[0].input).toContain('"name":"command-owner"');
     expect(runner.mock.lastCall?.[0].input).not.toMatch(/BODY_|EXPANDED_COMMAND/);
     expect(load).toHaveBeenCalledTimes(2);
     await expect(runtime.executeConversation("ask", "Run", { ...command, skills: ["other"] })).rejects.toThrow("Select the command's Skill");

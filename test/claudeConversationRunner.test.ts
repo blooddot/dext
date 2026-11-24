@@ -84,11 +84,13 @@ describe("Claude interactive conversations", () => {
     const cwd = resolve("test");
     const input = 'Available conversation Skills (JSON metadata):\n[{"path":".dext/skills/review/SKILL.md"}]\nRead the Skill.';
     const { request } = setup({ input, mode: "ask", cwd, permission: "read-only" });
-    const args = claudeControlArguments({ permission: "read-only" });
+    const args = claudeControlArguments({ permission: "read-only", resumeId: "source", forkSession: true },
+      ["--append-system-prompt", "User appendix\n\nDext native baseline"]);
     const reply = await runClaudeConversation(request, {
       command: process.execPath, args: [fixture, ...args], timeoutMs: 10_000, idleTimeoutMs: 5_000, onSession: vi.fn()
     });
     expect(JSON.parse(reply)).toMatchObject({ input, cwd, args });
+    expect(input).not.toContain("Dext native baseline");
   });
 
   it("reports the turn's billed usage from the result frame", async () => {

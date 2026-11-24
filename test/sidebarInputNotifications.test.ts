@@ -84,6 +84,7 @@ async function sidebarHarness(visible: boolean) {
     setAgentSelection: vi.fn(),
     endAgentSession: vi.fn(),
     agentProfiles: () => [],
+    outputLanguage: () => undefined,
     executeConversation,
     executeInput: vi.fn(),
     draftResource: vi.fn(),

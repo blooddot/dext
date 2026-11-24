@@ -12,6 +12,7 @@ import { installedPiPlugins } from "../features/agents/host/piPlugins.js";
 import { runSingleTurnCli } from "../features/agents/host/agentRunner.js";
 import { DEFAULT_AGENT_IDLE_TIMEOUT_MS, DEFAULT_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS } from "../features/agents/domain/agentTimeout.js";
 import { resolveOutputLanguage, type ResolvedOutputLanguage } from "../features/agents/domain/outputLanguage.js";
+import type { ConversationTurnContext } from "../features/agents/domain/conversationInstructions.js";
 import { REPAIR_OUTPUT_FIELD } from "../features/agents/domain/axAdapter.js";
 import { BUILTIN_METHODS } from "../features/workflow/domain/builtins.js";
 import { describeApiFlowIssue, type ApiFlow, type ApiFlowIssue } from "../features/workflow/contracts/apiFlow.js";
@@ -1003,6 +1004,10 @@ export class DextApplication {
     this.runtime.setOutputLanguage(this.resolvedOutputLanguage);
   }
 
+  outputLanguage(): ResolvedOutputLanguage | undefined {
+    return this.resolvedOutputLanguage;
+  }
+
   state(): SidebarState {
     const theme = loadEditorTokenTheme();
     const selection = this.agents.currentSelection();
@@ -1970,7 +1975,8 @@ export class DextApplication {
   async executeConversation(
     mode: "agent" | "ask" | "plan",
     input: string,
-    metadata: Readonly<ExecutionMetadata> = {}
+    metadata: Readonly<ExecutionMetadata> = {},
+    context: Readonly<ConversationTurnContext> = { outputLanguage: this.outputLanguage() ?? null }
   ): Promise<InputExecutionResponse> {
     let prompt = this.storage.attachmentPrompt(input);
     let expectedPlanHash: string | undefined;
@@ -1990,7 +1996,7 @@ export class DextApplication {
         prompt
       ].join("\n");
     }
-    const response = await this.runtime.executeConversation(mode, prompt, metadata);
+    const response = await this.runtime.executeConversation(mode, prompt, metadata, context);
     const saved = mode === "plan" && !metadata.executePlan
       ? await this.savePlan(input, response, metadata.planPath, expectedPlanHash)
       : response;

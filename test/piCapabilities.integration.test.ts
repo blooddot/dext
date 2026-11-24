@@ -22,7 +22,7 @@ async function setup() {
   const root = await mkdtemp(join(tmpdir(), "dext-pi-capabilities-"));
   cleanup.push(() => rm(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 50 }));
   const logPath = join(root, "protocol.jsonl");
-  const runner = new PiAgentRunner({ extensionPath: resolve("media/pi-extension.mjs"), sessionDirectory: join(root, "sessions"), versionProbe: async () => {},
+  const runner = new PiAgentRunner({ extensionPath: resolve("media/pi-extension.mjs"), sessionDirectory: join(root, "sessions"), versionProbe: async () => "1.5.2", plugins: () => [],
     transportFactory: (_command, args, cwd, env) => new PiRpcTransport(process.execPath, [resolve("test/fixtures/piAgent.mjs"), ...args], cwd, { ...env, PI_FIXTURE_LOG: logPath }) });
   cleanup.push(() => runner.dispose());
   const registry = new MethodRegistry(); registry.registerMany(BUILTIN_METHODS, "builtin");
@@ -47,7 +47,7 @@ describe("Pi with the actual Dext host modules", { timeout: 30000 }, () => {
     h.runtime.setConversationSkillLookup((id, cwd, agent) => catalog.describeForConversation(id, cwd, agent));
     const result = await h.runtime.executeConversation("ask", "Explain the change", {
       skillLoading: "on-demand", skills: ["review"], piPlugins: []
-    });
+    }, {});
     const log = await h.log();
     const startup = log.find((record) => record.startup)?.startup as string[];
     const prompt = log.find((record) => record.command === "prompt");
@@ -55,8 +55,10 @@ describe("Pi with the actual Dext host modules", { timeout: 30000 }, () => {
     expect(startup[startup.indexOf("--tools") + 1]?.split(",")).not.toContain("write");
     expect(startup).toContain("--no-skills");
     expect(startup).toContain("--no-mcp");
+    expect(startup[startup.lastIndexOf("--append-system-prompt") + 1]).toContain("current turn's conversation Skill manifest");
     expect(prompt?.message).toContain(".dext/skills/review/SKILL.md");
     expect(prompt?.message).not.toContain("PI_SKILL_BODY");
+    expect(prompt?.message).not.toContain("current turn's conversation Skill manifest");
     expect(result.result).toMatchObject({ kind: "ask", text: prompt?.message });
   });
 
@@ -113,7 +115,7 @@ describe("Pi with the actual Dext host modules", { timeout: 30000 }, () => {
     h.runtime.setAgentSelection({ profileId: "pi", permission: "workspace-write" });
     await expect(h.runtime.executeConversation("agent", "write")).rejects.toThrow("Explicitly select Full access");
     h.runtime.setAgentSelection({ profileId: "pi", permission: "full-access" });
-    await h.runtime.executeConversation("plan", "fixture:todo", { executePlan: true, onAgentEvent: (event) => events.push(event) });
+    await h.runtime.executeConversation("plan", "fixture:todo", { executePlan: true, onAgentEvent: (event) => events.push(event) }, {});
     // Only plan progress drives the Todo panel; a provider's own list is dropped.
     expect(events.some((event) => event.phase === "todo")).toBe(false);
     log = await h.log(); expect(log.filter((record) => record.startup).at(-1)?.startup).toContain("builtin:mcp");

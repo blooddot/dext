@@ -11,7 +11,7 @@ const run = promisify(execFile);
 
 export function harnessPresetHelper(): string {
   const packaged = join(__dirname, "..", "media", "harness-presets.mjs");
-  return existsSync(packaged) ? packaged : join(__dirname, "..", "..", "media", "harness-presets.mjs");
+  return existsSync(packaged) ? packaged : join(__dirname, "..", "..", "..", "..", "media", "harness-presets.mjs");
 }
 
 export interface HarnessInstallation {
@@ -22,6 +22,20 @@ export interface HarnessInstallation {
   entry: string;
   acpModule: string;
   env?: Record<string, string>;
+}
+
+export async function harnessNativePersona(profile: AgentProfile, cwd: string, preset?: string): Promise<string | undefined> {
+  if (preset && preset !== "standard" && preset !== "ptc") return undefined;
+  try {
+    const install = harnessInstallation(profile.command, cwd);
+    const result = await run(install.command, [...install.prefixArgs, install.entry, "--version"], {
+      cwd, windowsHide: true, timeout: 10_000, maxBuffer: 65536, env: { ...process.env, ...install.env }
+    });
+    if (result.stdout.trim() !== "0.2.1-rc.2") return undefined;
+    return install.entry.includes(".asar")
+      ? packagedModule(install.entry, "@deepseek-ai/dsh-agent")
+      : createRequire(install.entry).resolve("@deepseek-ai/dsh-agent");
+  } catch { return undefined; }
 }
 
 /**
@@ -105,7 +119,7 @@ export async function listHarnessPresets(profile: AgentProfile, cwd = process.cw
 }
 
 export async function harnessPresetPatch(profile: AgentProfile, id: string, permission: AgentPermission,
-  acp: Record<string, unknown> = {}, cwd = process.cwd()): Promise<unknown[]> {
+  acp: Record<string, unknown> = {}, cwd = process.cwd(), agentModule?: string): Promise<unknown[]> {
   const option = (await listHarnessPresets(profile, cwd)).find((row) => row.id === id);
   if (!option) throw new Error(`Harness preset '${id}' is unavailable. Refresh presets or choose another preset in a new conversation.`);
   if (option.error) throw new Error(`Harness preset '${id}': ${option.error}`);
@@ -122,8 +136,12 @@ export async function harnessPresetPatch(profile: AgentProfile, id: string, perm
       { id: "agent-preset-registry", name: "@deepseek-ai/dsh-agent-preset-registry", config: { default: id } },
       { id: "subagent-model-selection-settings", name: "@deepseek-ai/dsh-tool-subagent/model-selection-settings" },
       { id: "cordis-host-runner", name: "@deepseek-ai/dsh-cordis-host-runner" },
-      { id: "dext-acp-presets", name: pathToFileURL(harnessPresetHelper()).href, inject: ["acpAppStartup"],
-        config: { preset: id, acpModule: install.acpModule, acp } }
+      harnessAcpAdapter(install, acp, id, agentModule)
     ] }
   ];
+}
+
+export function harnessAcpAdapter(install: HarnessInstallation, acp: Record<string, unknown>, preset?: string, agentModule?: string): unknown {
+  return { id: "dext-acp-presets", name: pathToFileURL(harnessPresetHelper()).href, inject: ["acpAppStartup"],
+    config: { preset, acpModule: install.acpModule, acp, agentModule } };
 }

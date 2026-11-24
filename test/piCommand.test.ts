@@ -1,6 +1,8 @@
 import { join } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { checkPiVersion, piArguments, piCommand, piExtraArguments, piPermission, piTools } from "../src/features/agents/host/piCommand.js";
+import { checkPiVersion, piAppendArguments, piArguments, piCommand, piExtraArguments, piPermission, piTools } from "../src/features/agents/host/piCommand.js";
 
 describe("associating an installed Pi command", () => {
   it("offers the Dext bridge tools to a trusted read-only turn", () => {
@@ -29,6 +31,30 @@ describe("associating an installed Pi command", () => {
   it("does not let extra arguments override managed capabilities", () => {
     expect(piExtraArguments(["--append-system-prompt", "extra instruction"])).toHaveLength(2);
     for (const args of [["--tools", "bash"], ["--extension", "evil.mjs"], ["--append-system-prompt"], ["--", "prompt"], ["--mode=print"]]) expect(() => piExtraArguments(args)).toThrow();
+  });
+  it("preserves explicit append order and follows Pi discovery with --no-approve", async () => {
+    const root = await mkdtemp(join(tmpdir(), "dext-pi-append-"));
+    const project = join(root, "workspace"), agent = join(root, "agent");
+    const file = join(project, ".pi", "APPEND_SYSTEM.md"), global = join(agent, "APPEND_SYSTEM.md");
+    try {
+      await mkdir(join(project, ".pi"), { recursive: true });
+      await mkdir(agent);
+      await writeFile(file, "Project");
+      await writeFile(global, "Global");
+      const supplied = ["--append-system-prompt", "one", "--append-system-prompt", "two.txt"];
+      expect(await piAppendArguments(supplied, "Dext\nRules", agent)).toEqual([...supplied, "--append-system-prompt", "Dext Rules"]);
+      await writeFile(join(agent, "trust.json"), JSON.stringify({ [root]: true }));
+      const globalAppend = ["--append-system-prompt", global, "--append-system-prompt", "Dext"];
+      const extra = await piAppendArguments([], "Dext", agent);
+      expect(extra).toEqual(globalAppend);
+      for (const trusted of [true, false]) {
+        const args = piArguments({ extensionPath: "pi.mjs", sessionDirectory: "sessions", permission: "read-only", trusted, extra: extra! });
+        expect(args).toContain("--no-approve");
+        expect(args.filter((_value, index) => args[index - 1] === "--append-system-prompt")).toEqual([global, "Dext"]);
+      }
+      await rm(global);
+      expect(await piAppendArguments([], "Dext", agent)).toEqual(["--append-system-prompt", "Dext"]);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
   it("requires explicit full access for trusted writes and never upgrades a request", () => {
     expect(piPermission(false, "full-access", true)).toBe("read-only");

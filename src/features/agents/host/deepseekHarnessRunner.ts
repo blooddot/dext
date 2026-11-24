@@ -8,12 +8,15 @@ import { createHarnessPolicy, decodeHarnessSession, encodeHarnessSession, harnes
 import { DeepSeekHarnessTransport } from "./deepseekHarnessTransport.js";
 import { agentTodoEvent, normalizeAgentTodos } from "../domain/agentTodoTracking.js";
 import { elicitationQuestions, elicitationResponse, harnessInputQuestions, harnessQuestionAnswer, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "../domain/harnessQuestions.js";
-import { harnessInstallation, harnessPresetLayer, harnessPresetPatch } from "./harnessPresets.js";
+import { harnessAcpAdapter, harnessInstallation, harnessNativePersona, harnessPresetLayer, harnessPresetPatch } from "./harnessPresets.js";
 import { harnessResultEnvelope } from "../domain/harnessPresetDefault.js";
 import { formatDiagnostics, stripNullProperties } from "../../../shared/protocol/resultBoundary.js";
 import { harnessResultInstruction, harnessResultTool, type HarnessResultOutcome, type HarnessResultRequest } from "../domain/harnessResultTool.js";
 import type { AxMethodContract } from "../domain/axAdapter.js";
 import { agentTimeout, DEFAULT_AGENT_TIMEOUT_MS, DEFAULT_AGENT_IDLE_TIMEOUT_MS } from "../domain/agentTimeout.js";
+import { conversationInstructionDelivery } from "../domain/conversationInstructions.js";
+import type { NativeConversationBaseline } from "../../../shared/contracts/conversationInstructions.js";
+import { nativeStructuredApiInstructions, structuredApiInput, structuredApiInstructions } from "../domain/structuredInstructions.js";
 import type { AgentInputAnswers, AgentInputQuestion, AgentInputRequest, AgentInputState } from "../../../shared/contracts/types.js";
 
 /** A Harness turn plus the Dext contract its answer must satisfy. `run()` knows
@@ -27,7 +30,7 @@ export function acpMcpServers(servers: readonly AgentMcpServer[] | undefined): A
   }));
 }
 
-interface TurnRequest extends AgentConversationRequest { contract?: AxMethodContract }
+interface TurnRequest extends AgentConversationRequest { contract?: AxMethodContract; structuredInstruction?: string }
 type Request = TurnRequest;
 interface Session {
   id: string; binding: string; mcpKey: string; transport: DeepSeekHarnessTransport;
@@ -40,6 +43,8 @@ interface Session {
   timeout?: ReturnType<typeof agentTimeout> | undefined;
   /** Set once an update arrived with no turn to attribute it to. */
   lateReported?: boolean;
+  baseline?: NativeConversationBaseline;
+  nativePersona?: boolean;
 }
 
 export function harnessChoices(options: readonly SessionConfigOption[], id: string): { value: string; name: string; group?: string }[] {
@@ -114,8 +119,14 @@ export class DeepSeekHarnessRunner implements AgentRunner {
   private async open(request: Request, binding: string, settings?: HarnessLaunchSettings): Promise<Session> {
     if (request.signal?.aborted) throw new ExecutionCancelledError();
     const permission = request.allowWorkspaceWrite ? request.permission ?? "workspace-write" : "read-only";
+    const agentModule = request.conversationInstructions || request.structuredInstruction
+      ? await harnessNativePersona(request.profile, request.cwd, request.agentPreset) : undefined;
+    const acp = settings?.defaultModel ? { ...settings.defaultModel } : {};
     const presetPatch = request.agentPreset
-      ? await harnessPresetPatch(request.profile, request.agentPreset, permission, settings?.defaultModel ? { ...settings.defaultModel } : {}, request.cwd) : [];
+      ? await harnessPresetPatch(request.profile, request.agentPreset, permission, acp, request.cwd, agentModule)
+      : agentModule ? [{ id: "acp", disabled: true }, { insert: [harnessAcpAdapter(
+        harnessInstallation(request.profile.command, request.cwd), acp, undefined, agentModule
+      )] }] : [];
     // 0.2.x ships each preset as its own composition patch, which has to arrive
     // as a launcher layer before Dext's policy overlay.
     const presetLayer = request.agentPreset
@@ -138,7 +149,18 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       const resume = saved?.binding === binding && !request.metadata.conversationForkFrom ? saved.id : undefined;
       if (request.signal?.aborted) throw new ExecutionCancelledError();
       const opened = await this.openSession(transport, request, resume);
-      session = { ...opened, binding, mcpKey: JSON.stringify(request.mcpServers ?? []), transport, policy, defaults: new Map(), messages: new Map(), tools: new Map() };
+      session = { ...opened, binding, mcpKey: JSON.stringify(request.mcpServers ?? []), transport, policy, defaults: new Map(), messages: new Map(), tools: new Map(),
+        ...(agentModule ? { nativePersona: true } : {}) };
+      if (agentModule && request.conversationInstructions) {
+        const recorded = request.metadata.conversationInstructionBaseline;
+        const prior = !opened.fresh && recorded?.sessionId === request.metadata.conversationProviderSessionId ? recorded : undefined;
+        const instructions = prior ? { outputLanguage: prior.outputLanguage } : request.conversationInstructions;
+        const delivery = conversationInstructionDelivery(request.input, instructions, "install");
+        if (delivery.nativeInstructions && delivery.baseline && (opened.fresh || prior?.version === delivery.baseline.version)
+            && await transport.appendPersona(opened.id, delivery.nativeInstructions, request.signal)) {
+          session.baseline = delivery.baseline;
+        }
+      }
       for (const option of session.options) if (option.type === "select") session.defaults.set(option.id, option.currentValue);
       return session;
     } catch (error) { await transport?.close(); await policy.dispose(); throw error; }
@@ -406,10 +428,15 @@ export class DeepSeekHarnessRunner implements AgentRunner {
     // long session and the model answers in Markdown. The shared result boundary
     // still owns tolerant parsing.
     const schema = JSON.stringify(request.contract.outputJsonSchema);
-    const input = `${harnessResultEnvelope(request.contract.outputJsonSchema)}\n\n${patchInstruction}\nDext JSON payload:\n${agentPayload(request)}\nReturn only a JSON object matching this schema as your final message: ${schema}\nNo markdown fence, no text before or after the object.`;
+    const payload = `${patchInstruction}\nDext JSON payload:\n${agentPayload(request)}`;
+    const input = request.structuredApi
+      ? `${payload}\nResult schema: ${schema}`
+      : `${harnessResultEnvelope(request.contract.outputJsonSchema)}\n\n${payload}\nReturn only a JSON object matching this schema as your final message: ${schema}\nNo markdown fence, no text before or after the object.`;
     const metadata = { ...request.metadata };
     delete metadata.agentSessionId; delete metadata.conversationProviderSessionId; delete metadata.conversationForkFrom; delete metadata.onAgentSessionId;
-    return this.runConversation({ ...request, input, mode: "ask", allowWorkspaceWrite: Boolean(request.allowWorkspaceWrite), metadata });
+    delete metadata.conversationInstructionBaseline;
+    return this.runConversation({ ...request, input, mode: "ask", allowWorkspaceWrite: Boolean(request.allowWorkspaceWrite), metadata,
+      ...(request.structuredApi ? { structuredInstruction: structuredApiInstructions("result-tool") } : {}) });
   }
 
   runConversation(request: Request): Promise<string> {
@@ -451,14 +478,22 @@ export class DeepSeekHarnessRunner implements AgentRunner {
       session.request = active; session.messages.clear(); session.tools.clear(); session.submitted = undefined;
       await this.select(session, active);
       if (controller.signal.aborted) throw controller.signal.reason;
-      request.metadata.onAgentSessionId?.("deepseek-harness", encodeHarnessSession(session.id, binding));
+      const sessionId = encodeHarnessSession(session.id, binding);
+      if (session.baseline) request.metadata.onAgentSessionId?.("deepseek-harness", sessionId, session.baseline);
+      else request.metadata.onAgentSessionId?.("deepseek-harness", sessionId);
       const current = session;
       // Publish the turn's result tool before the prompt so the model's first
       // request already carries it, and only where the call has a contract: a
       // conversation turn has none to submit against.
       const tool = active.contract ? harnessResultTool(active.contract.outputJsonSchema) : undefined;
       registered = tool !== undefined && await session.transport.publishResultTool(tool, controller.signal);
-      const turnInput = session.fresh ? bootstrappedConversationInput(request.metadata.conversationContext, request.input) : request.input;
+      const nativeStructured = registered && session.nativePersona && request.structuredInstruction &&
+        await session.transport.appendPersona(session.id, nativeStructuredApiInstructions(request.structuredInstruction), controller.signal);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      const message = request.structuredInstruction
+        ? structuredApiInput(request.input, nativeStructured ? undefined : request.structuredInstruction)
+        : conversationInstructionDelivery(request.input, request.conversationInstructions, session.baseline).input;
+      const turnInput = session.fresh ? bootstrappedConversationInput(request.metadata.conversationContext, message) : message;
       session.fresh = false;
       const input = registered ? `${harnessResultInstruction()}\n\n${turnInput}` : turnInput;
       let abortListener: (() => void) | undefined;

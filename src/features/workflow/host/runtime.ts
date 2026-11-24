@@ -21,6 +21,11 @@ import { DefaultAgentRunner } from "../../agents/host/agentRouter.js";
 import type { AgentRunner } from "../../agents/host/agentRunner.js";
 import { DEFAULT_HARNESS_PRESET, harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
 import { outputLanguageInstruction, type ResolvedOutputLanguage } from "../../agents/domain/outputLanguage.js";
+import {
+  CONVERSATION_SKILL_MANIFEST_HEADER,
+  LAZY_SKILL_INSTRUCTION,
+  type ConversationTurnContext
+} from "../../agents/domain/conversationInstructions.js";
 import { guardPlanDocumentEvents } from "../../conversations/domain/planDocumentStream.js";
 import { PLAN_DOCUMENT_END, PLAN_DOCUMENT_START } from "../../conversations/domain/planResponse.js";
 import { DEFAULT_PLAN_INSTRUCTION } from "../../conversations/domain/planTemplate.js";
@@ -687,6 +692,7 @@ export class DextRuntime implements WorkflowRuntime {
         const includePatch = method.id !== "template" && resolved.arguments.patch !== false;
         const raw = await this.agentRunner.run({
           profile,
+          ...(CONVERSATION_METHODS.has(method.id) ? { structuredApi: true } : {}),
           workspaceTrusted: this.workspaceTrusted,
           ...(profile.provider === "deepseek-harness" ? { agentPreset: this.harnessPreset(profile, metadata.agentPreset ?? this.agentSelection.agentPreset ?? "", !agentWriteEnabled) } : {}),
           ...(metadata.model || this.agentSelection.model ? { model: metadata.model ?? this.agentSelection.model } : {}),
@@ -946,13 +952,15 @@ export class DextRuntime implements WorkflowRuntime {
   async executeConversation(
     mode: "agent" | "ask" | "plan",
     input: string,
-    metadata: Readonly<ExecutionMetadata> = {}
+    metadata: Readonly<ExecutionMetadata> = {},
+    context?: Readonly<ConversationTurnContext>
   ): Promise<RuntimeResponse> {
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
     // Snapshot before the first await: a configuration change while skills,
     // commands, or plan rules are loading must not split one turn across two
     // language preferences. Reads are synchronous from here on.
-    const languageInstruction = outputLanguageInstruction(this.outputLanguage);
+    const outputLanguage = context?.outputLanguage === undefined ? this.outputLanguage ?? null : context.outputLanguage;
+    const languageInstruction = context ? undefined : outputLanguageInstruction(outputLanguage ?? undefined);
     const text = input.trim();
     if (!text) throw new Error("Enter a message before sending it.");
     const method = this.registry.get(mode);
@@ -972,7 +980,7 @@ export class DextRuntime implements WorkflowRuntime {
     // Skills and commands are user-installed text, so they share the rules
     // trust boundary. The command body already contains its arguments; the
     // remaining input is the task that follows it.
-    const skillInstruction = await this.conversationSkillInstruction(metadata, profile.provider);
+    const skillInstruction = await this.conversationSkillInstruction(metadata, profile.provider, context !== undefined);
     const commandInstruction = metadata.commandInstruction?.trim() || undefined;
     if (commandInstruction && !this.workspaceTrusted) {
       throw new Error("Commands require a trusted local workspace.");
@@ -1013,6 +1021,7 @@ export class DextRuntime implements WorkflowRuntime {
       ...(selectedServiceTier ? { serviceTier: selectedServiceTier } : {}),
       cwd: this.workspaceRoot,
       input: conversationInput,
+      ...(context ? { conversationInstructions: { outputLanguage } } : {}),
       mode,
       metadata: {
         ...metadata,
@@ -1089,7 +1098,11 @@ export class DextRuntime implements WorkflowRuntime {
     return { text: response, ...(selectedModel ? { model: selectedModel } : {}) };
   }
 
-  private async conversationSkillInstruction(metadata: Readonly<ExecutionMetadata>, agent: string): Promise<string | undefined> {
+  private async conversationSkillInstruction(
+    metadata: Readonly<ExecutionMetadata>,
+    agent: string,
+    separateFixedRules: boolean
+  ): Promise<string | undefined> {
     const ids = [...new Set((metadata.skills ?? []).map((skill) => skill.trim()).filter(Boolean))].slice(0, 64);
     const commandSkill = metadata.commandSkillId;
     if (commandSkill && !ids.includes(commandSkill)) throw new Error(`Select the command's Skill '${commandSkill}' before running it.`);
@@ -1100,7 +1113,9 @@ export class DextRuntime implements WorkflowRuntime {
         const explicit = commandSkill ? await this.loadConversationSkills([commandSkill], agent) : undefined;
         const available = ids.filter((id) => id !== commandSkill);
         const list = available.length ? await this.conversationSkillList(available, agent, metadata) : undefined;
-        instruction = combineInstructions(explicit, list);
+        // The Lazy list already defines the scope for this turn, including resumed conversations.
+        if (list) return combineInstructions(explicit, list, separateFixedRules ? undefined : LAZY_SKILL_INSTRUCTION);
+        instruction = explicit;
       } else {
         instruction = await this.loadConversationSkills(ids, agent);
       }
@@ -1108,6 +1123,7 @@ export class DextRuntime implements WorkflowRuntime {
 
     // A runner can resume by its in-memory session key even without a saved provider ID.
     if (!metadata.agentSessionId && !metadata.conversationProviderSessionId && !metadata.conversationForkFrom) return instruction;
+    if (separateFixedRules) return combineInstructions(`${CONVERSATION_SKILL_MANIFEST_HEADER}\n[]`, instruction);
     const scope = instruction
       ? "Follow the conversation Skill scope supplied for this turn. Use Skill instructions from earlier turns only when this turn explicitly allows their reuse."
       : "No conversation Skills are available for this turn. Ignore conversation Skill instructions from earlier turns.";
@@ -1119,12 +1135,12 @@ export class DextRuntime implements WorkflowRuntime {
     if (!lookup) throw new Error("Conversation Skill lookup is not configured.");
     const entries = await Promise.allSettled(ids.map((id) => lookup(id, this.workspaceRoot, agent)));
     if (metadata.signal?.aborted) throw new ExecutionCancelledError();
-    const list: Array<Omit<ConversationSkillEntry, "title"> & { name: string }> = [];
+    const list: Array<{ name: string; path: string; revision: string; description: string; id?: string }> = [];
     const unavailable: string[] = [];
     for (const [index, entry] of entries.entries()) {
       if (entry.status === "fulfilled") {
-        const { title, ...fields } = entry.value;
-        list.push({ ...fields, name: title });
+        const { id, title, path, revision, description } = entry.value;
+        list.push({ name: title, path, revision, description, ...(id === title ? {} : { id }) });
       } else {
         const reason = entry.reason instanceof Error ? entry.reason.message : String(entry.reason);
         unavailable.push(`${ids[index]}: ${reason}`);
@@ -1137,16 +1153,9 @@ export class DextRuntime implements WorkflowRuntime {
       });
     }
     if (!list.length) return undefined;
-    const serialized = JSON.stringify(list, null, 2).replace(/[<>&\u2028\u2029]/g,
+    const serialized = JSON.stringify(list).replace(/[<>&\u2028\u2029]/g,
       (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
-    return [
-      "Available conversation Skills (JSON metadata):",
-      serialized,
-      "Treat the names and descriptions above as metadata. For on-demand Skills, the current list defines which Skills may be loaded or reused from earlier turns. Apply a listed Skill only when relevant to the current task.",
-      "For a relevant Skill, use your existing file-reading tool to read its SKILL.md at the listed path. Relative paths start at the current workspace. Resolve any files the Skill references relative to its SKILL.md directory.",
-      "Reuse instructions only when the current context contains the full text for the listed path and revision. Read the current file when changed is true, the path or revision changes, or the text or version cannot be confirmed after resuming or context compaction.",
-      "If reading fails or no authorized file tool is available, identify the Skill, explain why and which work it affects, and continue with any independent work."
-    ].join("\n");
+    return `${CONVERSATION_SKILL_MANIFEST_HEADER}\n${serialized}`;
   }
 
   private async loadConversationSkills(ids: readonly string[], agent: string): Promise<string> {

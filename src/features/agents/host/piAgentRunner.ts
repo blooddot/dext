@@ -13,22 +13,27 @@ import { formatDiagnostics, stripNullProperties } from "../../../shared/protocol
 import { insideRoot } from "../../../platform/node/insideRoot.js";
 import { resultToolParameters } from "../domain/harnessResultTool.js";
 import { agentPayload, bootstrappedConversationInput, type AgentConversationRequest, type AgentExecutionRequest, type AgentRunner } from "./agentRunner.js";
-import { piArguments, piCommand, piPermission, piTools, checkPiVersion } from "./piCommand.js";
+import { piAppendArguments, piArguments, piCommand, piPermission, piTools, checkPiVersion } from "./piCommand.js";
 import { installedPiPlugins, type PiPlugin } from "./piPlugins.js";
 import { piFetch } from "./piFetch.js";
 import { PiBridge } from "./piBridge.js";
 import { piQuestion, piUi } from "./piInteractions.js";
 import { PiRpcTransport } from "./piRpcTransport.js";
 import { piSessionCwd } from "./piSessionHeader.js";
+import { conversationInstructionDelivery } from "../domain/conversationInstructions.js";
+import type { NativeConversationBaseline } from "../../../shared/contracts/conversationInstructions.js";
+import { nativeStructuredApiInstructions, structuredApiInput, structuredApiInstructions } from "../domain/structuredInstructions.js";
 
-type TurnRequest = AgentConversationRequest & { contract?: AgentExecutionRequest["contract"] };
+const PI_NATIVE_INSTRUCTION_VERSION = "1.5.2";
+
+type TurnRequest = AgentConversationRequest & { contract?: AgentExecutionRequest["contract"]; structuredInstruction?: string };
 export interface PiDiscovery { options: AgentModelOption[]; defaults: { model?: string; reasoningEffort?: string } }
 export interface PiRunnerOptions {
   extensionPath?: string; sessionDirectory?: string;
   /** Installed Pi packages; absent means the user's real Pi settings. */
   plugins?: () => readonly PiPlugin[];
   transportFactory?: (command: string, args: readonly string[], cwd: string, env: NodeJS.ProcessEnv) => PiRpcTransport;
-  versionProbe?: (command: string, cwd: string, signal?: AbortSignal) => Promise<void>;
+  versionProbe?: (command: string, cwd: string, signal?: AbortSignal) => Promise<string | void>;
 }
 interface Active {
   request: TurnRequest; controller: AbortController; timeout: AgentTimeout; events: PiEvents;
@@ -36,10 +41,19 @@ interface Active {
   uiIds: Set<string>;
 }
 interface Session { binding: string; transport: PiRpcTransport; bridge: PiBridge; state: PiState; fresh: boolean; active?: Active | undefined;
+  baseline?: NativeConversationBaseline;
+  nativeStructured?: boolean;
   /** Pi keeps running after `agent_settled` when a plugin wakes it; this reports
    * those runs so the host records them instead of dropping their output. */
   wake?: ((report: AgentWakeReport) => void) | undefined; wakeRun?: { events: PiEvents } | undefined }
 interface Queued { key: string; controller: AbortController }
+interface PiLaunch {
+  resume?: string;
+  ephemeral?: boolean;
+  extra?: readonly string[];
+  baseline?: NativeConversationBaseline;
+  nativeStructured?: boolean;
+}
 /** A finished turn keeps its Pi process warm for the next turn. An idle process
  * only holds memory, and Pi has already written the conversation to its session
  * file, which the next turn resumes from. */
@@ -146,7 +160,7 @@ export class PiAgentRunner implements AgentRunner {
       throw new Error(`${reason} The model may no longer be offered by Pi; refresh the model catalog in Dext: Configure Agent.`);
     }
   }
-  private async open(request: TurnRequest, command: string, binding: string, signal: AbortSignal, resume?: string, ephemeral = false): Promise<Session> {
+  private async open(request: TurnRequest, command: string, binding: string, signal: AbortSignal, launch: PiLaunch = {}): Promise<Session> {
     const resources = this.resources(); await mkdir(resources.sessionDirectory, { recursive: true });
     const permission = piPermission(request.allowWorkspaceWrite, request.permission, request.workspaceTrusted);
     const plugins = this.pluginPaths(request);
@@ -156,12 +170,14 @@ export class PiAgentRunner implements AgentRunner {
       ...(request.contract ? { resultSchema: resultToolParameters(request.contract.outputJsonSchema) } : {}) }, (frame) => this.bridgeRequest(session, frame));
     let transport: PiRpcTransport | undefined;
     try {
-      const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral, plugins,
+      const extra = launch.extra ?? request.cliArguments;
+      const args = piArguments({ ...resources, trusted: request.workspaceTrusted === true, permission, result: Boolean(request.contract), ephemeral: Boolean(launch.ephemeral), plugins,
         mcpServers: request.mcpServers ?? [],
-        ...(resume ? { sessionPath: resume } : {}), ...(request.cliArguments ? { extra: request.cliArguments } : {}) });
+        ...(launch.resume ? { sessionPath: launch.resume } : {}), ...(extra ? { extra } : {}) });
       transport = (this.options.transportFactory ?? ((program, argv, cwd, env) => new PiRpcTransport(program, argv, cwd, env)))(command, args, request.cwd,
         { ...process.env, DEXT_PI_BRIDGE: bridge.endpoint, DEXT_PI_BRIDGE_TOKEN: bridge.token });
-      session = { binding, transport, bridge, state: {}, fresh: !resume };
+      session = { binding, transport, bridge, state: {}, fresh: !launch.resume, ...(launch.baseline ? { baseline: launch.baseline } : {}),
+        ...(launch.nativeStructured ? { nativeStructured: true } : {}) };
       const current = session;
       transport.onRecord = (frame) => this.record(current, frame);
       transport.onFailure = (error) => current.active?.reject(error);
@@ -300,7 +316,7 @@ export class PiAgentRunner implements AgentRunner {
       const request: TurnRequest = { profile, cwd, mode: "ask", input: "", metadata: { piPlugins: [] }, allowWorkspaceWrite: false, workspaceTrusted: trusted, cliArguments: args };
       const command = piCommand(profile); await (this.options.versionProbe ?? checkPiVersion)(command, cwd, controller.signal);
       const binding = await this.binding(request, command);
-      session = await this.open(request, command, binding, controller.signal, undefined, true);
+      session = await this.open(request, command, binding, controller.signal, { ephemeral: true });
       const defaults = session.state; this.defaults.set(binding, defaults);
       const models = piModels(piObject(await session.transport.request("get_available_models", {}, 30000, controller.signal)).models);
       const levels = new Map<string, string[]>();
@@ -314,10 +330,14 @@ export class PiAgentRunner implements AgentRunner {
   run(request: AgentExecutionRequest): Promise<unknown> {
     const metadata = { ...request.metadata };
     delete metadata.agentSessionId; delete metadata.conversationProviderSessionId; delete metadata.conversationForkFrom; delete metadata.onAgentSessionId;
+    delete metadata.conversationInstructionBaseline;
     const write = request.allowWorkspaceWrite === true;
     const patch = request.includePatch === false ? "Do not include a patch; report conclusions in text only." : write ? "Include an auditable patch when possible." : "Return a complete applicable patch for requested edits without editing files.";
-    const input = `Submit the final result through dext_submit_result. Fix validation errors in this same turn.\n${write ? "Execute the requested task with the granted write scope." : "This is a read-only API call."} ${patch}\nDext payload:\n${agentPayload(request)}\nIf the result tool is unavailable, return only JSON matching this schema: ${JSON.stringify(request.contract.outputJsonSchema)}`;
-    return this.runConversation({ ...request, input, metadata, mode: "ask", allowWorkspaceWrite: write });
+    const label = request.structuredApi ? "Dext JSON payload" : "Dext payload";
+    const schemaLabel = request.structuredApi ? "Result schema" : "If the result tool is unavailable, return only JSON matching this schema";
+    const data = `Submit the final result through dext_submit_result. Fix validation errors in this same turn.\n${write ? "Execute the requested task with the granted write scope." : "This is a read-only API call."} ${patch}\n${label}:\n${agentPayload(request)}\n${schemaLabel}: ${JSON.stringify(request.contract.outputJsonSchema)}`;
+    return this.runConversation({ ...request, input: data, metadata, mode: "ask", allowWorkspaceWrite: write,
+      ...(request.structuredApi ? { structuredInstruction: structuredApiInstructions("result-tool") } : {}) });
   }
   runConversation(request: TurnRequest): Promise<string> {
     if (this.disposed) return Promise.reject(new ExecutionCancelledError());
@@ -341,7 +361,7 @@ export class PiAgentRunner implements AgentRunner {
     const onAbort = (): void => active?.reject(controller.signal.reason instanceof Error ? controller.signal.reason : new ExecutionCancelledError());
     controller.signal.addEventListener("abort", onAbort, { once: true });
     try {
-      const command = piCommand(request.profile); await (this.options.versionProbe ?? checkPiVersion)(command, request.cwd, controller.signal);
+      const command = piCommand(request.profile);
       const binding = await this.binding(request, command);
       session = this.sessions.get(key);
       if (session) this.forgetRecycle(key);
@@ -355,12 +375,32 @@ export class PiAgentRunner implements AgentRunner {
           if (moved) throw new Error(`The workspace recorded by this Pi session no longer exists (${moved}), so the session cannot be resumed. It was moved or deleted. Start a new conversation, or start again in the new location.`);
         }
       }
-      if (resume && !this.defaults.has(binding)) {
-        const clean = await this.open(request, command, binding, controller.signal, undefined, true);
-        try { this.defaults.set(binding, clean.state); await this.select(clean, request, clean.state, controller.signal); }
-        finally { await this.close(clean); }
+      if (!session) {
+        const version = await (this.options.versionProbe ?? checkPiVersion)(command, request.cwd, controller.signal);
+        if (resume && !this.defaults.has(binding)) {
+          const clean = await this.open(request, command, binding, controller.signal, { ephemeral: true });
+          try { this.defaults.set(binding, clean.state); await this.select(clean, request, clean.state, controller.signal); }
+          finally { await this.close(clean); }
+        }
+        const launch: PiLaunch = resume ? { resume } : {};
+        const canAppend = version === PI_NATIVE_INSTRUCTION_VERSION && !this.pluginPaths(request).length;
+        if (canAppend && request.structuredInstruction) {
+          const extra = await piAppendArguments(request.cliArguments ?? [], nativeStructuredApiInstructions(request.structuredInstruction));
+          if (extra) { launch.extra = extra; launch.nativeStructured = true; }
+        } else if (canAppend && request.conversationInstructions) {
+          const recorded = request.metadata.conversationInstructionBaseline;
+          const prior = resume && recorded?.sessionId === request.metadata.conversationProviderSessionId ? recorded : undefined;
+          const instructions = prior ? { outputLanguage: prior.outputLanguage } : request.conversationInstructions;
+          const delivery = conversationInstructionDelivery(request.input, instructions, "install");
+          // Restore the original appended text on a known session. Changing
+          // language uses a turn override and avoids an extra system patch.
+          if (delivery.nativeInstructions && delivery.baseline && (!resume || prior?.version === delivery.baseline.version)) {
+            const extra = await piAppendArguments(request.cliArguments ?? [], delivery.nativeInstructions);
+            if (extra) { launch.extra = extra; launch.baseline = delivery.baseline; }
+          }
+        }
+        session = await this.open(request, command, binding, controller.signal, launch);
       }
-      session ??= await this.open(request, command, binding, controller.signal, resume);
       this.sessions.set(key, session);
       const defaults = this.defaults.get(binding) ?? session.state; this.defaults.set(binding, defaults);
       await this.select(session, request, defaults, controller.signal);
@@ -372,7 +412,10 @@ export class PiAgentRunner implements AgentRunner {
       if (!request.allowWorkspaceWrite && request.mcpServers?.length) request.onEvent?.({ phase: "status", text: "The configured MCP servers stay off for this read-only turn; Dext's own MCP tools remain available. Code MCP calls remain available through Dext." });
       try { active.events.setBaseline(await session.transport.request("get_session_stats", {}, 1000, controller.signal)); } catch { /* Message-level usage remains available. */ }
       if (controller.signal.aborted) throw controller.signal.reason;
-      const input = session.fresh ? bootstrappedConversationInput(request.metadata.conversationContext, request.input) : request.input;
+      const message = request.structuredInstruction
+        ? structuredApiInput(request.input, session.nativeStructured ? undefined : request.structuredInstruction)
+        : conversationInstructionDelivery(request.input, request.conversationInstructions, session.baseline).input;
+      const input = session.fresh ? bootstrappedConversationInput(request.metadata.conversationContext, message) : message;
       session.fresh = false; timeout.toolFinished("startup");
       const accepted = piObject(await session.transport.request("prompt", { message: input }, 30000, controller.signal));
       if (accepted.disposition === "handled") { active.done = true; throw new Error("Pi handled this input without starting a Dext conversation turn."); }
@@ -383,7 +426,11 @@ export class PiAgentRunner implements AgentRunner {
       const usage = active.events.usage(); if (usage) request.onEvent?.({ phase: "status", text: "", usage });
       const text = active.submitted ?? active.events.finalText;
       if (!text.trim()) throw new Error("Pi returned no final response.");
-      if (session.state.sessionFile && request.metadata.agentSessionId) request.metadata.onAgentSessionId?.("pi", encodePiSession({ path: await this.validateSession(session.state.sessionFile), binding }));
+      if (session.state.sessionFile && request.metadata.agentSessionId) {
+        const id = encodePiSession({ path: await this.validateSession(session.state.sessionFile), binding });
+        if (session.baseline) request.metadata.onAgentSessionId?.("pi", id, session.baseline);
+        else request.metadata.onAgentSessionId?.("pi", id);
+      }
       return text;
     } catch (error) {
       // Frames still in flight during shutdown are not a new run to record.

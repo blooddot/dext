@@ -2,8 +2,10 @@ import type { AgentMcpServer, AgentPermission, AgentProfile } from "../contracts
 import { resolveCliCommand } from "./agentRunner.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { stat } from "node:fs/promises";
-import { normalize } from "node:path";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { isAbsolute, join, normalize } from "node:path";
 
 /** Quote Windows batch arguments for cmd.exe, including its second parsing
  * pass through npm-style launchers. Never inspect or rewrite a launcher. */
@@ -19,25 +21,20 @@ export function piInvocation(command: string, args: readonly string[]): { comman
   return { command: process.env.ComSpec || process.env.comspec || "cmd.exe", args: ["/d", "/s", "/c", `"${normalize(command).replace(meta, "^$1")} ${args.map(quote).join(" ")}"`], windowsVerbatimArguments: true };
 }
 
-const versions = new Set<string>();
-export async function checkPiVersion(command: string, cwd: string, signal?: AbortSignal): Promise<void> {
-  const identity = await stat(command);
-  const key = `${command}:${identity.size}:${identity.mtimeMs}`;
+export async function checkPiVersion(command: string, cwd: string, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted();
-  if (!versions.has(key)) {
-    try {
-      const invocation = piInvocation(command, ["--version", "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-approve", "--offline"]);
-      const result = await promisify(execFile)(invocation.command, invocation.args, {
-        cwd, windowsHide: true, timeout: 10000, maxBuffer: 65536, ...(signal ? { signal } : {}), windowsVerbatimArguments: invocation.windowsVerbatimArguments
-      });
-      const match = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$|-)/.exec(result.stdout.trim());
-      if (!match || Number(match[1]) < 1 || (Number(match[1]) === 1 && Number(match[2]) < 4)) throw new Error("The associated Pi CLI must support the Pi 1.4 RPC interface. Configure a compatible Pi command.");
-      versions.add(key);
-    } catch (error) {
-      signal?.throwIfAborted();
-      if (error instanceof Error && error.message.startsWith("The associated Pi CLI must")) throw error;
-      throw new Error("The associated Pi command could not start or report its version. Check the command and CLI environment, then reconnect.");
-    }
+  try {
+    const invocation = piInvocation(command, ["--version", "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-approve", "--offline"]);
+    const result = await promisify(execFile)(invocation.command, invocation.args, {
+      cwd, windowsHide: true, timeout: 10000, maxBuffer: 65536, ...(signal ? { signal } : {}), windowsVerbatimArguments: invocation.windowsVerbatimArguments
+    });
+    const match = /(?:^|\s)((\d+)\.(\d+)\.\d+(?:-[\w.-]+)?)(?:\s|$)/.exec(result.stdout.trim());
+    if (!match || Number(match[2]) < 1 || (Number(match[2]) === 1 && Number(match[3]) < 4)) throw new Error("The associated Pi CLI must support the Pi 1.4 RPC interface. Configure a compatible Pi command.");
+    return match[1]!;
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (error instanceof Error && error.message.startsWith("The associated Pi CLI must")) throw error;
+    throw new Error("The associated Pi command could not start or report its version. Check the command and CLI environment, then reconnect.");
   }
 }
 
@@ -51,6 +48,37 @@ export function piExtraArguments(args: readonly string[]): string[] {
     if (args[index] !== "--append-system-prompt" || !args[index + 1]?.trim()) throw new Error("Pi extra arguments support only --append-system-prompt value pairs. Dext owns RPC, session, tools, and permissions.");
   }
   return [...args];
+}
+
+async function piOptionalFile(path: string): Promise<boolean> {
+  try {
+    const info = await stat(path);
+    if (!info.isFile()) throw new Error("Pi prompt path is not a file.");
+    await access(path, constants.R_OK);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Pi 1.5.2 bypasses automatic discovery when any append arg is present.
+ * piArguments always sets --no-approve, so discovery only uses the user file. */
+export async function piAppendArguments(
+  extra: readonly string[],
+  instructions: string,
+  agentDirectory = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent")
+): Promise<string[] | undefined> {
+  // A batch launcher needs one argument without physical line breaks.
+  const append = ["--append-system-prompt", instructions.replace(/\r?\n/g, " ")];
+  if (extra.length) return [...piExtraArguments(extra), ...append];
+  if (!isAbsolute(agentDirectory)) return undefined;
+  try {
+    const global = join(agentDirectory, "APPEND_SYSTEM.md");
+    return await piOptionalFile(global) ? ["--append-system-prompt", global, ...append] : append;
+  } catch {
+    return undefined;
+  }
 }
 export function piPermission(allowWrite: boolean, permission?: AgentPermission, trusted = false): AgentPermission {
   if (!allowWrite) return "read-only";

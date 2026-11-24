@@ -21,6 +21,11 @@ function dextChannel() {
     for (const line of lines) {
       if (!line.trim()) continue;
       const frame = JSON.parse(line);
+      if (frame.kind === "persona") {
+        const ready = sessions.has(frame.sessionId) && !process.argv.includes("--persona-unavailable");
+        send({ id: frame.id, status: ready ? "ready" : "unavailable" });
+        continue;
+      }
       // Dext publishes (or withdraws) the result tool before each contract turn.
       if (frame.kind === "tool") {
         tool = frame.tool;

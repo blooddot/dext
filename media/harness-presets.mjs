@@ -5,7 +5,7 @@ import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const name = 'dext-acp-presets';
-export const inject = ['agents', 'agentPresets', 'llm', 'sessionPersistence', 'sessions', 'loader'];
+export const inject = ['agents', 'llm', 'sessionPersistence', 'sessionProjections', 'sessions', 'loader'];
 
 /** Endpoint and one-time token Dext's launcher publishes for its question socket. */
 const BRIDGE_ENV = 'DEXT_HARNESS_BRIDGE';
@@ -13,6 +13,14 @@ const BRIDGE_TOKEN_ENV = 'DEXT_HARNESS_BRIDGE_TOKEN';
 
 /** Scope the factory adapter to ACP; child agents keep Harness's own factory. */
 export async function apply(ctx, config) {
+  if (config.preset && !ctx.get('agentPresets')) {
+    ctx.inject(['agentPresets'], (child) => applyAcp(child, config));
+    return;
+  }
+  await applyAcp(ctx, config);
+}
+
+async function applyAcp(ctx, config) {
   // Installed before the awaits below: the answerer must exist as soon as the
   // plugin is applied, not once preset resolution finishes. The result tool is
   // registered later, when Dext publishes a contract over the same channel.
@@ -21,9 +29,8 @@ export async function apply(ctx, config) {
     installQuestionBridge(ctx, channel);
     installResultTool(ctx, channel);
   }
-  const agents = ctx.agents;
-  const presets = ctx.agentPresets;
-  const factory = registryFactory(agents, presets, config);
+  const track = channel && config.agentModule ? await installPersonaBridge(ctx, channel, config.agentModule) : undefined;
+  const factory = registryFactory(ctx, config, track);
   const acp = await import(pathToFileURL(config.acpModule).href);
   const original = [...ctx.loader.entries()].find((entry) => entry.options.id === 'acp');
   acp.apply(ctx.extend({ agents: factory }), { ...original?.options.config, ...config.acp });
@@ -34,24 +41,76 @@ export async function apply(ctx, config) {
  * onto the chosen preset, which is the seam the desktop app uses when a session
  * selects one.
  */
-function registryFactory(agents, presets, config) {
-  if (typeof presets?.select !== 'function') {
+function registryFactory(ctx, config, track) {
+  const { agents } = ctx;
+  const presets = ctx.get('agentPresets');
+  if (config.preset && typeof presets?.select !== 'function') {
     throw new Error('The installed Harness has no agent preset registry. Update DeepSeek Harness.');
   }
-  const select = async (handle) => { await presets.select(handle?.agent ?? handle, config.preset); };
-  return {
-    get: (id) => agents.get(id),
-    create: async (options) => {
-      const handle = await agents.create(options);
-      await select(handle);
+  const select = async (handle) => {
+    const agent = handle?.agent ?? handle;
+    try {
+      if (config.preset && (presets.composedPreset?.(agent.ctx) !== config.preset ||
+          ctx.sessionProjections.stateOf(agent.session, 'agentPreset') !== config.preset)) {
+        await presets.select(agent, config.preset);
+      }
+      track?.(agent);
       return handle;
-    },
-    resume: async (options) => {
-      const handle = await agents.resume(options);
-      await select(handle);
-      return handle;
+    } catch (error) {
+      await handle.dispose?.();
+      throw error;
     }
   };
+  return {
+    get: (id) => agents.get(id),
+    create: async (options) => select(await agents.create(options)),
+    resume: async (options) => select(await agents.resume(config.preset && typeof presets.mount === 'function'
+      ? { ...options, setup: async (agentCtx, agent) => {
+        // Reconstruct the already selected preset before publishing a resumed
+        // agent. select() deliberately refuses to change a started session.
+        if (ctx.sessionProjections.stateOf(agent.session, 'agentPreset') === config.preset) {
+          await presets.mount(agentCtx, config.preset);
+        }
+        await options.setup?.(agentCtx, agent);
+      } }
+      : options))
+  };
+}
+
+const PERSONA_SUFFIX = 'deployment:persona-suffix';
+
+function mergePersonaSuffix(assembly, text) {
+  const suffix = assembly.sections.find((section) => section.name === PERSONA_SUFFIX);
+  if (typeof suffix?.text !== 'string' || suffix.text.includes(text)) return assembly;
+  return { ...assembly, sections: assembly.sections.map((section) => section === suffix
+    ? { ...section, text: [section.text, text].filter(Boolean).join('\n\n') } : section) };
+}
+
+async function installPersonaBridge(ctx, bridge, agentModule) {
+  try {
+    const { assembleContextFor } = await import(pathToFileURL(agentModule).href);
+    if (typeof assembleContextFor !== 'function') return undefined;
+    const agents = new Map();
+    const additions = new WeakMap();
+    ctx.root.on('system-prompt/assemble', async (_assembly, context, next) => {
+      const assembly = await next();
+      const text = additions.get(context.scope);
+      return text ? mergePersonaSuffix(assembly, text) : assembly;
+    });
+    bridge.on('persona', async ({ sessionId, text }) => {
+      const agent = agents.get(sessionId);
+      const prompt = agent?.ctx.get('systemPrompt');
+      if (!agent || typeof prompt?.assemble !== 'function' || typeof text !== 'string' || !text) return 'unavailable';
+      additions.set(agent, text);
+      try {
+        const preview = await prompt.assemble(assembleContextFor(agent, AbortSignal.timeout(2000)));
+        if (preview.sections.some((section) => section.name === PERSONA_SUFFIX && section.text.endsWith(text))) return 'ready';
+      } catch { /* Keep the fallback if the final composition cannot merge. */ }
+      additions.delete(agent);
+      return 'unavailable';
+    });
+    return (agent) => { agents.set(agent.id, agent); };
+  } catch { return undefined; }
 }
 
 /**

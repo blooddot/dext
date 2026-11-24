@@ -1,6 +1,7 @@
 import type { UiFormDefinition, UiFormResult, UiInteractionState } from "./uiForm.js";
 import type { UiViewResult } from "./uiView.js";
 import type { WritableAgentPermission } from "./permissions.js";
+import type { NativeConversationBaseline, ProviderInstructionBaseline } from "./conversationInstructions.js";
 export type MethodKind = "command" | "skill";
 export type MethodSource = "builtin" | "global" | "project";
 export const CONVERSATION_SKILL_LOADING_MODES = ["on-demand", "every-turn"] as const;
@@ -341,11 +342,13 @@ export interface ExecutionMetadata {
   conversationForkFrom?: string;
   /** Persisted provider session to resume after the extension restarts. */
   conversationProviderSessionId?: string;
+  /** Native instruction state associated with the resume or fork source. */
+  conversationInstructionBaseline?: ProviderInstructionBaseline;
   /** Prior Dext turns to bootstrap a provider conversation that has no native
    * session yet (for example, the first turn after a fork or reload). */
   conversationContext?: string;
   /** Called when a provider exposes the native session id for this turn. */
-  onAgentSessionId?: (provider: string, sessionId: string) => void;
+  onAgentSessionId?: (provider: string, sessionId: string, baseline?: NativeConversationBaseline) => void;
   signal?: AbortSignal;
   onAgentEvent?: (event: AgentStreamEvent) => void;
   /** A run Pi started on its own after the turn settled, so its output is not

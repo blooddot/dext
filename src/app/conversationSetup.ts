@@ -2,6 +2,7 @@ import type { AgentProfile, AgentSelection } from "../features/agents/contracts/
 import type { ResourceDocument, ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import type { ConversationHistoryStore } from "../features/conversations/contracts/history.js";
 import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
+import type { TurnExecutionHost } from "../features/conversations/contracts/execution.js";
 import type { SkillCommandResolution } from "../features/workflow/contracts/skill.js";
 import type { ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
 import type { WebviewResponse } from "../platform/webviewProtocol.js";
@@ -26,7 +27,8 @@ export interface ConversationSetupDependencies {
   setAgentSelection: (selection: AgentSelection) => void;
   endAgentSession: (sessionId: string) => void;
   profiles: () => readonly AgentProfile[];
-  executeConversation: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
+  outputLanguage: TurnExecutionHost["outputLanguage"];
+  executeConversation: TurnExecutionHost["executeConversation"];
   executeInput: (
     source: string,
     metadata: Readonly<ExecutionMetadata>
@@ -122,6 +124,7 @@ export function createConversationServices(dependencies: ConversationSetupDepend
     history: dependencies.history,
     host: {
       profiles: dependencies.profiles,
+      outputLanguage: dependencies.outputLanguage,
       executeConversation: dependencies.executeConversation,
       executeInput: dependencies.executeInput,
       draftResource: dependencies.draftResource,

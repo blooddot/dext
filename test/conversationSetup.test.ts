@@ -28,6 +28,7 @@ function services(options: { executeConversation?: (mode: "agent" | "ask" | "pla
     setAgentSelection: vi.fn(),
     endAgentSession: vi.fn(),
     profiles: () => [],
+    outputLanguage: () => undefined,
     executeConversation,
     executeInput: vi.fn(async (): Promise<InputExecutionResponse> => ({ kind: "workflow", executions: [] })),
     draftResource: vi.fn(),

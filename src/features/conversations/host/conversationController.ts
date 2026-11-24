@@ -594,7 +594,8 @@ export class ConversationController {
     // The CLI can report its ID before the first history record exists. Save
     // it again after the turn is stored so the first turn survives a reload.
     for (const [provider, providerSessionId] of Object.entries(session.providerSessions ?? {})) {
-      await this.history.setProviderSession(session.id, provider, providerSessionId);
+      const baseline = session.providerInstructionBaselines?.[provider];
+      await this.history.setProviderSession(session.id, provider, providerSessionId, baseline?.sessionId === providerSessionId ? baseline : undefined);
     }
   }
 

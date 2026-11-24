@@ -10,6 +10,8 @@ import { decodeHarnessSession, encodeHarnessSession } from "../src/features/agen
 import type { AgentConversationRequest, AgentExecutionRequest } from "../src/features/agents/host/agentRunner.js";
 import { BUILTIN_METHODS } from "../src/features/workflow/domain/builtins.js";
 import { AxAdapter } from "../src/features/agents/domain/axAdapter.js";
+import * as presets from "../src/features/agents/host/harnessPresets.js";
+import type { NativeConversationBaseline } from "../src/shared/contracts/conversationInstructions.js";
 
 const runners: DeepSeekHarnessRunner[] = [];
 const fixture = resolve("test/fixtures/acpAgent.mjs");
@@ -26,9 +28,75 @@ function executionRequest(input: string): AgentExecutionRequest {
     method, arguments: { input }, context: [], metadata: {}, invocation: { kind: "invocation", method: "ask", source: "code", arguments: [] }
   } };
 }
-afterEach(async () => { await Promise.all(runners.splice(0).map((value) => value.dispose())); });
+afterEach(async () => {
+  await Promise.all(runners.splice(0).map((value) => value.dispose()));
+  vi.restoreAllMocks();
+});
 
 describe("Harness runner", { timeout: 15000 }, () => {
+  it("uses one native block across prompts and recovers the binding after a refused resume or a fork", async () => {
+    vi.spyOn(presets, "harnessNativePersona").mockResolvedValue(fixture);
+    vi.spyOn(presets, "harnessInstallation").mockReturnValue({ command: process.execPath, prefixArgs: [], entry: fixture, acpModule: fixture });
+    const append = vi.spyOn(DeepSeekHarnessTransport.prototype, "appendPersona");
+    const nativeRunner = () => {
+      const value = new DeepSeekHarnessRunner(15000, (_command, _args, cwd, client) =>
+        new DeepSeekHarnessTransport(process.execPath, [fixture], cwd, client), async () => undefined);
+      runners.push(value);
+      return value;
+    };
+    const first = nativeRunner(), save = vi.fn();
+    const initial = { ...request("first"), conversationInstructions: { outputLanguage: "zh-CN" } as const, metadata: { agentSessionId: "chat", onAgentSessionId: save } };
+    expect(await first.runConversation(initial)).toBe("first");
+    const [, id, baseline] = save.mock.lastCall! as [string, string, NativeConversationBaseline];
+    expect(baseline).toEqual({ outputLanguage: "zh-CN", version: 1 });
+    expect(await first.runConversation({ ...initial, input: "second", conversationInstructions: { outputLanguage: "en" } })).toContain("Dext conversation language override");
+    expect(append).toHaveBeenCalledTimes(1);
+    await first.dispose();
+    const restarted = nativeRunner();
+    const restored = { agentSessionId: "chat", conversationProviderSessionId: id, conversationInstructionBaseline: { ...baseline, sessionId: id }, onAgentSessionId: save };
+    expect(await restarted.runConversation({ ...initial, input: "continued", metadata: restored })).toBe("continued");
+    expect(save.mock.lastCall?.[1]).toBe(id);
+    const refused = encodeHarnessSession("missing", decodeHarnessSession(id).binding);
+    const branchRequest = { ...initial, input: "after refusal or fork", conversationInstructions: { outputLanguage: "en" } as const };
+    const recovered = await restarted.runConversation({ ...branchRequest, metadata: { agentSessionId: "refused", conversationProviderSessionId: refused, conversationContext: "old history", onAgentSessionId: save } });
+    expect(recovered).toContain("old history");
+    expect(recovered).not.toContain("English (en)");
+    expect(save.mock.lastCall?.[1]).not.toBe(refused);
+    const forked = await restarted.runConversation({ ...branchRequest, metadata: { agentSessionId: "fork", conversationForkFrom: id, conversationContext: "fork history", onAgentSessionId: save } });
+    expect(forked).toContain("fork history");
+    expect(save.mock.lastCall?.[1]).not.toBe(id);
+    expect(append.mock.calls.map(([, text]) => text.match(/(?:Simplified Chinese|English)/)?.[0])).toEqual(["Simplified Chinese", "Simplified Chinese", "English", "English"]);
+  });
+
+  it("uses the inline source when the ACP composition cannot confirm the suffix", async () => {
+    vi.spyOn(presets, "harnessNativePersona").mockResolvedValue(fixture);
+    vi.spyOn(presets, "harnessInstallation").mockReturnValue({ command: process.execPath, prefixArgs: [], entry: fixture, acpModule: fixture });
+    const value = new DeepSeekHarnessRunner(15000, (_command, _args, cwd, client) =>
+      new DeepSeekHarnessTransport(process.execPath, [fixture, "--persona-unavailable"], cwd, client), async () => undefined);
+    runners.push(value);
+    const text = await value.runConversation({ ...request(), conversationInstructions: { outputLanguage: "en" } });
+    expect(text).toContain("Dext instruction source for this turn: inline.");
+    expect(text.match(/English \(en\)/g)).toHaveLength(1);
+  });
+  it.each([true, false])("keeps the Harness result tool and picks one structured source when the suffix ack is %s", async (available) => {
+    vi.spyOn(presets, "harnessNativePersona").mockResolvedValue(fixture);
+    vi.spyOn(presets, "harnessInstallation").mockReturnValue({ command: process.execPath, prefixArgs: [], entry: fixture, acpModule: fixture });
+    const value = new DeepSeekHarnessRunner(15000, (_command, _args, cwd, client) =>
+      new DeepSeekHarnessTransport(process.execPath, [fixture, ...(available ? [] : ["--persona-unavailable"])], cwd, client), async () => undefined);
+    runners.push(value);
+    const send = vi.spyOn(HarnessConnection.prototype, "prompt");
+    const native = vi.spyOn(DeepSeekHarnessTransport.prototype, "appendPersona");
+    const execution = { ...executionRequest("submit-repair"), structuredApi: true as const };
+    await expect(value.run(execution)).resolves.toContain("typed answer");
+    expect(send).toHaveBeenCalledOnce();
+    expect(native.mock.calls[0]?.[1]).toContain("Read the labeled Dext JSON payload");
+    const text = send.mock.calls[0]?.[0].prompt[0];
+    expect(text).toMatchObject({ type: "text", text: expect.stringContaining("Result schema:") });
+    expect(JSON.stringify(text).includes("Read the labeled Dext JSON payload")).toBe(!available);
+    send.mockRejectedValueOnce(new Error("transport failed after prompt"));
+    await expect(value.run(execution)).rejects.toThrow("transport failed after prompt");
+    expect(send).toHaveBeenCalledTimes(2);
+  });
   it("uses ACP text for on-demand Ask and keeps the host tool declaration", async () => {
     const create = vi.spyOn(HarnessConnection.prototype, "newSession");
     const send = vi.spyOn(HarnessConnection.prototype, "prompt");

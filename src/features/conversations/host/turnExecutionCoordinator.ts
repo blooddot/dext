@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { AgentSelection } from "../../agents/contracts/agent.js";
+import type { NativeConversationBaseline } from "../../../shared/contracts/conversationInstructions.js";
 import type {
   AgentInputAnswers,
   AgentInputRequest,
@@ -19,6 +20,7 @@ import type {
   TurnCommandSnapshot,
   TurnRecordContext
 } from "../contracts/history.js";
+import { recordProviderSession } from "../contracts/history.js";
 import { splitCommandInput } from "../../workflow/contracts/skill.js";
 import type {
   ActiveExecution,
@@ -268,6 +270,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     // resource draft. Resolve the command once so every Plan round sees the
     // same expanded instruction.
     const useConversationSkills = mode !== "code" && !session.resource;
+    const conversationTurn = { outputLanguage: useConversationSkills ? this.options.host.outputLanguage() ?? null : null };
     const selectedSkills = useConversationSkills ? [...(selection.skills ?? [])] : [];
     // Pi packages are a provider capability rather than conversation content,
     // so Code and resource turns keep their own default (every installed one).
@@ -387,9 +390,9 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
           };
           this.options.events.append(sessionId, events, processEvent);
         },
-        onAgentSessionId: (provider: string, providerSessionId: string) => {
-          session.providerSessions = { ...(session.providerSessions ?? {}), [provider]: providerSessionId };
-          void this.options.history.setProviderSession(sessionId, provider, providerSessionId);
+        onAgentSessionId: (provider: string, providerSessionId: string, baseline?: NativeConversationBaseline) => {
+          recordProviderSession(session, provider, providerSessionId, baseline);
+          void this.options.history.setProviderSession(sessionId, provider, providerSessionId, baseline);
         },
         // Survives this turn: Pi can wake the agent after it settled, and that
         // output is recorded as a turn instead of being dropped.
@@ -402,11 +405,16 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
         planRun?.beginRound();
         const providerSession = profile ? session.providerSessions?.[profile.provider] : undefined;
         const forkFrom = providerSession ? undefined : profile ? session.forkProviderSessions?.[profile.provider] : undefined;
+        const baseline = profile ? session.providerInstructionBaselines?.[profile.provider] : undefined;
         let acceptingEvents = true;
         const roundMetadata = { ...metadata,
           onAgentEvent: (event: AgentStreamEvent) => { if (acceptingEvents) metadata.onAgentEvent(event); },
           onMcpEvent: (event: McpProcessEvent) => { if (acceptingEvents) metadata.onMcpEvent(event); },
-          onAgentSessionId: (provider: string, id: string) => { if (acceptingEvents) metadata.onAgentSessionId(provider, id); },
+          onAgentSessionId: (provider: string, id: string, nativeBaseline?: NativeConversationBaseline) => {
+            if (acceptingEvents) metadata.onAgentSessionId(provider, id, nativeBaseline);
+          },
+          ...(useConversationSkills && baseline && baseline.sessionId === (providerSession ?? forkFrom)
+            ? { conversationInstructionBaseline: baseline } : {}),
           ...(providerSession ? { conversationProviderSessionId: providerSession } : {}),
           ...(forkFrom ? { conversationForkFrom: forkFrom } : {}) };
         if (planRun?.verifying) roundSource = planRun.prompt(taskSource);
@@ -420,7 +428,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
           } else {
             response = mode === "code"
               ? await this.options.host.executeInput(roundSource, roundMetadata)
-              : await this.options.host.executeConversation(mode, roundSource, roundMetadata);
+              : await this.options.host.executeConversation(mode, roundSource, roundMetadata, conversationTurn);
           }
         } finally { acceptingEvents = false; }
         if (controller.signal.aborted) throw new Error(session.resource ? "Resource generation stopped by user." : "Plan execution stopped by user.");

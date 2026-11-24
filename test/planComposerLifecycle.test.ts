@@ -148,7 +148,7 @@ describe("Plan composer after execution", () => {
     const h = await harness();
     let oldMetadata: ExecutionMetadata | undefined;
     const original = h.executeConversation.getMockImplementation()!;
-    h.executeConversation.mockImplementation(async (mode, source, metadata) => {
+    h.executeConversation.mockImplementation(async (mode, source, metadata, context) => {
       if (oldMetadata) {
         expect(metadata.conversationProviderSessionId).toBe("native-session");
         oldMetadata.onAgentEvent?.({ phase: "message", text: '<!-- dext-todo: {"updates":[{"id":"plan-1","status":"pending"}]} -->' });
@@ -156,7 +156,7 @@ describe("Plan composer after execution", () => {
         oldMetadata = metadata;
         metadata.onAgentSessionId?.("codex", "native-session");
       }
-      return original(mode, source, metadata);
+      return original(mode, source, metadata, context);
     });
     await h.run();
     expect(h.executeConversation).toHaveBeenCalledTimes(2);

@@ -20,7 +20,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     finish(result.answers.q1?.answers[0] ?? "skipped"); continue;
   }
   if (!method || id === undefined) continue;
-  if (method === "initialize") send({ id, result: {} });
+  if (method === "initialize") send({ id, result: {
+    userAgent: `${params.clientInfo.name}/${scenario === "old-native-config" ? "0.168.0" : "0.169.1"} (fixture)`
+  } });
+  else if (method === "config/read") {
+    if (scenario === "unreadable-native-config") send({ id, error: { code: -32601, message: "Config unavailable" } });
+    else send({ id, result: { config: { developer_instructions: scenario === "user-native-config" ? "Configured developer prompt" : null } } });
+  }
   else if (["thread/start", "thread/resume", "thread/fork"].includes(method)) {
     if (scenario === "rpc-error") {
       send({ id, error: { code: -32000, message: diagnosticError.message, data: diagnosticError } }); continue;
@@ -44,7 +50,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       process.stdout.write(`${lines.map((value) => JSON.stringify(value)).join("\n")}\n`);
       continue;
     }
-    if (scenario === "config") { finish(JSON.stringify({ config, input: params.input })); continue; }
+    if (scenario === "config" || scenario.endsWith("native-config")) { finish(JSON.stringify({ config, input: params.input })); continue; }
     if (scenario === "exit") { process.exit(2); }
     if (scenario === "async" || scenario === "expires" || scenario === "steer-fails") {
       notify("item/started", { item: { type: "agentMessage", id: "async-1", delivery: "async", text: "" } });

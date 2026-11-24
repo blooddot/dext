@@ -16,12 +16,13 @@ describe("Pi JSONL transport", () => {
     try {
       const command = join(root, "pi local.cmd");
       await writeFile(command, `@echo off\r\n"${process.execPath}" "${resolve("test/fixtures/piAgent.mjs")}" %*\r\n`);
-      await checkPiVersion(command, root);
+      await expect(checkPiVersion(command, root)).resolves.toBe("1.4.0");
       const log = join(root, "arguments.jsonl");
-      const transport = new PiRpcTransport(command, ["--append-system-prompt", "literal with spaces & symbols"], root, { ...process.env, PI_FIXTURE_LOG: log });
+      const args = ["--append-system-prompt", "literal with spaces & symbols", "--append-system-prompt", "Dext conversation rules."];
+      const transport = new PiRpcTransport(command, args, root, { ...process.env, PI_FIXTURE_LOG: log });
       connections.push(transport);
       expect(await transport.request("echo", { value: "correct" })).toBe("correct");
-      expect(JSON.parse((await readFile(log, "utf8")).split("\n")[0]!)).toMatchObject({ startup: ["--append-system-prompt", "literal with spaces & symbols"] });
+      expect(JSON.parse((await readFile(log, "utf8")).split("\n")[0]!)).toMatchObject({ startup: args });
       await transport.close();
     } finally { await rm(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 50 }); }
   });

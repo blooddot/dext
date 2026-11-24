@@ -255,8 +255,10 @@ describe("TurnExecutionCoordinator", () => {
       command: { id: "review", title: "Review", description: "", skillId: "reviewer", template: "$ARGUMENTS",
         instruction: `Review ${args}`, arguments: args }
     }));
-    const h = createConversationHarness({ resolveSkillCommand, executeConversation: async (mode, _source, metadata) => {
+    let outputLanguage: "zh-CN" | "en" | undefined = "zh-CN";
+    const h = createConversationHarness({ resolveSkillCommand, outputLanguage: () => outputLanguage, executeConversation: async (mode, _source, metadata) => {
       if (mode === "plan") {
+        outputLanguage = "en";
         const report = h.executeConversation.mock.calls.length === 1
           ? { updates: [{ id: "plan-1", status: "completed" }] } : { verification: "passed" };
         metadata.planTodo?.(report);
@@ -274,14 +276,19 @@ describe("TurnExecutionCoordinator", () => {
     for (const round of [first, second]) {
       expect(round?.[2]).toMatchObject({ executePlan: true, commandSkillId: "reviewer", skillLoading: "on-demand", skills: ["reviewer", "other"] });
       expect(round?.[2].commandInstruction).toContain("Review this change");
+      expect(round?.[3]).toEqual({ outputLanguage: "zh-CN" });
     }
     expect(second?.[1]).toContain("verification");
     expect((await h.history.session(active.id))?.turns[0]?.planOutcome).toMatchObject({ status: "completed", rounds: 2 });
     await h.coordinator.execute(active, "ask", "Another question");
+    expect(h.executeConversation.mock.lastCall?.[3]).toEqual({ outputLanguage: "en" });
     expect(h.executeConversation.mock.lastCall?.[2]).toMatchObject({ skillLoading: "on-demand", skills: ["reviewer", "other"] });
     expect(h.executeConversation.mock.lastCall?.[2].commandSkillId).toBeUndefined();
     expect(h.executeConversation.mock.lastCall?.[2].commandInstruction).toBeUndefined();
     expect(resolveSkillCommand).toHaveBeenCalledOnce();
+    outputLanguage = undefined;
+    await h.coordinator.execute(active, "ask", "With the display language unresolved");
+    expect(h.executeConversation.mock.lastCall?.[3]).toEqual({ outputLanguage: null });
   });
 
   it("fails a command whose skill is not selected or that is unsupported", async () => {

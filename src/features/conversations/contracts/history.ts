@@ -1,5 +1,6 @@
 import type { ResourceDocument, ResourceSession, ResourceTarget } from "../../resources/contracts/resourceSession.js";
 import type { AgentStreamEvent, AgentTodoItem, ConversationSkillLoading, InputExecutionResponse, PlanAcceptanceItem, PlanExecutionOutcome } from "../../../shared/contracts/types.js";
+import type { NativeConversationBaseline, ProviderInstructionBaseline } from "../../../shared/contracts/conversationInstructions.js";
 
 /** Persisted conversation shape. This contract is safe to import from the
  * browser bundle: it has no VS Code, filesystem or timer dependency. */
@@ -84,6 +85,8 @@ export interface DextHistorySession {
   /** Provider session ids from the source conversation. A child consumes the
    * matching entry when its first turn is sent. */
   forkProviderSessions?: Record<string, string>;
+  /** Verified native instruction state, tied to the current or fork session ID. */
+  providerInstructionBaselines?: Record<string, ProviderInstructionBaseline>;
   /** A new conversation's fallback when its composer preferences are unavailable. */
   initialSkillLoading?: ConversationSkillLoading;
   /** Explicit Plan target and lifecycle, kept with the conversation tab. */
@@ -120,10 +123,29 @@ export interface DextHistorySummary {
   planProgress?: PlanProgress;
   providerSessions?: Record<string, string>;
   forkProviderSessions?: Record<string, string>;
+  providerInstructionBaselines?: Record<string, ProviderInstructionBaseline>;
   initialSkillLoading?: ConversationSkillLoading;
   /** Where each turn's truncated text was spilled, keyed by turn id. Kept in
    * the index so pruning overflow never has to read a body. */
   spills?: Record<string, string>;
+}
+
+export function recordProviderSession(
+  state: Pick<DextHistorySummary, "providerSessions" | "providerInstructionBaselines">,
+  provider: string,
+  sessionId: string,
+  baseline?: NativeConversationBaseline
+): void {
+  state.providerSessions = { ...state.providerSessions, [provider]: sessionId };
+  const prior = state.providerInstructionBaselines?.[provider];
+  if (baseline) {
+    state.providerInstructionBaselines = { ...state.providerInstructionBaselines, [provider]: { ...baseline, sessionId } };
+  } else if (prior && prior.sessionId !== sessionId) {
+    const baselines = { ...state.providerInstructionBaselines };
+    delete baselines[provider];
+    if (Object.keys(baselines).length) state.providerInstructionBaselines = baselines;
+    else delete state.providerInstructionBaselines;
+  }
 }
 
 /** The two-tier persistence the store sits on: an index of summaries that is
@@ -166,6 +188,7 @@ export function historySummaryOf(session: DextHistorySession): DextHistorySummar
     ...(session.planProgress ? { planProgress: session.planProgress } : {}),
     ...(session.providerSessions ? { providerSessions: session.providerSessions } : {}),
     ...(session.forkProviderSessions ? { forkProviderSessions: session.forkProviderSessions } : {}),
+    ...(session.providerInstructionBaselines ? { providerInstructionBaselines: session.providerInstructionBaselines } : {}),
     ...(session.initialSkillLoading ? { initialSkillLoading: session.initialSkillLoading } : {}),
     ...(Object.keys(spills).length ? { spills } : {})
   };
@@ -186,6 +209,7 @@ export function historySessionOf(summary: DextHistorySummary, turns: readonly De
     ...(summary.planProgress ? { planProgress: summary.planProgress } : {}),
     ...(summary.providerSessions ? { providerSessions: summary.providerSessions } : {}),
     ...(summary.forkProviderSessions ? { forkProviderSessions: summary.forkProviderSessions } : {}),
+    ...(summary.providerInstructionBaselines ? { providerInstructionBaselines: summary.providerInstructionBaselines } : {}),
     ...(summary.initialSkillLoading ? { initialSkillLoading: summary.initialSkillLoading } : {}),
     ...(summary.archivedAt !== undefined ? { archivedAt: summary.archivedAt } : {})
   };
@@ -214,9 +238,10 @@ export interface ConversationHistoryStore {
   fork(
     turns: readonly DextHistoryRecord[],
     providerSessions?: Readonly<Record<string, string>>,
-    initialSkillLoading?: ConversationSkillLoading
+    initialSkillLoading?: ConversationSkillLoading,
+    providerInstructionBaselines?: Readonly<Record<string, ProviderInstructionBaseline>>
   ): Promise<DextHistorySession>;
-  setProviderSession(sessionId: string, provider: string, providerSessionId: string): Promise<void>;
+  setProviderSession(sessionId: string, provider: string, providerSessionId: string, baseline?: NativeConversationBaseline): Promise<void>;
   /** Where this turn's truncated text was spilled, if it was. */
   spillPath(sessionId: string, turnId: string): string | undefined;
   addSuccess(

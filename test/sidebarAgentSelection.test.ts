@@ -62,6 +62,7 @@ async function sidebarHarness(options: {
     setAgentSelection,
     endAgentSession: vi.fn(),
     agentProfiles: () => [{ id: options.provider ?? "deepseek-harness" }],
+    outputLanguage: () => undefined,
     skills: { list: () => [{ id: "ponytail" }, { id: "ponytail-review" }] },
     discoverHarnessModels,
     discoverPiModels: discoverHarnessModels,

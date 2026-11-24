@@ -11,6 +11,10 @@ import type { AgentInputRequest, AgentStreamEvent, ExecutionMetadata } from "../
 const start = CodexConversationConnection.prototype.start;
 afterEach(() => vi.restoreAllMocks());
 
+function configReply(reply: string): { config: Record<string, unknown>; input: { type: string; text: string; text_elements: unknown[] }[] } {
+  return JSON.parse(reply.slice("Received: ".length)) as ReturnType<typeof configReply>;
+}
+
 function setup(scenario = "blocking", overrides: Partial<AgentConversationRequest> = {}) {
   vi.spyOn(CodexConversationConnection.prototype, "start").mockImplementation(function (this: CodexConversationConnection, _command, _args, cwd, env) {
     return start.call(this, process.execPath, [resolve("test/fixtures/codexConversationServer.mjs")], cwd, env);
@@ -93,11 +97,57 @@ describe("Codex interactive conversations over stdio", () => {
     const input = 'Available conversation Skills (JSON metadata):\n[{"path":".dext/skills/review/SKILL.md"}]\nRead the Skill.';
     const { run } = setup("config", { input, mode: "ask", allowWorkspaceWrite: false, permission: "full-access", model: "configured-model", reasoningEffort: "high" });
     const threadId = "01a15ec5-32fe-70d1-bc3a-9d2f481f51ed";
-    const reply = JSON.parse((await run({ resumeId: threadId, serviceTier: "priority" })).slice("Received: ".length));
+    const reply = configReply(await run({ resumeId: threadId, serviceTier: "priority" }));
     expect(reply).toMatchObject({
       config: { method: "thread/resume", threadId, cwd: process.cwd(), sandbox: "read-only", model: "configured-model", approvalPolicy: "never", serviceTier: "priority" },
       input: [{ type: "text", text: input }]
     });
+  });
+  it("starts with a native baseline whose text never enters turn/start", async () => {
+    const { run, onThread } = setup("native-config", {
+      conversationInstructions: { outputLanguage: "zh-CN" }, model: "configured-model", reasoningEffort: "high",
+      cliArguments: ["-c", "include_permissions_instructions=true"]
+    });
+    const reply = configReply(await run());
+    expect(reply.config).toMatchObject({
+      method: "thread/start", developerInstructions: expect.stringContaining("Simplified Chinese (zh-CN)"),
+      model: "configured-model", config: { model_reasoning_effort: "high" }
+    });
+    expect(reply.input).toEqual([{ type: "text", text: "Fix drag and drop", text_elements: [] }]);
+    expect(onThread).toHaveBeenCalledWith("thread-1", { version: 1, outputLanguage: "zh-CN" });
+  });
+  it.each(["user-native-config", "old-native-config", "unreadable-native-config"])(
+    "keeps user configuration and falls back before dispatch for %s",
+    async (scenario) => {
+      const { run, onThread } = setup(scenario, { conversationInstructions: { outputLanguage: "en" } });
+      const reply = configReply(await run());
+      expect(reply.config).not.toHaveProperty("developerInstructions");
+      expect(reply.input[0]?.text).toContain("Dext instruction source for this turn: inline.");
+      expect(reply.input[0]?.text.match(/English \(en\)/g)).toHaveLength(1);
+      expect(onThread).toHaveBeenCalledWith("thread-1");
+    }
+  );
+  it.each([
+    ["thread/resume", { resumeId: "source" }, "zh-CN", "Fix drag and drop"],
+    ["thread/resume", { resumeId: "source" }, null, "Clear Dext's language preference"],
+    ["thread/fork", { forkFromId: "source" }, "en", "Use English (en)"]
+  ] as const)("reuses the inherited baseline on a fresh App Server connection to %s", async (method, path, outputLanguage, expectedInput) => {
+    const { run, request, onThread } = setup("native-config", { conversationInstructions: { outputLanguage } });
+    request.metadata.conversationInstructionBaseline = { sessionId: "source", outputLanguage: "zh-CN", version: 1 };
+    const reply = configReply(await run(path));
+    expect(reply.config).toMatchObject({ method, threadId: "source" });
+    expect(reply.config).not.toHaveProperty("developerInstructions");
+    expect(reply.input[0]?.text).toContain(expectedInput);
+    expect(reply.input[0]?.text).not.toMatch(/Dext instruction source|Simplified Chinese/);
+    expect(onThread).toHaveBeenCalledWith("thread-1", { version: 1, outputLanguage: "zh-CN" });
+  });
+  it.each([{ resumeId: "old" }, { forkFromId: "old" }])("does not assume a native baseline on a legacy path %j", async (path) => {
+    const { run, onThread } = setup("native-config", { conversationInstructions: { outputLanguage: null } });
+    const reply = configReply(await run(path));
+    expect(reply.config).not.toHaveProperty("developerInstructions");
+    expect(reply.input[0]?.text).toContain("Dext instruction source for this turn: inline.");
+    expect(reply.input[0]?.text).toContain("Clear Dext's language preference");
+    expect(onThread).toHaveBeenCalledWith("thread-1");
   });
   it("surfaces process failure instead of leaving an empty Output", async () => {
     await expect(setup("exit").run()).rejects.toThrow(/exited/);

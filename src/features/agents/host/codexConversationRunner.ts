@@ -7,7 +7,11 @@ import { ExecutionCancelledError } from "../../../shared/protocol/executionError
 import { CodexConversationConnection, type CodexRpcMessage } from "./codexConversationConnection.js";
 import { codexConversationEvent, codexInputQuestions, object } from "../domain/codexConversationEvents.js";
 import { codexErrorMessage } from "../domain/codexError.js";
+import { conversationInstructionDelivery } from "../domain/conversationInstructions.js";
+import type { NativeConversationBaseline } from "../../../shared/contracts/conversationInstructions.js";
 const stringValue = (value: unknown): string => typeof value === "string" ? value : "";
+// Verified against the first model request, compaction, cold resume and fork.
+const CODEX_NATIVE_INSTRUCTION_VERSION = "0.169.1";
 
 export function codexAppServerArguments(extra: readonly string[], mcpServers: readonly AgentMcpServer[] = []): string[] {
   const args = ["app-server"];
@@ -30,7 +34,7 @@ export function codexAppServerArguments(extra: readonly string[], mcpServers: re
 export async function runCodexConversation(request: AgentConversationRequest, options: {
   command: string; env?: NodeJS.ProcessEnv | undefined; resumeId?: string | undefined; forkFromId?: string | undefined;
   timeoutMs: number; idleTimeoutMs: number; serviceTier?: string | undefined;
-  onThread: (id: string) => void;
+  onThread: (id: string, baseline?: NativeConversationBaseline) => void;
 }): Promise<string> {
 
   const controller = new AbortController();
@@ -164,14 +168,33 @@ export async function runCodexConversation(request: AgentConversationRequest, op
       ...(request.model ? { model: request.model } : {}),
       ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
       config: { model_reasoning_summary: "detailed", ...(request.reasoningEffort ? { model_reasoning_effort: request.reasoningEffort } : {}) } };
+    const sourceId = options.resumeId ?? options.forkFromId;
+    let native: "install" | NativeConversationBaseline | undefined;
+    if (request.conversationInstructions && connection.version === CODEX_NATIVE_INSTRUCTION_VERSION) {
+      if (sourceId) {
+        // A cold resume or fork retains its original developer instructions.
+        // Passing a replacement here does not reliably replace that baseline.
+        const baseline = request.metadata.conversationInstructionBaseline;
+        if (baseline?.sessionId === sourceId) native = baseline;
+      } else {
+        // The RPC field would replace a configured developer prompt. Leave
+        // any user-configured prompt in place by using inline delivery.
+        const effective = await connection.request("config/read", { cwd: request.cwd, includeLayers: false }).catch(() => undefined);
+        if (object(effective?.config).developer_instructions === null) native = "install";
+      }
+    }
+    const delivery = conversationInstructionDelivery(request.input, request.conversationInstructions, native);
     const thread = await connection.request(options.resumeId ? "thread/resume" : options.forkFromId ? "thread/fork" : "thread/start", {
-      ...config, ...(options.resumeId || options.forkFromId ? { threadId: options.resumeId ?? options.forkFromId } : { ephemeral: !request.metadata.agentSessionId })
+      ...config,
+      ...(delivery.nativeInstructions ? { developerInstructions: delivery.nativeInstructions } : {}),
+      ...(sourceId ? { threadId: sourceId } : { ephemeral: !request.metadata.agentSessionId })
     });
     threadId = stringValue(object(thread.thread).id);
     if (!threadId) throw new Error("Codex did not return a conversation ID.");
-    options.onThread(threadId);
+    if (delivery.baseline) options.onThread(threadId, delivery.baseline);
+    else options.onThread(threadId);
     const prior = !options.resumeId && !options.forkFromId ? request.metadata.conversationContext?.trim() : undefined;
-    const input = prior ? `${prior}\n\nNew user message:\n${request.input}` : request.input;
+    const input = prior ? `${prior}\n\nNew user message:\n${delivery.input}` : delivery.input;
     const turn = await connection.request("turn/start", { threadId, input: [{ type: "text", text: input, text_elements: [] }],
       ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}) });
     turnId ||= stringValue(object(turn.turn).id);

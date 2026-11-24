@@ -172,6 +172,10 @@ export class DeepSeekHarnessTransport {
     return this.bridge.publishResultTool(tool, signal);
   }
 
+  appendPersona(sessionId: string, text: string, signal?: AbortSignal): Promise<boolean> {
+    return this.bridge.appendPersona(sessionId, text, signal);
+  }
+
   close(): Promise<void> {
     return this.closing ??= this.shutdown();
   }

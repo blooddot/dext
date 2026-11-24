@@ -1,4 +1,6 @@
 import type { AgentProfile } from "../../agents/contracts/agent.js";
+import type { ConversationTurnContext } from "../../agents/domain/conversationInstructions.js";
+import type { ResolvedOutputLanguage } from "../../agents/domain/outputLanguage.js";
 import type { ResourceDocument, ResourceSession } from "../../resources/contracts/resourceSession.js";
 import type {
   AgentInputAnswers,
@@ -41,10 +43,12 @@ export interface ActiveExecution extends ExecutionSnapshot {
  * provider discovery through it. */
 export interface TurnExecutionHost {
   profiles: () => readonly AgentProfile[];
+  outputLanguage: () => ResolvedOutputLanguage | undefined;
   executeConversation: (
     mode: "agent" | "ask" | "plan",
     source: string,
-    metadata: Readonly<ExecutionMetadata>
+    metadata: Readonly<ExecutionMetadata>,
+    context: Readonly<ConversationTurnContext>
   ) => Promise<InputExecutionResponse>;
   executeInput: (
     source: string,

@@ -1,13 +1,5 @@
-/** Languages Dext can ask a provider to use for user-facing text. `auto` is
- * resolved from the VS Code display language; only the concrete values are
- * ever injected into a prompt. */
-export const OUTPUT_LANGUAGES = ["auto", "zh-CN", "zh-TW", "en", "ja", "ko"] as const;
-
-export type OutputLanguage = (typeof OUTPUT_LANGUAGES)[number];
-
-/** A language that can be written into a prompt. `auto` is not one: it has to
- * be resolved against the editor's display language first. */
-export type ResolvedOutputLanguage = Exclude<OutputLanguage, "auto">;
+import { OUTPUT_LANGUAGES, type OutputLanguage, type ResolvedOutputLanguage } from "../../../shared/contracts/conversationInstructions.js";
+export { OUTPUT_LANGUAGES, type OutputLanguage, type ResolvedOutputLanguage };
 
 const LANGUAGE_NAMES: Record<ResolvedOutputLanguage, string> = {
   "zh-CN": "Simplified Chinese (zh-CN)",
@@ -16,6 +8,14 @@ const LANGUAGE_NAMES: Record<ResolvedOutputLanguage, string> = {
   ja: "Japanese (ja)",
   ko: "Korean (ko)"
 };
+
+const EXPLICIT_LANGUAGE_PRIORITY = "If the user explicitly asks for another language or a translation in this turn, follow that request instead.";
+const FORMAT_PROTECTION = [
+  "- Keep the structure and protocol intact: do not translate section headings required by the Plan format, task checklist numbering or status markers, code, commands, file paths, identifiers, quoted source text, or Dext delimiter lines.",
+  "- Never translate machine-readable output: JSON keys, schema field names, enum values, type names, and any value the response contract defines. Only human-readable prose changes language.",
+  "- Preserve the user's original wording inside quoted input and file contents.",
+  `- ${EXPLICIT_LANGUAGE_PRIORITY}`
+];
 
 /** Canonicalizes a configured value. Unknown or missing values fall back to
  * `auto`, which preserves the model's own choice when the display language is
@@ -61,9 +61,21 @@ export function outputLanguageInstruction(language: ResolvedOutputLanguage | und
   return [
     "Interaction language set by Dext:",
     `- Use ${LANGUAGE_NAMES[language]} for every user-facing reply, progress update, visible reasoning summary, and Plan document body.`,
-    "- Keep the structure and protocol intact: do not translate section headings required by the Plan format, task checklist numbering or status markers, code, commands, file paths, identifiers, quoted source text, or Dext delimiter lines.",
-    "- Never translate machine-readable output: JSON keys, schema field names, enum values, type names, and any value the response contract defines. Only human-readable prose changes language.",
-    "- Preserve the user's original wording inside quoted input and file contents.",
-    "- If the user explicitly asks for another language or a translation in this turn, follow that request instead."
+    ...FORMAT_PROTECTION
   ].join("\n");
+}
+
+export function conversationLanguageInstruction(language: ResolvedOutputLanguage | null): string {
+  return [
+    language ? `Use ${LANGUAGE_NAMES[language]} for replies, progress, visible reasoning summaries, and Plan prose.` : undefined,
+    "Preserve Plan headings, task numbers and status markers, code, commands, paths, identifiers, quoted text, file contents, and Dext delimiters.",
+    "Never translate machine-readable output. Keep JSON keys, schema fields, enum values, type names, and contract values verbatim.",
+    EXPLICIT_LANGUAGE_PRIORITY
+  ].filter(Boolean).join(" ");
+}
+
+export function conversationLanguageOverride(language: ResolvedOutputLanguage | null): string {
+  const preference = language ? `Use ${LANGUAGE_NAMES[language]} for user-facing text.`
+    : "Clear Dext's language preference and decide from the current user request.";
+  return `Dext conversation language override: ${preference}`;
 }

@@ -1,13 +1,15 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { PiAgentRunner } from "../src/features/agents/host/piAgentRunner.js";
 import { PiRpcTransport } from "../src/features/agents/host/piRpcTransport.js";
+import { checkPiVersion } from "../src/features/agents/host/piCommand.js";
 import type { AgentExecutionRequest } from "../src/features/agents/host/agentRunner.js";
+import type { NativeConversationBaseline } from "../src/shared/contracts/conversationInstructions.js";
 
 describe("Pi structured result parity", { timeout: 30000 }, () => {
   it.skipIf(!process.env.DEXT_PI_SMOKE_COMMAND)("connects an explicitly supplied installed Pi to a local model endpoint", { timeout: 60000 }, async () => {
@@ -41,18 +43,42 @@ describe("Pi structured result parity", { timeout: 30000 }, () => {
     const address = server.address(); if (!address || typeof address === "string") throw new Error("No local endpoint.");
     await writeFile(join(root, "models.json"), JSON.stringify({ providers: { local: { api: "openai-completions", apiKey: "local-test-key", baseUrl: `http://127.0.0.1:${address.port}/v1`, models: [{ id: "flash", reasoning: false, input: ["text"], contextWindow: 32768, maxTokens: 1024, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } }));
     await writeFile(join(root, "settings.json"), JSON.stringify({ defaultProvider: "local", defaultModel: "flash", defaultThinkingLevel: "off" }));
+    await writeFile(join(root, "APPEND_SYSTEM.md"), "PI_DEFAULT_APPEND_SMOKE");
+    vi.stubEnv("PI_CODING_AGENT_DIR", root);
     const runner = new PiAgentRunner({ extensionPath: resolve("media/pi-extension.mjs"), sessionDirectory: join(root, "sessions"),
-      transportFactory: (command, args, cwd, env) => new PiRpcTransport(command, args, cwd, { ...env, PI_CODING_AGENT_DIR: root }) });
+      plugins: () => [] });
     try {
       const profile = { id: "pi", provider: "pi" as const, label: "Pi", command: process.env.DEXT_PI_SMOKE_COMMAND!, models: [] };
       const discovery = await runner.discoverModels(profile, root);
       expect(discovery.options.some((model) => model.id === "local/flash")).toBe(true);
       expect(requests).toHaveLength(0);
-      expect(await runner.runConversation({ profile, cwd: root, input: "Return a short answer", mode: "ask", metadata: { agentSessionId: "real" }, allowWorkspaceWrite: false, workspaceTrusted: false })).toBe("REAL_PI_TEXT");
+      const realVersion = await checkPiVersion(profile.command, root);
+      let stored = "", baseline: NativeConversationBaseline | undefined;
+      const ordinary = { profile, cwd: root, input: "Return a short answer", mode: "ask" as const, allowWorkspaceWrite: false, workspaceTrusted: false };
+      expect(await runner.runConversation({ ...ordinary, conversationInstructions: { outputLanguage: "zh-CN" },
+        metadata: { agentSessionId: "real", onAgentSessionId: (_provider, id, applied) => { stored = id; baseline = applied; } } })).toBe("REAL_PI_TEXT");
+      if (realVersion === "1.5.2") {
+        expect(baseline).toMatchObject({ outputLanguage: "zh-CN" });
+        const messages = requests[0]?.messages as { role: string; content: unknown }[];
+        expect(JSON.stringify(messages.filter((message) => message.role === "system"))).toContain("PI_DEFAULT_APPEND_SMOKE");
+        expect(JSON.stringify(messages.filter((message) => message.role === "system")).split("Simplified Chinese")).toHaveLength(2);
+        expect(JSON.stringify(messages.filter((message) => message.role === "user"))).not.toContain("Simplified Chinese");
+        runner.endSession("real");
+        await runner.runConversation({ ...ordinary, input: "Resume without a Dext language preference", conversationInstructions: { outputLanguage: null },
+          metadata: { agentSessionId: "restarted", conversationProviderSessionId: stored, conversationInstructionBaseline: { ...baseline!, sessionId: stored } } });
+        const resumed = requests.at(-1)?.messages as { role: string; content: unknown }[];
+        expect(JSON.stringify(resumed.filter((message) => message.role === "system")).split("Simplified Chinese")).toHaveLength(2);
+        expect(JSON.stringify(resumed.filter((message) => message.role === "user").at(-1))).toContain("Clear Dext's language preference");
+      }
       const output = z.object({ kind: z.literal("ask"), text: z.string() }).strict();
       const request = { profile, cwd: root, method: { id: "ask", input: [], description: "Explain" }, resolved: { arguments: { input: "Explain" }, context: [] },
-        contract: { outputJsonSchema: z.toJSONSchema(output), outputSchema: output }, metadata: {}, allowWorkspaceWrite: false, workspaceTrusted: false } as unknown as AgentExecutionRequest;
+        contract: { outputJsonSchema: z.toJSONSchema(output), outputSchema: output }, metadata: {}, structuredApi: true, allowWorkspaceWrite: false, workspaceTrusted: false } as unknown as AgentExecutionRequest;
       expect(JSON.parse(await runner.run(request) as string)).toEqual({ kind: "ask", text: "REAL_PI_RESULT" });
+      const structuredMessages = requests.at(-1)?.messages as { role: string; content: unknown }[];
+      if (realVersion === "1.5.2") {
+        expect(JSON.stringify(structuredMessages.filter((message) => message.role === "system"))).toContain("Read the labeled Dext JSON payload");
+        expect(JSON.stringify(structuredMessages.filter((message) => message.role === "user"))).not.toContain("Read the labeled Dext JSON payload");
+      }
       const events: unknown[] = [];
       let questions = 0;
       expect(await runner.runConversation({ profile, cwd: root, input: "QUESTION_SMOKE", mode: "ask", metadata: { requestAgentInput: async () => { questions++; return { q: { answers: ["A", "custom"] } }; } }, onEvent: (event) => events.push(event), allowWorkspaceWrite: false, workspaceTrusted: false })).toBe("REAL_PI_TEXT");
@@ -65,6 +91,7 @@ describe("Pi structured result parity", { timeout: 30000 }, () => {
       expect(requests.length).toBeGreaterThanOrEqual(3);
     } finally {
       await runner.dispose(); server.closeAllConnections(); await new Promise<void>((done) => { server.close(() => done()); });
+      vi.unstubAllEnvs();
       await rm(root, { recursive: true, force: true, maxRetries: 15, retryDelay: 50 });
     }
   });

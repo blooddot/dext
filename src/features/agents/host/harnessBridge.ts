@@ -150,9 +150,17 @@ export class HarnessBridge {
    * Harness assembles the request.
    */
   publishResultTool(tool: HarnessResultTool | undefined, signal?: AbortSignal): Promise<boolean> {
+    return this.publish({ kind: "tool", tool }, signal);
+  }
+
+  appendPersona(sessionId: string, text: string, signal?: AbortSignal): Promise<boolean> {
+    return this.publish({ kind: "persona", sessionId, text }, signal);
+  }
+
+  private publish(frame: Record<string, unknown>, signal?: AbortSignal): Promise<boolean> {
     const peer = this.peer;
     if (this.disposed || !peer || peer.destroyed) return Promise.resolve(false);
-    const id = `dext-result-tool-${++this.sequence}`;
+    const id = `dext-config-${++this.sequence}`;
     return new Promise<boolean>((resolve) => {
       const finish = (reply?: Record<string, unknown>): void => {
         clearTimeout(timer);
@@ -165,7 +173,7 @@ export class HarnessBridge {
       this.pending.set(id, finish);
       if (signal?.aborted) { abort(); return; }
       signal?.addEventListener("abort", abort, { once: true });
-      this.send(peer, { id, kind: "tool", tool });
+      this.send(peer, { id, ...frame });
     });
   }
 

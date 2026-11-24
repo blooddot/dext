@@ -34,6 +34,7 @@ function sidebarFixture(options: {
     setAgentSelection: vi.fn(),
     endAgentSession: vi.fn(),
     agentProfiles: () => [],
+    outputLanguage: () => undefined,
     storage: { globalStorageUri: { fsPath: "/global-storage" } },
     ...options.application
   };

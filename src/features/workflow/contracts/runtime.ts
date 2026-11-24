@@ -1,4 +1,5 @@
 import type { DextResult, ExecutionMetadata, ResolvedInvocation, RuntimeResponse } from "../../../shared/contracts/types.js";
+import type { ConversationTurnContext } from "../../agents/domain/conversationInstructions.js";
 
 /** A deterministic built-in handler the runtime dispatches outside a provider. */
 export type DeterministicHandler = (
@@ -10,7 +11,8 @@ export interface WorkflowRuntime {
   executeConversation(
     mode: "agent" | "ask" | "plan",
     input: string,
-    metadata?: Readonly<ExecutionMetadata>
+    metadata?: Readonly<ExecutionMetadata>,
+    context?: Readonly<ConversationTurnContext>
   ): Promise<RuntimeResponse>;
 
   executeStructuredJson(
