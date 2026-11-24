@@ -19,7 +19,6 @@ import { pathToFileURL } from "node:url";
 import { DextRunError, ExecutionCancelledError } from "../shared/protocol/executionErrors.js";
 import { dextWireStepSchema } from "../shared/contracts/schemas.js";
 import { toBoundaryJson } from "../shared/protocol/resultSerialization.js";
-import { DextResumeCache, type DextReplayEntry } from "./dextResumeCache.js";
 import type {
   CodeRef,
   ExecutionMetadata,
@@ -41,8 +40,8 @@ export const DEFAULT_DISPATCH_CONCURRENCY = 4;
 const READY_TIMEOUT_MS = 20_000;
 
 /** Run buffers kept in the runs directory. The kernel needs the file it is running
- * and nothing else: `Continue` replays recorded calls rather than re-reading it, so
- * an old buffer is only ever a curiosity. */
+ * and nothing else: a rerun writes a new buffer, so an old one is only ever a
+ * curiosity. */
 const RETAINED_RUN_BUFFERS = 20;
 
 /** A run buffer's name as `[timestamp, sequence]`, for ordering by age. */
@@ -83,12 +82,6 @@ export interface DextKernelRunMetadata {
   /** Carried into every API invocation the run makes. */
   execution?: Readonly<ExecutionMetadata>;
   signal?: AbortSignal;
-  /** Calls recorded by an earlier attempt of the same file, in call order. A call
-   * that still matches its entry returns the recorded response. */
-  resume?: readonly DextReplayEntry[];
-  /** Receives this attempt's call log, for a later resume. Called even when the
-   * attempt fails or is cancelled. */
-  onCallLog?: (entries: readonly DextReplayEntry[]) => void;
   /** Directories `dext/api/<id>` resolves against, most specific first. */
   apiRoots?: readonly string[];
   /** Resolved `@path` references, attached to every API call the run makes. */
@@ -181,8 +174,6 @@ export class DextKernelHost {
   private disposed = false;
   /** Metadata applied to every API call the current run makes. */
   private currentMetadata: Readonly<ExecutionMetadata> = {};
-  /** Call log of the run in flight, for a later resume. */
-  private currentLog: DextResumeCache | undefined;
   /** `@path` references resolved for the run in flight. */
   private currentContext: readonly CodeRef[] = [];
 
@@ -344,7 +335,6 @@ export class DextKernelHost {
     if (!child || !run) return;
     const metadata = this.currentMetadata;
     const context = this.currentContext;
-    const log = this.currentLog;
     const isCurrent = (): boolean => this.child === child && this.pending === run;
     let reply: DextHostMessage;
     try {
@@ -357,7 +347,6 @@ export class DextKernelHost {
       // refused here with a readable message instead of degrading silently.
       const maxDepth = method === "ui.render" ? serializationLimits.uiRenderDepth : undefined;
       const boundaryResponse = toBoundaryJson(response, `The result of ${method}()`, maxDepth);
-      log?.record(method, args, boundaryResponse);
       reply = {
         type: "response",
         requestId: id,
@@ -424,8 +413,6 @@ export class DextKernelHost {
       this.kill();
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    const log = new DextResumeCache(metadata.resume ?? []);
-    const report = (): void => metadata.onCallLog?.(log.entries);
     try {
       try {
         await this.start();
@@ -440,7 +427,6 @@ export class DextKernelHost {
       if (!child?.connected) throw new Error("The Dext kernel is not running.");
       const id = this.nextRunId++;
       this.currentMetadata = metadata.execution ?? {};
-      this.currentLog = log;
       this.currentContext = metadata.context ?? [];
       const promise = new Promise<InputExecutionResponse>((resolve, reject) => {
         this.pending = { id, steps: [], resolve, reject };
@@ -450,23 +436,16 @@ export class DextKernelHost {
           type: "run",
           id,
           file,
-          ...(log.replay.length ? { replay: log.replay } : {}),
           ...(metadata.apiRoots?.length ? { apiRoots: metadata.apiRoots } : {})
         };
         child.send(message);
       } catch (error) {
         this.pending = undefined;
-        this.currentLog = undefined;
         throw error instanceof Error ? error : new Error(String(error));
       }
-      try {
-        return await promise;
-      } finally {
-        report();
-      }
+      return await promise;
     } finally {
       this.currentMetadata = {};
-      this.currentLog = undefined;
       this.currentContext = [];
       signal?.removeEventListener("abort", onAbort);
     }
@@ -476,8 +455,8 @@ export class DextKernelHost {
    * Writes a composer buffer to disk and runs it.
    *
    * The kernel imports the file, so it has to exist as a real path. It is not a
-   * source of truth: Continue replays the recorded calls, so a finished run's buffer
-   * is only a curiosity, and the directory is pruned to the newest few.
+   * source of truth: a finished run keeps no further use for its buffer, so the
+   * directory is pruned to the newest few.
    */
   async runSource(source: string, metadata: DextKernelRunMetadata = {}): Promise<InputExecutionResponse> {
     const directory = this.options.runsDirectory ?? path.join(this.options.workspaceRoot, ".dext", "runs");

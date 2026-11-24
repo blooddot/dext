@@ -108,37 +108,6 @@ function flushStreams() {
   if (typeof globalThis.__dextFlushStreams === "function") globalThis.__dextFlushStreams();
 }
 
-/** JSON with sorted keys for comparing recorded calls. */
-function stableStringify(value) {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const keys = Object.keys(value).sort();
-  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
-}
-
-const REPLAY_MISMATCH =
-  "The Code file or a value it reads changed since it stopped, so the recorded calls no longer line up. Retry to run it from the start.";
-
-/**
- * A call that still matches the recorded sequence returns the recorded response
- * instead of asking the extension host again. A mismatch means the second run took
- * a different path (a clock, a random value, a direct filesystem read), which makes
- * every later recorded response unsafe to reuse — so the run stops with a readable
- * error instead of reusing the wrong answer.
- */
-function replay(method, args) {
-  const entries = globalThis.__dextReplay;
-  if (!Array.isArray(entries)) return undefined;
-  const index = globalThis.__dextReplayIndex ?? 0;
-  if (index >= entries.length) return undefined;
-  const entry = entries[index];
-  if (entry.method !== method || stableStringify(entry.arguments) !== stableStringify(args)) {
-    throw new Error(REPLAY_MISMATCH);
-  }
-  globalThis.__dextReplayIndex = index + 1;
-  return entry.response;
-}
-
 function requireChannel() {
   if (typeof process.send !== "function") {
     throw new Error("Dext APIs are only available inside a Dext run.");
@@ -154,16 +123,10 @@ async function invoke(method, options) {
   }
   const display = method === "ui.render";
   const converted = toDextJson(args, `The arguments of ${method}()`, "", { plain: display });
-  const recorded = replay(method, converted);
   // A call reaches Output only when it asked for `echo: true`; otherwise the step is
-  // marked quiet, which hides its result from Output while the caller, resume and
-  // history keep the full record.
+  // marked quiet, which hides its result from Output while the caller and history
+  // keep the full record.
   const quiet = display || args.echo === true ? {} : { quiet: true };
-  if (recorded !== undefined) {
-    flushStreams();
-    process.send({ type: "step", step: { method, state: "success", response: recorded, ...quiet } });
-    return recorded.result;
-  }
   const id = ++sequence;
   const payload = {
     type: "request",

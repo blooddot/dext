@@ -785,6 +785,10 @@ describe("sidebar panel layout", () => {
     expect(main).toMatch(/function updateRunState[\s\S]*?syncTurnActions\(\);/);
     expect(sidebar).toMatch(/case "retryTurn":[\s\S]*?dext\.history\.retryTurn[\s\S]*?sessionId: request.sessionId \?\? this\.activeSession\.id/);
     expect(sidebar).toMatch(/case "forkFromTurn":[\s\S]*?dext\.history\.forkFromTurn[\s\S]*?sessionId: request.sessionId \?\? this\.activeSession\.id/);
+    // Retry is the only rerun route: the removed Code continue request has no
+    // host handler and no command behind it.
+    expect(sidebar).not.toContain("case \"continueTurn\"");
+    expect(extension).not.toContain("dext.history.continueTurn");
     // Retry reproduces the recorded mode rather than whatever is selected now.
     expect(sidebar).toContain("await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? \"agent\", turn.input);");
     // The coordinator persists the turn under the webview's live turn id and

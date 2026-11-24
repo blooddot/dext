@@ -2,10 +2,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ExecutionCancelledError } from "../src/shared/protocol/executionErrors.js";
+import { DextRunError, ExecutionCancelledError } from "../src/shared/protocol/executionErrors.js";
 import type { InvocationAst, RuntimeResponse } from "../src/shared/contracts/types.js";
 import { DextKernelHost } from "../src/runner/dextHost.js";
-import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
 import { uiViewResultSchema } from "../src/shared/contracts/uiView.js";
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -46,16 +45,14 @@ export function workflowCases(runnerDirectory: string): void {
       return { root, api, kernel };
     }
 
-    it("records two read-only display calls in stream order and replays them once on Continue", { timeout: 30000 }, async () => {
+    it("records two read-only display calls in stream order and keeps them when the run fails", { timeout: 30000 }, async () => {
       const calls: string[] = [];
-      let fail = true;
       const { kernel } = await setup("", async (call) => {
         calls.push(call.method);
         if (call.method === "ui.render") return {
           ...response(call), result: uiViewResultSchema.parse({ kind: "view", nodes: call.arguments[0]?.value })
         };
-        if (fail) throw new Error("resume after displays");
-        return response(call);
+        throw new Error("failed after displays");
       });
       const source = [
         'import { ask, ui } from "dext";',
@@ -63,22 +60,19 @@ export function workflowCases(runnerDirectory: string): void {
         'console.log("between", first);',
         'const second = await ui.render({ nodes: [{ type: "Code", text: "two" }] });',
         'if (second !== undefined) throw new Error("ui.render must resolve void");',
-        'await ask({ input: "continue here" });'
+        'await ask({ input: "after displays" });'
       ].join("\n");
-      let log: readonly DextReplayEntry[] = [];
-      await expect(kernel.runSource(source, { onCallLog: (entries) => { log = entries; } })).rejects.toThrow("resume after displays");
-      expect(log.map(({ method }) => method)).toEqual(["ui.render", "ui.render"]);
-      fail = false;
-      kernel.kill();
-      const continued = await kernel.runSource(source, { resume: log });
-      expect(calls).toEqual(["ui.render", "ui.render", "ask", "ask"]);
-      expect(continued.steps?.map((step) => step.method)).toEqual(["ui.render", "stdout", "ui.render", "ask"]);
-      expect(continued.steps?.[1]?.stream?.text).toBe("between undefined\n");
-      expect(continued.steps?.filter((step) => step.method === "ui.render").map((step) => ({
-        visible: step.quiet !== true, result: step.response?.result
-      }))).toEqual([
-        { visible: true, result: { kind: "view", nodes: [{ type: "Text", text: "one" }] } },
-        { visible: true, result: { kind: "view", nodes: [{ type: "Code", text: "two" }] } }
+      const failure = await kernel.runSource(source).then(() => undefined, (error: unknown) => error);
+      expect(failure).toBeInstanceOf(DextRunError);
+      expect((failure as Error).message).toContain("failed after displays");
+      expect(calls).toEqual(["ui.render", "ui.render", "ask"]);
+      const steps = (failure as DextRunError).response?.steps ?? [];
+      // The failed turn keeps what the user could already see, in stream order.
+      expect(steps.map((step) => step.method)).toEqual(["ui.render", "stdout", "ui.render"]);
+      expect(steps[1]?.stream?.text).toBe("between undefined\n");
+      expect(steps.filter((step) => step.method === "ui.render").map((step) => step.response?.result)).toEqual([
+        { kind: "view", nodes: [{ type: "Text", text: "one" }] },
+        { kind: "view", nodes: [{ type: "Code", text: "two" }] }
       ]);
     });
 
@@ -106,10 +100,8 @@ export function workflowCases(runnerDirectory: string): void {
         const deadline = setTimeout(() => controller.abort(), 10000);
         try {
           for (let attempt = 0; attempt < 2; attempt += 1) {
-            let log: readonly DextReplayEntry[] = [];
             const result = await kernel.runSource('import { fix } from "dext/api/fix"; fix();', {
-              signal: controller.signal,
-              onCallLog: (entries) => { log = entries; }
+              signal: controller.signal
             });
             const output = (name: string): string => result.steps
               ?.filter((step) => step.stream?.channel === name).map((step) => step.stream!.text).join("") ?? "";
@@ -118,7 +110,6 @@ export function workflowCases(runnerDirectory: string): void {
             expect(output(channel)).toBe(`${payload}\ndrained\n${channel === "stdout" ? "done\n" : ""}`);
             if (channel === "stderr") expect(output("stdout")).toBe("done\n");
             expect(result.executions.map((entry) => entry.invocation.method)).toEqual(["ui.form", "ask"]);
-            expect(log.map((entry) => entry.method)).toEqual(["ui.form", "ask"]);
             expect(result.steps?.at(-1)?.stream?.text).toBe("done\n");
             expect(kernel.busy()).toBe(false);
             // The replacement child must get its own readers as well.
@@ -378,7 +369,7 @@ export function workflowCases(runnerDirectory: string): void {
       expect(calls).toEqual(["ask", "ask"]);
     });
 
-    it("isolates late replies, queued calls and replay logs after cancellation", { timeout: 30000 }, async () => {
+    it("isolates late replies and queued calls after cancellation", { timeout: 30000 }, async () => {
       const oldStarted = deferred();
       const newStarted = deferred();
       const oldAnswer = deferred();
@@ -405,8 +396,7 @@ export function workflowCases(runnerDirectory: string): void {
       await oldStarted.promise;
       controller.abort();
       await cancelled;
-      let log: readonly DextReplayEntry[] = [];
-      const next = kernel.runSource('import { ask } from "dext"; await ask({ input: "new" });', { onCallLog: (entries) => { log = entries; } });
+      const next = kernel.runSource('import { ask } from "dext"; await ask({ input: "new" });');
       await newStarted.promise; // Old host execution must not occupy the new queue.
       oldAnswer.resolve(); // Request id 1 in both children: must not answer the new ask.
       await new Promise((resolve) => setTimeout(resolve, 60));
@@ -416,7 +406,6 @@ export function workflowCases(runnerDirectory: string): void {
       const result = await next;
       expect(result.steps?.map((step) => step.method)).toEqual(["ask"]);
       expect(result.executions[0]?.result).toEqual({ kind: "ask", text: "new" });
-      expect(log.map((entry) => entry.method)).toEqual(["ask"]);
     });
   });
 }

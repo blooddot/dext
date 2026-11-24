@@ -447,11 +447,13 @@ A Code run executes immediately in the Node kernel. Every Dext API call is dispa
 
 Without an Agent profile, `ask`, `plan` and `agent` return a deterministic echo of their input and make no workspace changes, and `skill` and `template` report that they need a profile. A preview does not mean an AI task has run. With a profile selected, the call goes to the selected CLI and its structured output is validated before display.
 
-## Continuing a failed Code run
+## Retrying a failed Code run
 
-A failed Code turn offers **Continue**. Dext recorded every Dext API call the failed attempt made — in order, with the arguments it used — and Continue replays them: a call that still matches returns the response it produced before, so the work that already succeeded is not repeated, and the run resumes at the first call that is new. `console.log`/`console.error` output is not a recorded call and never affects the alignment.
+A failed Code turn offers **Retry**. The turn's input and mode are saved, so Retry asks for confirmation and, once confirmed, starts a new turn in the same conversation: the script runs again from the start in the mode it was recorded with. Cancelling the confirmation runs nothing and records no turn. Stop is not a starting point for Retry: it ends the turn.
 
-Replay is exact or it stops. Dext compares the call index, the method and the arguments; the first difference means the code — or a value the recording cannot see, such as `Date.now()`, `Math.random()`, an environment variable or a file read outside a Dext call — sent the second attempt down another path. Rather than attaching an old response to a different call, the run stops with an explicit "the recorded calls no longer line up" error and the turn can be retried from the start. A stopped turn is not a continuation point: Stop ends it.
+Every Dext API call in the new turn goes through the Host API and returns the response produced this time. Nothing from the earlier attempt is replayed, so a call that succeeds now always executes again: files are written again, plans are saved again, and external services or agents are called again. That is what the confirmation warns about.
+
+The failed turn keeps its own error and the output it had already produced, so History still shows both after the retry. History's **Continue in Dext** opens a saved conversation instead of running one again.
 
 Old `.dx` checkpoints from earlier versions are not read and cannot be resumed; Code files and their turns start fresh.
 

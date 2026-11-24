@@ -1,6 +1,5 @@
 import type { AgentProfile } from "../../agents/contracts/agent.js";
 import type { ResourceDocument, ResourceSession } from "../../resources/contracts/resourceSession.js";
-import type { DextReplayEntry } from "../../../shared/contracts/replay.js";
 import type {
   AgentInputAnswers,
   AgentInputRequest,
@@ -49,8 +48,7 @@ export interface TurnExecutionHost {
   ) => Promise<InputExecutionResponse>;
   executeInput: (
     source: string,
-    metadata: Readonly<ExecutionMetadata>,
-    run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void }
+    metadata: Readonly<ExecutionMetadata>
   ) => Promise<InputExecutionResponse>;
   draftResource: (
     resource: ResourceSession,

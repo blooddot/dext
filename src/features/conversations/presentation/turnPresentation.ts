@@ -9,7 +9,6 @@ import { uiViewText } from "../../../shared/lib/ui/uiViewPresentation.js";
 export const TURN_EDIT_ACTION = { icon: "reply", label: "Edit input in Dext" } as const;
 export const TURN_RENAME_ACTION = { icon: "edit", label: "Rename turn" } as const;
 export const TURN_RETRY_ACTION = { icon: "debug-restart", label: "Retry this turn" } as const;
-export const TURN_CONTINUE_ACTION = { icon: "play-circle", label: "Continue from the failed Code step" } as const;
 export const TURN_FORK_ACTION = { icon: "repo-forked", label: "Fork from this turn" } as const;
 export const TURN_COPY_ACTION = { icon: "markdown", label: "Copy turn as Markdown" } as const;
 export const TURN_COPY_INPUT_ACTION = { icon: "copy", label: "Copy input only" } as const;

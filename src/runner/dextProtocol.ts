@@ -72,10 +72,6 @@ export type DextHostMessage =
     type: "run";
     id: number;
     file: string;
-    /** Calls from a previous attempt, in order. A call that still matches one of
-     * these returns the recorded response instead of asking the parent again.
-     * Arguments and responses are JSON by construction (see `dextSerialization.mjs`). */
-    replay?: readonly { method: string; arguments: Record<string, unknown>; response: unknown }[];
     /** Directories `dext/api/<id>` resolves against, most specific first. The
      * workspace's own `.dext/api` is always first, so a configured directory can
      * never shadow a project API. */

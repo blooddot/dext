@@ -10,7 +10,6 @@ import type {
   PlanExecutionOutcome,
   UiInteraction
 } from "../../../shared/contracts/types.js";
-import type { DextReplayEntry } from "../../../runner/dextResumeCache.js";
 import { DextRunError, ExecutionCancelledError } from "../../../shared/protocol/executionErrors.js";
 import type {
   ConversationHistoryStore,
@@ -35,11 +34,6 @@ import type { InteractionController } from "./interactionController.js";
 import type { PlanController, PlanRunContext } from "./planController.js";
 import { planTodoInstruction, stripPlanTodoProgress } from "../domain/planTodoProgress.js";
 import { harnessPresetOrDefault } from "../../agents/domain/harnessPresetDefault.js";
-
-/** Failed Code turns keep their replay log until the user continues them or the
- * log is evicted; each log can hold several large responses. */
-// shortcut: a global count cap, per-session cleanup needs a delete hook.
-const MAX_CODE_CONTINUATIONS = 8;
 
 /** A run Pi started on its own after the turn settled, for example because a
  * background subagent finished and woke it with the result. */
@@ -123,22 +117,18 @@ export interface TurnExecutionCoordinatorOptions {
 export interface ExecuteTurnOptions {
   planPath?: string;
   executePlan?: boolean;
-  codeContinuation?: readonly DextReplayEntry[];
   /** Creation mode a resource draft was requested from. Defaults to describe. */
   resourceSource?: ResourceSourceKind;
 }
 
 /** Owns running turns: the active execution per conversation, its abort
- * controller, buffered events, plan rounds, saving, provider sessions, forks
- * and Code continuations. One conversation runs at most one turn; different
- * conversations run concurrently. */
+ * controller, buffered events, plan rounds, saving, provider sessions and
+ * forks. One conversation runs at most one turn; different conversations run
+ * concurrently. */
 export class TurnExecutionCoordinator implements TurnInteractionPort {
   private readonly activeExecutions = new Map<string, ActiveExecution>();
   /** Runs Pi started after a turn settled, keyed by conversation. */
   private readonly wakes = new Map<string, Wake>();
-  /** Live Code continuations. They intentionally stay in memory because they
-   * carry the runtime environment produced by earlier steps. */
-  private readonly codeContinuations = new Map<string, readonly DextReplayEntry[]>();
 
   constructor(private readonly options: TurnExecutionCoordinatorOptions) {}
 
@@ -253,13 +243,6 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     for (const execution of this.activeExecutions.values()) execution.controller.abort();
   }
 
-  takeContinuation(sessionId: string, turnId: string): readonly DextReplayEntry[] | undefined {
-    const key = `${sessionId}:${turnId}`;
-    const continuation = this.codeContinuations.get(key);
-    if (continuation) this.codeContinuations.delete(key);
-    return continuation;
-  }
-
   uiInteraction(sessionId: string, turnId: string, events: AgentStreamEvent[]): UiInteraction {
     return this.options.interactions.uiInteraction(sessionId, turnId, (event) => this.options.events.append(sessionId, events, event));
   }
@@ -269,7 +252,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
   }
 
   async execute(session: DextHistorySession, mode: "agent" | "ask" | "plan" | "code", source: string, options: ExecuteTurnOptions = {}): Promise<void> {
-    const { planPath, executePlan = false, codeContinuation, resourceSource = "describe" } = options;
+    const { planPath, executePlan = false, resourceSource = "describe" } = options;
     const sessionId = session.id;
     if (session.resource) {
       mode = "ask";
@@ -317,7 +300,6 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
     const executionPlanPath = executePlan ? planPath ?? session.activePlanPath : planPath;
     const plan: PlanRunContext = this.options.plans.startRun(session, taskSource, executePlan, executionPlanPath);
     const { planRun, todoProgress, planExecution } = plan;
-    let codeCallLog: readonly DextReplayEntry[] | undefined;
     const controller = new AbortController();
     const startedAt = Date.now();
     this.activeExecutions.set(sessionId, {
@@ -437,10 +419,7 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
             response = generated.response;
           } else {
             response = mode === "code"
-              ? await this.options.host.executeInput(roundSource, roundMetadata, {
-                ...(codeContinuation ? { resume: codeContinuation } : {}),
-                onCallLog: (entries) => { codeCallLog = entries; }
-              })
+              ? await this.options.host.executeInput(roundSource, roundMetadata)
               : await this.options.host.executeConversation(mode, roundSource, roundMetadata);
           }
         } finally { acceptingEvents = false; }
@@ -508,15 +487,6 @@ export class TurnExecutionCoordinator implements TurnInteractionPort {
       const response = error instanceof DextRunError || error instanceof ExecutionCancelledError ? error.response : undefined;
       const turn = await this.options.history.addFailure(source, events, error, sessionId, mode, turnId, await recordContext(), response);
       saved = turn;
-      // A failed Code turn keeps the calls it managed to make, so Continue replays
-      // them instead of repeating work that already succeeded. A stop is not a
-      // failure to continue from: the user asked for it to end.
-      if (mode === "code" && !controller.signal.aborted && codeCallLog?.length) {
-        this.codeContinuations.set(`${sessionId}:${turnId}`, codeCallLog);
-        while (this.codeContinuations.size > MAX_CODE_CONTINUATIONS) {
-          this.codeContinuations.delete(this.codeContinuations.keys().next().value!);
-        }
-      }
       await this.options.sessions.saveProviderSessions(session);
       this.options.sessions.recordTurn(sessionId, turn);
       await this.options.sessions.postConversationState();

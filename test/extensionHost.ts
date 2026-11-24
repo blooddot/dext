@@ -58,6 +58,7 @@ async function runHostChecks(): Promise<void> {
   assert.ok(commands.includes("dext.history.renameTurn"), "Turn rename command is registered.");
   assert.ok(commands.includes("dext.history.copyTurn"), "Turn copy command is registered.");
   assert.ok(commands.includes("dext.history.retryTurn"), "Turn retry command is registered.");
+  assert.ok(!commands.includes("dext.history.continueTurn"), "Retired Code continue command must not be registered.");
   assert.ok(commands.includes("dext.history.deleteTurn"), "Turn delete command is registered.");
   assert.ok(commands.includes("dext.openWorkspaceTrust"), "Workspace Trust command is registered.");
   assert.ok(commands.includes("dext.workspaceTrustedStatus"), "Trusted workspace title action is registered.");

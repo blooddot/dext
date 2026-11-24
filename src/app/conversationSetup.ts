@@ -2,7 +2,6 @@ import type { AgentProfile, AgentSelection } from "../features/agents/contracts/
 import type { ResourceDocument, ResourceSession } from "../features/resources/contracts/resourceSession.js";
 import type { ConversationHistoryStore } from "../features/conversations/contracts/history.js";
 import type { ConversationPreferences } from "../features/conversations/contracts/preferences.js";
-import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import type { SkillCommandResolution } from "../features/workflow/contracts/skill.js";
 import type { ExecutionMetadata, InputExecutionResponse } from "../shared/contracts/types.js";
 import type { WebviewResponse } from "../platform/webviewProtocol.js";
@@ -30,8 +29,7 @@ export interface ConversationSetupDependencies {
   executeConversation: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
   executeInput: (
     source: string,
-    metadata: Readonly<ExecutionMetadata>,
-    run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void }
+    metadata: Readonly<ExecutionMetadata>
   ) => Promise<InputExecutionResponse>;
   draftResource: (resource: ResourceSession, source: string, metadata: Readonly<ExecutionMetadata>) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
   resolveSkillCommand?: (id: string, selectedSkillIds: readonly string[], args: string, agent?: string) => SkillCommandResolution;

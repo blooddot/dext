@@ -116,6 +116,16 @@ describe("Webview protocol", () => {
       .toBe(false);
   });
 
+  it("rejects the removed Code continue request and keeps retry as the rerun route", () => {
+    expect(webviewRequestSchema.safeParse({ type: "continueTurn", turnId: "turn-1" }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({
+      type: "continueTurn",
+      turnId: "turn-1",
+      sessionId: "session-1"
+    }).success).toBe(false);
+    expect(webviewRequestSchema.safeParse({ type: "retryTurn", turnId: "turn-1" }).success).toBe(true);
+  });
+
   it("accepts code and normal conversation input requests", () => {
     expect(webviewRequestSchema.parse({
       type: "executeInput",

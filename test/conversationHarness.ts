@@ -13,7 +13,6 @@ import { PlanController } from "../src/features/conversations/host/planControlle
 import { TurnExecutionCoordinator } from "../src/features/conversations/host/turnExecutionCoordinator.js";
 import type { ExecutionMetadata, InputExecutionResponse } from "../src/shared/contracts/types.js";
 import type { ResourceDocument, ResourceSession } from "../src/features/resources/contracts/resourceSession.js";
-import type { DextReplayEntry } from "../src/runner/dextResumeCache.js";
 import type { SkillCommandResolution } from "../src/features/workflow/contracts/skill.js";
 
 /** A shared in-memory memento for controllers and preferences. */
@@ -48,7 +47,7 @@ export interface ConversationHarnessOptions {
   pinned?: string[];
   selection?: Partial<AgentSelection>;
   executeConversation?: (mode: "agent" | "ask" | "plan", source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
-  executeInput?: (source: string, metadata: Readonly<ExecutionMetadata>, run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void }) => Promise<InputExecutionResponse>;
+  executeInput?: (source: string, metadata: Readonly<ExecutionMetadata>) => Promise<InputExecutionResponse>;
   draftResource?: (resource: ResourceSession, source: string, metadata: Readonly<ExecutionMetadata>) => Promise<{ draft: ResourceDocument; response: InputExecutionResponse }>;
   planText?: string;
   trusted?: boolean;

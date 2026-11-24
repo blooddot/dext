@@ -98,7 +98,8 @@ MCP 初始化从 `package.json` 读取客户端名称和版本。协议版本分
 - `src/runner/dextLoader.mjs` 把 `dext` 映射到运行时模块、把 `dext/api/<id>` 映射到 `<workspace>/.dext/api/<id>.ts`，解析工作区内省略扩展名的 `.ts` 导入，并擦除 TypeScript 类型。
 - `src/runner/dextRuntime.mjs` 就是 `dext` 模块：每次调用记录一个步骤，并请求扩展宿主通过原有 runtime 执行。
 - `src/runner/dextSerialization.mjs` 定义跨进程值的规则。
-- `src/runner/dextResumeCache.ts` 记录 run 期间的 API 调用，并在用户继续失败 run 时重放。
+
+每个 kernel `request` 以 JSON 给出方法与参数；宿主把它转成 `InvocationAst`，走原有 runtime 执行后返回响应。`toBoundaryJson` 会拒绝无法跨 JSON 边界的返回值（`ui.render` 使用 UI 的深度上限），因此内核收不到的值会给出可读的错误，而不是静默降级。成功响应作为该调用的 `step` 回传，失败的调用回传带错误的 `step`，只有声明 `echo: true`（或 `ui.render`）的调用才会进入 Output。run 失败或被停止时，`recordedOutput` 保留已经产生的可见步骤，所以失败轮次仍能看到用户当时看到的内容。复用 kernel 时的模块级状态由上文的 per-run loader generation 约束。
 
 以下运行时事实在本仓库（2026-09）由 `test/dextHost.test.ts`、`scripts/dextSmoke.mjs` 与直接探测确认。本机开发使用 Node 22.23.2；`.vscode-test` 中的 VS Code 归档为 1.132.0 与 1.138.0。
 

@@ -26,7 +26,6 @@ import { renderEditorTabHtml } from "../platform/editor-tabs/editorTabHtml.js";
 import { FileSearchController } from "../features/workspace/host/fileSearchController.js";
 import { referencedAttachmentNames } from "../platform/vscode/dextStorage.js";
 import { ReadyMessageQueue } from "../shared/lib/readyMessageQueue.js";
-import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import {
 attachmentFileReference,
 clipboardFileReference,
@@ -149,7 +148,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
       endAgentSession: (sessionId) => this.application.endAgentSession(sessionId),
       profiles: () => this.application.agentProfiles(),
       executeConversation: (mode, source, metadata) => this.application.executeConversation(mode, source, metadata),
-      executeInput: (source, metadata, run) => this.application.executeInput(source, metadata, run),
+      executeInput: (source, metadata) => this.application.executeInput(source, metadata),
       draftResource: (resource, source, metadata) => this.application.draftResource(resource, source, metadata),
       resolveSkillCommand: (id, selectedSkillIds, args, agent) => this.application.skills.resolveCommand(id, selectedSkillIds, args, agent),
       isTrustedLocalWorkspace: () => this.application.isTrustedLocalWorkspace(),
@@ -568,28 +567,10 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     this.showChat();
     await this.openConversation(session);
     if (turn.resourceSource) {
-      await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input, undefined, false, undefined, turn.resourceSource);
+      await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input, undefined, false, turn.resourceSource);
     } else {
       await this.run(turn.mode ?? this.application.state().agentSelection.mode ?? "agent", turn.input);
     }
-  }
-
-  async continueTurn(sessionId: string, turnId: string): Promise<void> {
-    await this.conversation.controller.hydrate();
-    if (this.running(sessionId)) throw new Error("Stop this Dext turn before continuing a conversation turn.");
-    const continuation = this.conversation.coordinator.takeContinuation(sessionId, turnId);
-    if (!continuation) throw new Error("This Code turn cannot be continued after the extension was reloaded. Retry it instead.");
-    const session = this.sessionInMap(sessionId) ?? await this.history.session(sessionId);
-    const turn = session?.turns.find((item) => item.id === turnId);
-    if (!session || !turn || turn.mode !== "code") throw new Error("Conversation Code turn not found.");
-    if (session.archivedAt) {
-      await this.history.setArchived(sessionId, false);
-      delete session.archivedAt;
-    }
-    await vscode.commands.executeCommand("dext.sidebar.focus");
-    this.showChat();
-    await this.openConversation(session);
-    await this.run("code", turn.input, undefined, false, continuation);
   }
 
   async deleteTurn(turnId: string, sessionId = this.activeSession.id): Promise<void> {
@@ -763,7 +744,7 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           // names the conversation it was typed in.
           const target = request.sessionId ? this.sessionInMap(request.sessionId) : this.activeSession;
           if (!target) throw new Error("This conversation is no longer open.");
-          await this.run(request.mode, request.source, request.planPath, false, undefined, request.resourceSource, target);
+          await this.run(request.mode, request.source, request.planPath, false, request.resourceSource, target);
           break;
         }
         case "resourceOptions":
@@ -825,9 +806,6 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
           await vscode.commands.executeCommand("dext.history.retryTurn", {
             sessionId: request.sessionId ?? this.activeSession.id, turnId: request.turnId
           });
-          break;
-        case "continueTurn":
-          await this.continueTurn(request.sessionId ?? this.activeSession.id, request.turnId);
           break;
         case "forkFromTurn":
           await vscode.commands.executeCommand("dext.history.forkFromTurn", {
@@ -1251,12 +1229,11 @@ export class DextSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, codeContinuation?: readonly DextReplayEntry[], resourceSource?: "describe" | "import", session = this.activeSession): Promise<void> {
+  private async run(mode: "agent" | "ask" | "plan" | "code", source: string, planPath?: string, executePlan = false, resourceSource?: "describe" | "import", session = this.activeSession): Promise<void> {
     await this.conversation.controller.hydrate();
     await this.conversation.coordinator.execute(session, mode, normalizeInputReferenceSource(source), {
       ...(planPath !== undefined ? { planPath } : {}),
       executePlan,
-      ...(codeContinuation ? { codeContinuation } : {}),
       ...(resourceSource ? { resourceSource } : {})
     });
   }

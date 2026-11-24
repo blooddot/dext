@@ -330,7 +330,7 @@ describe("Dext kernel host", () => {
         stderr: "", duration_ms: 1 } };
     });
     const h = createConversationHarness({
-      executeInput: (source, execution, run) => kernel.runSource(source, { ...run, execution, signal: execution.signal! })
+      executeInput: (source, execution) => kernel.runSource(source, { execution, signal: execution.signal! })
     });
     const session = conversation(`archive-${choice}`);
     await h.seed([session]);
@@ -828,12 +828,11 @@ describe("Dext kernel host", () => {
       await writeFile(join(apiDirectory, "inspection-report.ts"), example);
     }
     const input = state === "submit" ? [
-      'import { existsSync } from "node:fs";',
       'import { ui } from "dext";',
       'import { inspectConfig } from "dext/api/inspection-report";',
       'console.log(JSON.stringify(await inspectConfig()));',
       'await ui.render({ nodes: [{ type: "Text", text: "检查结束" }] });',
-      'if (!existsSync("resume-ready")) throw new Error("Test retry");'
+      'throw new Error("Test retry");'
     ].join("\n") : example + "\nconsole.log(JSON.stringify((await inspectConfig()) ?? null));";
     const runtime = builtinRuntime(root);
     const calls: string[] = [];
@@ -842,8 +841,8 @@ describe("Dext kernel host", () => {
       return runtime.execute(invocation, [], metadata);
     });
     const h = createConversationHarness({
-      executeInput: (source, execution, run) => kernel.runSource(source, {
-        ...run, execution, signal: execution.signal!, apiRoots: [apiDirectory]
+      executeInput: (source, execution) => kernel.runSource(source, {
+        execution, signal: execution.signal!, apiRoots: [apiDirectory]
       })
     });
     try {
@@ -906,25 +905,12 @@ describe("Dext kernel host", () => {
         expect(steps[1]?.stream?.text).toContain(output + "\n");
         expect(record.error).toContain("Test retry");
         expect(calls).toEqual(["ui.render", "ui.form", "ui.render"]);
-        const continuation = h.coordinator.takeContinuation(session.id, record.id);
-        expect(continuation?.map((entry) => entry.method)).toEqual(calls);
-        expect(h.coordinator.takeContinuation(session.id, record.id)).toBeUndefined();
-        await writeFile(join(root, "resume-ready"), "");
-        h.messages.length = 0;
-        await h.coordinator.execute(h.controller.active(), "code", input, { codeContinuation: continuation! });
-        const resumed = (await h.history.session(session.id))!.turns.at(-1)!;
-        expect(resumed.error).toBeUndefined();
-        expect(resumed.response?.steps?.map((step) => step.method)).toEqual(["ui.render", "ui.form", "stdout", "ui.render"]);
-        expect(resumed.response?.steps?.[2]?.stream?.text).toBe(steps[1]?.stream?.text);
-        expect(calls).toEqual(["ui.render", "ui.form", "ui.render"]);
-        expect(h.messages.some((message) => message.type === "agentEvent" && message.event.uiInteraction?.status === "waiting")).toBe(false);
       } else if (state === "cancel") {
         expect(steps[1]?.response?.result).toMatchObject({ kind: "ui", type: "form", status: "cancelled", answers: {} });
         expect(steps[2]?.stream?.text).toContain('"status":"cancelled","answers":{}');
         expect(record.error).toBeUndefined();
       } else if (state === "stop") {
         expect(record.error).toBe("Execution was cancelled.");
-        expect(h.coordinator.takeContinuation(session.id, record.id)).toBeUndefined();
       }
     } finally {
       h.dispose();
@@ -988,7 +974,7 @@ describe("Dext kernel host", () => {
     const runtime = builtinRuntime(root);
     const kernel = host(root, (invocation, metadata) => runtime.execute(invocation, [], metadata));
     const h = createConversationHarness({
-      executeInput: (source, execution, run) => kernel.runSource(source, { ...run, execution })
+      executeInput: (source, execution) => kernel.runSource(source, { execution })
     });
     try {
       const session = conversation("display-failure");
@@ -1030,7 +1016,7 @@ describe("Dext kernel host", () => {
       return runtime.execute(invocation, [], metadata);
     });
     const h = createConversationHarness({
-      executeInput: (source, execution, run) => kernel.runSource(source, { ...run, execution, signal: execution.signal! })
+      executeInput: (source, execution) => kernel.runSource(source, { execution, signal: execution.signal! })
     });
     const reopened = createConversationHarness();
     try {
@@ -1048,7 +1034,6 @@ describe("Dext kernel host", () => {
       const record = saved.turns[0]!;
       expect(record.error).toBe("Execution was cancelled.");
       expect(record.response?.steps?.map((step) => step.method)).toEqual(["ui.render"]);
-      expect(h.coordinator.takeContinuation(session.id, record.id)).toBeUndefined();
       expect(h.messages).toContainEqual(expect.objectContaining({
         type: "executionFailed", sessionId: session.id, message: record.error, response: record.response
       }));

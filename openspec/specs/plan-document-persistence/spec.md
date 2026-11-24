@@ -147,27 +147,21 @@
 - **THEN** 第二个文件按既有规则获得递增序号，不会覆盖第一个文件
 - **AND** 两次返回的 `planPath` 指向各自实际写入的文件
 
-### Requirement: planPath 跨 Kernel 边界与重放保持可用
+### Requirement: planPath 跨 Kernel 边界保持可用
 
-`planPath` SHALL 是普通 JSON 字符串，并在结果跨越 Kernel 与 Extension Host 边界之前写入结果。`location` 与 `save` 作为普通参数进入 `invocation.arguments`，MUST NOT 需要新增协议字段。被记录或缓存的结果 MUST 保留 `planPath`；重放该调用时 SHALL 返回已保存文件的同一个 `planPath`，且 MUST NOT 因重放而在任一位置重复写入计划文件。`save: false` 的调用同样被完整记录，其重放结果 MUST 仍然不含 `planPath`，也不会写入文件。
+`planPath` SHALL 是普通 JSON 字符串，并在 Extension Host 将 `plan()` 的调用结果交给 Kernel 之前写入结果。收到该响应的脚本和包含该响应的执行结果 SHALL 保留此字段。`location` 与 `save` 作为普通参数进入 `invocation.arguments`，MUST NOT 需要新增协议字段。
 
 #### Scenario: 跨边界后仍包含 planPath
 
-- **WHEN** 代码 API 的 `plan({ save: true, location: "global" })` 结果经由 Kernel 返回 Extension Host
-- **THEN** 返回的执行结果中仍包含 `planPath`
-- **AND** 该值可直接用于后续 `fs.stat` 或 `fs.readFile`
+- **WHEN** Extension Host 处理 Code 脚本发起的 `plan({ save: true, location: "global" })` 并保存非空计划
+- **THEN** 脚本收到的对象及返回 Extension Host 的执行结果中均保留指向本次实际保存文件的 `planPath`
+- **AND** 调用方可用该值执行 `fs.stat` 或 `fs.readFile`
 
-#### Scenario: 重放保留已保存路径
+#### Scenario: 不保存时跨边界保留计划正文
 
-- **WHEN** 一次失败的 Code 运行被重试，重放命中此前的 `plan()` 调用
-- **THEN** 重放结果包含与首次运行相同的 `planPath`
-- **AND** global 与项目计划目录中都不会因此多出第二个计划文件
-
-#### Scenario: 重放不改变 save 与 location 的语义
-
-- **WHEN** 首次运行以 `save: false` 或显式 `location` 调用了 `plan()`，重试时重放该调用
-- **THEN** 重放结果中的 `planPath` 与首次运行完全一致（`save: false` 时仍然没有该字段）
-- **AND** 不会因为重放而改变保存位置或新增文件
+- **WHEN** Code 脚本传入 `save: false` 和显式 `location`，且 Agent 返回非空计划
+- **THEN** Extension Host 收到原参数，两个计划目录均无本次调用新增的文件
+- **AND** 脚本收到完整计划正文，响应不含 `planPath`
 
 ### Requirement: 代码 API 保存不改变 UI Plan 行为
 

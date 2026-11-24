@@ -14,7 +14,10 @@ describe("conversation protocol", () => {
     expect(types).toContain("correctPlan");
     expect(types).toContain("composerDraft");
     expect(types).toContain("togglePlanAcceptance");
-    expect(types).toHaveLength(28);
+    // The removed Code continue request is no longer part of the union; retry is.
+    expect(types).not.toContain("continueTurn");
+    expect(types).toContain("retryTurn");
+    expect(types).toHaveLength(27);
     for (const type of types) expect(webviewRequestSchema.options.some((option) => option.shape.type.value === type)).toBe(true);
   });
 

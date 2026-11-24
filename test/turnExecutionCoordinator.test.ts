@@ -208,49 +208,6 @@ describe("TurnExecutionCoordinator", () => {
     expect(h.controller.session("session")?.planStatus).toBe("active");
   });
 
-  it("replays the calls of a failed Code turn only when it was not stopped", async () => {
-    const continuation = [{ method: "ask", args: {} }] as never;
-    const executeInput = vi.fn(async (_source: string, _metadata, run: { onCallLog?: (entries: never) => void }): Promise<InputExecutionResponse> => {
-      run.onCallLog?.(continuation);
-      throw new Error("step failed");
-    });
-    const h = createConversationHarness({ executeInput });
-    await h.seed([conversation("session")]);
-    h.controller.activate(h.controller.session("session")!);
-    await h.coordinator.execute(h.controller.session("session")!, "code", "ask()");
-    expect(h.coordinator.takeContinuation("session", (await h.history.sessions())[0]!.turns[0]!.id)).toBe(continuation);
-    expect(h.coordinator.takeContinuation("session", (await h.history.sessions())[0]!.turns[0]!.id)).toBeUndefined();
-
-    const stopped = createConversationHarness({
-      executeInput: async (_source, _metadata, run): Promise<InputExecutionResponse> => {
-        run.onCallLog?.(continuation);
-        stopped.coordinator.abort("session");
-        throw new Error("stopped");
-      }
-    });
-    await stopped.seed([conversation("session")]);
-    stopped.controller.activate(stopped.controller.session("session")!);
-    await stopped.coordinator.execute(stopped.controller.session("session")!, "code", "ask()");
-    expect(stopped.coordinator.takeContinuation("session", (await stopped.history.sessions())[0]!.turns[0]!.id)).toBeUndefined();
-  });
-
-  it("keeps the replay logs of failed Code turns bounded", async () => {
-    const executeInput = async (_source: string, _metadata: unknown, run: { onCallLog?: (entries: never) => void }): Promise<InputExecutionResponse> => {
-      run.onCallLog?.([{ method: "ask", args: {} }] as never);
-      throw new Error("step failed");
-    };
-    const h = createConversationHarness({ executeInput });
-    await h.seed([conversation("session")]);
-    const session = () => h.controller.session("session")!;
-    h.controller.activate(session());
-    for (let attempt = 0; attempt < 9; attempt++) await h.coordinator.execute(session(), "code", "ask()");
-    const turns = (await h.history.sessions())[0]!.turns;
-    expect(turns).toHaveLength(9);
-    // The cap keeps the newest failures; an evicted turn falls back to a full rerun.
-    expect(h.coordinator.takeContinuation("session", turns[0]!.id)).toBeUndefined();
-    expect(h.coordinator.takeContinuation("session", turns[8]!.id)).toBeDefined();
-  });
-
   it("resolves a command once, executes the expanded task, and stores the raw source", async () => {
     const seen: Readonly<ExecutionMetadata>[] = [];
     const resolveSkillCommand = vi.fn(() => ({

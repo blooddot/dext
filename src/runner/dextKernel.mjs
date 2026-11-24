@@ -198,17 +198,13 @@ async function undefinedNameHint(message, apiRoots) {
   return message;
 }
 
-async function run(id, file, replay, apiRoots) {
+async function run(id, file, apiRoots) {
   const roots = Array.isArray(apiRoots) && apiRoots.length ? apiRoots : [path.join(workspaceRoot, ".dext", "api")];
   generation += 1;
   nodeModule.register(LOADER_URL, {
     parentURL: import.meta.url,
     data: { workspaceRoot, generation, apiRoots: roots }
   });
-  // Read by `dextRuntime.mjs`. Reset for every run so one attempt can never replay
-  // another attempt's recorded calls.
-  globalThis.__dextReplay = Array.isArray(replay) ? replay : [];
-  globalThis.__dextReplayIndex = 0;
   const runtime = await import("dext");
   activeRuntime = runtime;
   await runtime.withRun(generation, async () => {
@@ -252,7 +248,7 @@ async function settle() {
 process.on("message", (message) => {
   if (!message || typeof message !== "object") return;
   if (message.type === "run") {
-    void run(message.id, message.file, message.replay, message.apiRoots);
+    void run(message.id, message.file, message.apiRoots);
     return;
   }
   if (message.type === "shutdown") {

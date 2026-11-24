@@ -31,7 +31,6 @@ import type { CallableDefinition, CodeRef, ExecutionMetadata, InputExecutionResp
 import { AGENT_PERMISSIONS, DEFAULT_AGENT_PROFILE_IDS, SUPPORTED_AGENT_PROFILE_IDS, type AgentProfile, type AgentProvider, type AgentSelection, type WritableAgentPermission } from "../features/agents/contracts/agent.js";
 import { AgentProfileStore } from "../features/agents/host/agentProfiles.js";
 import { DEFAULT_DISPATCH_CONCURRENCY, DextKernelHost } from "../runner/dextHost.js";
-import type { DextReplayEntry } from "../runner/dextResumeCache.js";
 import { VsCodeContextHost } from "../platform/vscode/contextHost.js";
 import { applyPatchHandler } from "../platform/vscode/patchHost.js";
 import { execute, terminalRunHandler } from "../platform/vscode/terminalHost.js";
@@ -786,9 +785,9 @@ export class DextApplication {
     for (const kernel of this.kernels) kernel.setMaxConcurrency(this.dispatchConcurrency);
   }
 
-  /** A kernel for one Code run. The kernel's run state (generation, replay,
-   * `settleCalls`) is process-wide, so concurrent Code conversations each get their
-   * own process instead of queueing behind one.
+  /** A kernel for one Code run. The kernel's run state (generation,
+   * `settleCalls`) is process-wide, so concurrent Code conversations each get
+   * their own process instead of queueing behind one.
    *
    * shortcut: no cap on concurrent kernels, so a user running many conversations at
    * once pays one child process each; add a pool cap when that shows up in memory reports. */
@@ -815,8 +814,8 @@ export class DextApplication {
    *
    * `plan()` saves its document here rather than in `executeInput` afterwards:
    * `DextHost.onRequest` serializes this response for the kernel's JSON boundary
-   * and records it for replay, so a `planPath` added here is already part of
-   * both. Everything else is returned exactly as the runtime produced it. */
+   * and records it as the call's step, so a `planPath` added here is already
+   * part of both. Everything else is returned exactly as the runtime produced it. */
   private async executeCodeCall(
     invocation: InvocationAst,
     metadata: Readonly<ExecutionMetadata>,
@@ -1921,21 +1920,19 @@ export class DextApplication {
   }
 
   /**
-   * Runs Code mode. The third argument carries the kernel-only options: calls
-   * replayed from an earlier attempt, and the sink for this attempt's call log.
+   * Runs Code mode. The third argument carries the kernel-only options, which is
+   * only the creation mode a resource draft was requested from.
    */
   async executeInput(
     source: string,
     metadata: Readonly<ExecutionMetadata> = {},
-    run: { resume?: readonly DextReplayEntry[]; onCallLog?: (entries: readonly DextReplayEntry[]) => void; resourceSource?: "describe" | "import" } = {}
+    run: { resourceSource?: "describe" | "import" } = {}
   ): Promise<InputExecutionResponse> {
     const kernel = this.kernelHost();
     try {
       return await kernel.runSource(source, {
         execution: { ...metadata, ...(run.resourceSource ? { resourceSource: run.resourceSource } : {}) },
         ...(metadata.signal ? { signal: metadata.signal } : {}),
-        ...(run.resume ? { resume: run.resume } : {}),
-        ...(run.onCallLog ? { onCallLog: run.onCallLog } : {}),
         apiRoots: this.apiRoots(),
         context: await this.codeContext(source)
       });
