@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -69,7 +70,7 @@ function syncChangeStatus(root: string, changeName: string, capabilities: string
 async function installGitReviewApi(root: string): Promise<void> {
   const api = join(root, ".dext", "api", "git");
   await mkdir(api, { recursive: true });
-  for (const name of ["fix.ts", "review.ts", "reviewFindings.ts", "reviewRepair.ts"]) {
+  for (const name of ["fix.ts", "review.ts", "reviewDependencies.ts", "reviewFindings.ts", "reviewRepair.ts"]) {
     await writeFile(join(api, name), await readFile(resolve(".dext/api/git", name)));
   }
 }
@@ -1093,6 +1094,7 @@ describe("Dext kernel host", () => {
     "closes git.review findings by verifying a %s", { timeout: 30000 }, async (scenario) => {
     const independentEdit = scenario !== "fix";
     const manual = scenario.startsWith("manual");
+    const extraCallers = independentEdit ? "" : "a.ts\0b.ts\0c.ts\0d.ts\0e.ts\0f.ts\0g.ts\0h.ts\0";
     const root = await workspace();
     await installGitReviewApi(root);
     const target = await fixture(root, "target.ts", "export const retries = 0;\n");
@@ -1114,7 +1116,9 @@ describe("Dext kernel host", () => {
         if (typeof command !== "string") throw new Error("Expected a terminal command");
         const stdout = command.includes("--show-toplevel") ? root
           : command.includes(" status ") ? [" M target.ts", " M caller.ts", "D  unrelated.ts", "?? unrelated.ts", "?? .dext/state/review/workspace.json", ""].join("\0")
-            : command.startsWith("git grep") ? "target.ts\0caller.ts\0caller.ts\0" : "0123456789";
+            : command.includes("diff --cached --raw") ? `:100644 000000 ${"a".repeat(40)} ${"0".repeat(40)} D\0unrelated.ts\0`
+              : command.startsWith("git grep") ? `${extraCallers}target.ts\0caller.ts\0caller.ts\0z/caller.ts\0`
+                : command.startsWith("git diff --raw") ? "" : "0123456789";
         return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
           exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
       }
@@ -1141,6 +1145,7 @@ describe("Dext kernel host", () => {
       expect(args.input).not.toContain("unrelated.ts");
       expect(args.input).toContain("修复复核");
       expect(args.input).toContain("候选调用点（按需）");
+      expect(args.input).toContain("- z/caller.ts");
       expect(args.input).not.toContain("- caller.ts（M）");
       if (!manual) expect(args.input).toContain("+export const retries = 1;");
       if (independentEdit && reviews === 3) await writeFile(unrelated, "export const unrelated = 3;\n");
@@ -1180,6 +1185,254 @@ describe("Dext kernel host", () => {
     expect(reuse.steps?.some((step) => step.stream?.text.includes("通过，当前范围内没有待处理问题"))).toBe(true);
   });
 
+  it("includes staged and untracked callers of exports across snapshots in incremental git.review", async () => {
+    const root = await workspace();
+    await installGitReviewApi(root);
+    const declarations = (name: string) => `export const ${name} = 1;\n`;
+    const target = await fixture(root, "target.ts", declarations("reviewedExport"));
+    const callers = ["headExport", "stagedExport", "reviewedExport", "currentExport"];
+    const stagedCaller = "headExport.ts";
+    const untrackedCaller = "untrackedCaller.ts";
+    for (const name of callers) {
+      await fixture(root, `${name}.ts`, `${name}.ts` === stagedCaller ? "void 0;\n" : `import { ${name} } from './target';\n`);
+    }
+    await fixture(root, untrackedCaller, "import { reviewedExport } from './target';\n");
+    const headBlob = "a".repeat(40);
+    const indexBlob = "b".repeat(40);
+    const callerBlob = "c".repeat(40);
+    let reviews = 0;
+    const kernel = host(root, async (invocation) => {
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "terminal") {
+        const command = args.command;
+        if (typeof command !== "string") throw new Error("Expected a terminal command");
+        let stdout = "0123456789";
+        if (command.includes("--show-toplevel")) stdout = root;
+        if (command.includes(" status ")) stdout = `MM target.ts\0MM ${stagedCaller}\0?? ${untrackedCaller}\0?? other-a.ts\0?? other-b.ts\0`;
+        if (command.startsWith("git diff --cached --raw")) {
+          stdout = `:100644 100644 ${headBlob} ${indexBlob} M\0target.ts\0:100644 100644 ${headBlob} ${callerBlob} M\0${stagedCaller}\0`;
+        }
+        if (command.startsWith("git diff --raw")) {
+          const zeros = "0".repeat(40);
+          stdout = `:100644 100644 ${indexBlob} ${zeros} M\0target.ts\0:100644 100644 ${callerBlob} ${zeros} M\0${stagedCaller}\0`;
+        }
+        if (command === `git cat-file blob ${headBlob}`) stdout = declarations("headExport");
+        if (command === `git cat-file blob ${indexBlob}`) stdout = declarations("stagedExport");
+        if (command.startsWith("git grep")) {
+          const matches = command.includes("--cached") ? ["headExport", "stagedExport"] : callers.slice(1);
+          stdout = matches.filter((name) => command.includes(`-e "${name}"`)).map((name) => `${name}.ts\0`).join("");
+          if (command.includes("--untracked") && command.includes('-e "reviewedExport"')) stdout += `${untrackedCaller}\0`;
+        }
+        return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
+          exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
+      }
+      expectWorkspaceReviewRule(invocation);
+      const input = args.input;
+      const skipped = ++reviews === 2 && typeof input === "string"
+        ? [stagedCaller, untrackedCaller].filter((path) => input.includes(`- ${path}（`)) : [];
+      const coverage = skipped.length ? skipped.map((path) => `- \`${path}\` — 尚未核对引用`).join("\n") : "（无）";
+      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）\n### 本轮未审文件\n${coverage}` } };
+    });
+    await fixture(root, "other-a.ts", "void 0;\n");
+    await fixture(root, "other-b.ts", "void 0;\n");
+    const review = () => kernel.runSource('import { review } from "dext/api/git/review";\nawait review("workspace");');
+    await review();
+    const statePath = join(root, ".dext", "state", "review", "workspace.json");
+    const baseline = JSON.parse(await readFile(statePath, "utf8"));
+    expect(baseline).toMatchObject({ reviewed: expect.arrayContaining([untrackedCaller]) });
+    await writeFile(target, declarations("currentExport"));
+    await review();
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    expect(state).toMatchObject({ mode: "incremental", skipped: [stagedCaller, untrackedCaller], carried: ["other-a.ts", "other-b.ts"],
+      reviewed: ["target.ts", ...callers.sort().map((name) => `${name}.ts`).filter((path) => path !== stagedCaller)] });
+  });
+
+  it.each([
+    { scenario: "removed export aliases", aliases: true, recurse: false, untrackedCount: 0 },
+    { scenario: "submodule.recurse", aliases: false, recurse: true, untrackedCount: 1 },
+    { scenario: "reverse dependency overflow", aliases: false, recurse: false, untrackedCount: 8 },
+    { scenario: "multiple symbol batches and same-name modules", aliases: false, recurse: false, untrackedCount: 0, saturated: true }
+  ])("keeps callers in git.review coverage with $scenario", { timeout: 30000 }, async ({ aliases, recurse, untrackedCount, saturated }) => {
+    const root = await workspace();
+    await installGitReviewApi(root);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("config", "core.autocrlf", "false");
+    git("config", "submodule.recurse", String(recurse));
+    await mkdir(join(root, ".git", "info"), { recursive: true });
+    await writeFile(join(root, ".git", "info", "exclude"), "/.dext/\n");
+    const exportList = Array.from({ length: 25 }, (_, index) => `local as alias${index}`).join(", ");
+    const original = saturated
+      ? `function local(value: number) {}\nexport { ${exportList} };\nexport function publicApi(value: number) {}\n`
+      : aliases
+        ? "const local = 1;\nexport { local as removedExport };\nexport type {\n  LocalType /* } */ as RemovedType,\n} from './types';\n"
+        : "export const removedExport = 1;\n";
+    const targetPath = saturated ? "feature/index.ts" : "target.ts";
+    if (saturated) await mkdir(join(root, "feature"));
+    const target = await fixture(root, targetPath, original);
+    const reference = saturated ? "import { publicApi } from './feature';\npublicApi(1);\n" : "import { removedExport } from './target';\n";
+    const caller = await fixture(root, "caller.ts", recurse ? "void 0;\n" : reference);
+    if (saturated) {
+      await fixture(root, "module-caller.ts", 'import * as api from "./feature/index.js";\napi.alias24(1);\n');
+      await fixture(root, "path-alias-caller.ts", 'import { alias23 } from "@api/contract";\nalias23(1);\n');
+      for (let index = 0; index < 8; index += 1) {
+        const directory = `area-${index}`;
+        await mkdir(join(root, directory));
+        await fixture(root, `${directory}/index.ts`, "export const local = 0;\n");
+        await fixture(root, `${directory}/unrelated-caller.ts`, "import { local } from './index';\n");
+      }
+    }
+    if (aliases) {
+      await fixture(root, "type-caller.ts", "import type { RemovedType } from './target';\n");
+      await fixture(root, "local-only.ts", "const local = 0;\n");
+      await fixture(root, "types.ts", "export interface LocalType {}\n");
+    }
+    git("add", "--", "*.ts");
+    git("-c", "user.name=Dext Test", "-c", "user.email=dext@example.invalid", "commit", "-qm", "Initial", "--no-gpg-sign");
+    if (recurse) await writeFile(caller, reference);
+    for (let index = 0; index < Math.max(untrackedCount, 2); index += 1) {
+      await fixture(root, `untracked-${index}.ts`, index < untrackedCount ? reference : "void 0;\n");
+    }
+    await writeFile(target, `${original}\n// First review\n`);
+
+    const prompts: unknown[] = [];
+    const kernel = host(root, async (invocation) => {
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "terminal") {
+        const command = args.command;
+        if (typeof command !== "string") throw new Error("Expected a terminal command");
+        const { status, stdout, stderr, error } = spawnSync(command, { cwd: root, encoding: "utf8", shell: true });
+        if (error) throw error;
+        if (status === null) throw new Error("Git terminated without an exit code");
+        return { ...response, result: { kind: "terminal", status: status === 0 ? "succeeded" : "failed", command, cwd: root,
+          exit_code: status, stdout, stderr, duration_ms: 1 } };
+      }
+      expectWorkspaceReviewRule(invocation);
+      prompts.push(args.input);
+      const coverage = saturated && prompts.length === 2 && typeof args.input === "string" && args.input.includes("- module-caller.ts（")
+        ? "- `module-caller.ts` — 尚未核对引用"
+        : "（无）";
+      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）\n### 本轮未审文件\n${coverage}` } };
+    });
+    const review = () => kernel.runSource('import { review } from "dext/api/git/review";\nawait review("workspace");');
+    await review();
+    const statePath = join(root, ".dext", "state", "review", "workspace.json");
+    const baseline = JSON.parse(await readFile(statePath, "utf8")) as { files: Record<string, { exports?: string[] }> };
+    const reviewedTarget = baseline.files[targetPath]!;
+    if (aliases) {
+      expect(reviewedTarget.exports).toEqual(["removedExport", "RemovedType"]);
+      // An older baseline may lack these names, so the next round must read HEAD too.
+      delete reviewedTarget.exports;
+      await writeFile(statePath, JSON.stringify(baseline));
+    }
+    await writeFile(target, saturated ? original.replaceAll(": number", ": string") : "void 0;\n");
+    await review();
+
+    const state = JSON.parse(await readFile(statePath, "utf8")) as {
+      mode: string; reviewed: string[]; skipped: string[]; files: Record<string, { exports?: string[] }>;
+    };
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("- caller.ts（");
+    expect(state.mode).toBe(untrackedCount === 8 ? "full" : "incremental");
+    if (saturated) {
+      for (const exports of [reviewedTarget.exports, state.files[targetPath]?.exports]) {
+        expect(exports).toHaveLength(26);
+        expect(exports).toEqual(expect.arrayContaining(["publicApi", "alias23", "alias24"]));
+      }
+      expect(state.reviewed).toEqual([targetPath, "caller.ts", "path-alias-caller.ts"]);
+      expect(prompts[1]).not.toContain("unrelated-caller.ts");
+      expect(state.skipped).toEqual(["module-caller.ts"]);
+    } else if (aliases) {
+      expect(state.reviewed).toEqual(["target.ts", "caller.ts", "type-caller.ts"]);
+    } else {
+      const untracked = Array.from({ length: untrackedCount }, (_, index) => `untracked-${index}.ts`);
+      expect(state.reviewed).toEqual(untrackedCount === 8
+        ? ["target.ts", ...untracked, "caller.ts"]
+        : ["target.ts", "caller.ts", ...untracked]);
+    }
+  });
+
+  it.each([
+    { mode: "incremental", symbol: "publicApi" },
+    { mode: "full", symbol: "publicApi" },
+    { mode: "incremental", symbol: "id" },
+    { mode: "full", symbol: "id" },
+    { mode: "incremental", symbol: "x", aliased: true },
+    { mode: "incremental", symbol: "default", pathAlias: true, stagedCaller: true },
+    { mode: "full", symbol: "default" }
+  ])("rechecks a restored $symbol contract and its caller in $mode git.review", { timeout: 30000 }, async ({ mode, symbol, aliased, pathAlias, stagedCaller }) => {
+    const root = await workspace();
+    await installGitReviewApi(root);
+    await mkdir(join(root, "node_modules"));
+    await symlink(resolve("node_modules/typescript"), join(root, "node_modules", "typescript"), "junction");
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("config", "core.autocrlf", "false");
+    await writeFile(join(root, ".git", "info", "exclude"), "/.dext/\n/node_modules/\n");
+    const original = aliased
+      ? `function local(value: number) { return value; }\nexport { local as ${symbol} };\n`
+      : `export ${symbol === "default" ? "default function" : `function ${symbol}`}(value: number) { return value; }\n`;
+    const contract = await fixture(root, "contract.ts", original);
+    const callee = symbol === "default" ? "transform" : symbol;
+    const binding = symbol === "default" ? callee : `{ ${symbol} }`;
+    const importPath = pathAlias ? "@api/entry" : "./contract.js";
+    const call = (value: string) => `import ${binding} from '${importPath}';\n${callee}(${value});\n`;
+    const caller = await fixture(root, "caller.ts", call("1"));
+    if (pathAlias) await fixture(root, "tsconfig.json", '{"compilerOptions":{"paths":{"@api/entry":["./contract.ts"]}}}');
+    if (symbol === "id") {
+      for (let i = 0; i < 9; i++) await fixture(root, `same-name-${i}.ts`, "export const item = { id: 1 };\n");
+    }
+    git("add", "--", ".");
+    git("-c", "user.name=Dext Test", "-c", "user.email=dext@example.invalid", "commit", "-qm", "Initial", "--no-gpg-sign");
+    await writeFile(contract, original.replace(": number", ": string"));
+    await writeFile(caller, call("'new signature'"));
+    if (stagedCaller) {
+      git("add", "--", "caller.ts");
+      await writeFile(caller, "void 0;\n");
+    }
+    if (mode === "incremental") await fixture(root, "unrelated.ts", "void 0;\n");
+
+    const prompts: unknown[] = [];
+    const kernel = host(root, async (invocation) => {
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "terminal") {
+        const command = args.command;
+        if (typeof command !== "string") throw new Error("Expected a terminal command");
+        const { status, stdout, stderr, error } = spawnSync(command, { cwd: root, encoding: "utf8", shell: true });
+        if (error) throw error;
+        if (status === null) throw new Error("Git terminated without an exit code");
+        return { ...response, result: { kind: "terminal", status: status === 0 ? "succeeded" : "failed", command, cwd: root,
+          exit_code: status, stdout, stderr, duration_ms: 1 } };
+      }
+      expectWorkspaceReviewRule(invocation);
+      prompts.push(args.input);
+      const skipped = prompts.length === 2 && typeof args.input === "string" && args.input.includes("- caller.ts（")
+        ? "- `caller.ts` — 尚未核对恢复后的签名" : "（无）";
+      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）\n### 本轮未审文件\n${skipped}` } };
+    });
+    const review = () => kernel.runSource('import { review } from "dext/api/git/review";\nawait review("workspace");');
+    await review();
+
+    git("restore", "--", "contract.ts");
+    expect(git("status", "--porcelain", "--", "contract.ts")).toBe("");
+    await review();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("- contract.ts（不在当前改动中，按现状核对）");
+    expect(prompts[1]).not.toContain("same-name-");
+    expect(prompts[1]).toContain("- caller.ts（");
+    const state = JSON.parse(await readFile(join(root, ".dext", "state", "review", "workspace.json"), "utf8"));
+    expect(state).toMatchObject({ mode, reviewed: expect.arrayContaining(["contract.ts"]), skipped: ["caller.ts"] });
+    await writeFile(caller, call("2"));
+    if (stagedCaller) git("add", "--", "caller.ts");
+    await review();
+    const covered = prompts.length;
+    await review();
+    expect(prompts).toHaveLength(covered);
+  });
+
   it("stops git.fix retries until explicitly requested and accepts only anchored regressions from verification", { timeout: 30000 }, async () => {
     const root = await workspace();
     await installGitReviewApi(root);
@@ -1197,7 +1450,8 @@ describe("Dext kernel host", () => {
       if (invocation.method === "terminal") {
         const command = args.command;
         if (typeof command !== "string") throw new Error("Expected a terminal command");
-        const stdout = command.includes("--show-toplevel") ? root : command.includes(" status ") ? " M target.ts\0" : "0123456789";
+        const stdout = command.includes("--show-toplevel") ? root : command.includes(" status ") ? " M target.ts\0"
+          : command.startsWith("git diff --raw") ? "" : "0123456789";
         return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
           exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
       }
@@ -1249,7 +1503,8 @@ describe("Dext kernel host", () => {
       if (invocation.method === "terminal") {
         const command = invocation.arguments.find(({ name }) => name === "command")?.value;
         if (typeof command !== "string") throw new Error("Expected a terminal command");
-        const stdout = command.includes("--show-toplevel") ? root : command.includes(" status ") ? " M target.ts\0" : "0123456789";
+        const stdout = command.includes("--show-toplevel") ? root : command.includes(" status ") ? " M target.ts\0"
+          : command.startsWith("git diff --raw") ? "" : "0123456789";
         return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
           exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
       }
@@ -1282,7 +1537,7 @@ describe("Dext kernel host", () => {
         if (typeof command !== "string") throw new Error("Expected a terminal command");
         const stdout = command.includes("--show-toplevel") ? root
           : command.includes(" status ") ? (clean ? "" : " M target.ts\0")
-            : command.startsWith("git grep") ? "" : "0123456789";
+            : command.startsWith("git grep") || command.startsWith("git diff --raw") ? "" : "0123456789";
         return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
           exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
       }

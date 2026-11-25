@@ -1,7 +1,8 @@
 /// <reference types="node" />
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink } from "node:fs/promises";
+import { resolve } from "node:path";
 import { agent, skill, terminal, type SkillResult } from "dext";
 import {
   readDecisions, readLegacyFindings, readNewFindings, readSavedFindings, REVIEW_DECISIONS,
@@ -27,14 +28,16 @@ const STATE_VERSION = 1;
 const FULL_RATIO = 0.4;
 /** 反向依赖超过这个数量时退回全量：跨文件核对面太宽，一次全量比逐个补更省。 */
 const DEP_LIMIT = 8;
-/** 一个文件最多取多少个导出符号去搜反向依赖。 */
-const SYMBOL_LIMIT = 24;
+/** 限制每条 grep 命令的模式数，保留跨批次的所有导出。 */
+const SYMBOL_BATCH_SIZE = 24;
 const REPAIR_PROMPT_LIMIT = 48 * 1024;
 const REPAIR_CAPTURE_LIMIT = 4 * 1024 * 1024;
 const GIT_TIMEOUT_MS = 60_000;
 const SOURCE_PATTERNS = ["*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs", "*.vue"];
-/** 只看顶层导出声明；`export { a as b }` 这类再导出由调用方一侧的 grep 兜住。 */
-const EXPORTED = /^export\s+(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gmu;
+/** 匹配顶层导出声明和导出列表。列表中的注释可以包含右花括号。 */
+const EXPORTED = /^export\b(?:\s+(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)|\s*(?:type\s*)?\{((?:[^/}]|\/(?![*/])|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)*)\})/gmu;
+const EXPORT_SPECIFIER = /^(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s+as\s+(["']?)([A-Za-z_$][\w$]*)\2)?$/u;
+const DEFAULT_EXPORT = /^\s*export\s+default\b/mu;
 const SKIPPED_HEADING = /^#{2,6}\s*本轮未审文件/u;
 const HEADING = /^#{1,6}\s+/u;
 const NOBODY = /^\s*(?:（无）|无|none\.?)\s*$/iu;
@@ -49,12 +52,17 @@ const READ_ONLY = [
 interface ChangedFile {
   hash: string;
   status: string;
+  index?: string;
+  worktreeMode?: string;
+  exports?: string[];
 }
 
 interface Snapshot {
   head: string;
   files: Record<string, ChangedFile>;
+  root?: string;
   contents?: Map<string, Buffer>;
+  headBlobs?: Map<string, string>;
 }
 
 export interface ReviewState {
@@ -111,7 +119,6 @@ function dirtied(porcelain: string): Map<string, string[]> {
     const record = records[index]!;
     const code = record.slice(0, 2).trim();
     const path = record.slice(3);
-    if (/[RC]/u.test(code)) index += 1; // -z lists the old rename/copy path after the destination.
     if (!path || path.startsWith(STATE_PREFIX)) continue;
     const prior = files.get(path);
     if (prior) prior.push(code);
@@ -120,30 +127,73 @@ function dirtied(porcelain: string): Map<string, string[]> {
   return files;
 }
 
+async function diffEntries(cached: boolean) {
+  const raw = await git(`diff ${cached ? "--cached " : ""}--raw --no-abbrev --no-renames -z --`);
+  const source = cached ? "暂存区" : "工作区";
+  const records = raw.split("\0");
+  if (records.pop() !== "" || records.length % 2 !== 0) throw new Error(`${source}输出不完整，无法确认审查范围。`);
+  const entries = new Map<string, { raw: string; mode: string; oldBlob: string }>();
+  for (let index = 0; index < records.length; index += 2) {
+    const [entry, path] = [records[index]!, records[index + 1]!];
+    const fields = /^:\d{6} (\d{6}) ([0-9a-f]+) [0-9a-f]+ [A-Z]$/u.exec(entry);
+    if (!fields || !path) {
+      throw new Error(`${source}输出无效，无法确认审查范围。`);
+    }
+    entries.set(path, { raw: entry, mode: fields[1]!, oldBlob: fields[2]! });
+  }
+  return entries;
+}
+
 /** HEAD 与全部改动文件的内容哈希。改动清单来自 `git status`，与审查范围同一来源。 */
 async function snapshot(capture = false): Promise<Snapshot> {
   const toplevel = (await git("rev-parse --show-toplevel")).trim();
   if (toplevel === "") throw new Error("git.review 需要一个 git 工作区：当前目录不是 git 仓库，或 git 不可用。");
-  const porcelain = await git("status --porcelain=v1 -z -uall");
+  const porcelain = await git("status --porcelain=v1 --no-renames -z -uall");
   if (porcelain && !porcelain.endsWith("\0")) throw new Error("git status 输出不完整，无法确认审查范围。");
+  const [staged, unstaged] = await Promise.all([
+    /(?:^|\0)[A-Z][ A-Z] (?!\.dext\/state\/)/u.test(porcelain) ? diffEntries(true) : undefined,
+    /(?:^|\0)[ A-Z][A-Z] (?!\.dext\/state\/)/u.test(porcelain) ? diffEntries(false) : undefined
+  ]);
   const files: Record<string, ChangedFile> = Object.create(null);
+  const headBlobs = new Map<string, string>();
   const contents = capture ? new Map<string, Buffer>() : undefined;
   let captureBytes = 0;
   for (const [path, codes] of dirtied(porcelain)) {
-    const content = await readFile(path).catch(() => null);
-    const hash = content ? createHash("sha256").update(content).digest("hex").slice(0, 16) : "unreadable";
-    files[path] = { hash, status: codes.sort().join(" + ") };
+    const absolute = resolve(toplevel, path);
+    const stat = await lstat(absolute).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    const link = stat?.isSymbolicLink();
+    let content: Buffer | null = null;
+    if (link) content = await readlink(absolute, { encoding: "buffer" });
+    else if (stat?.isFile()) content = await readFile(absolute);
+    const digest = content ? createHash("sha256").update(content).digest("hex").slice(0, 16) : "unreadable";
+    const hash = link ? `link:${digest}` : digest;
+    const stagedEntry = staged?.get(path);
+    const worktreeEntry = unstaged?.get(path);
+    const original = stagedEntry?.oldBlob ?? worktreeEntry?.oldBlob;
+    if (original) headBlobs.set(path, original);
+    const names = !link && content ? exportedNames(content.toString("utf8")) : [];
+    files[path] = {
+      hash, status: codes.sort().join(" + "),
+      ...(stagedEntry && { index: stagedEntry.raw }),
+      ...(worktreeEntry && { worktreeMode: worktreeEntry.mode }),
+      ...(names.length && { exports: names })
+    };
     if (contents && content && content.length <= REPAIR_FILE_LIMIT && captureBytes + content.length <= REPAIR_CAPTURE_LIMIT) {
       contents.set(path, content);
       captureBytes += content.length;
     }
   }
-  return { head: (await git("rev-parse --verify -q HEAD", true)).trim(), files, contents };
+  return { head: (await git("rev-parse --verify -q HEAD", true)).trim(), files, root: toplevel, contents, headBlobs };
 }
 
 function fileStamp(snapshot: Snapshot, path: string): string {
   const entry = snapshot.files[path];
-  return entry ? `${entry.status}:${entry.hash}` : "clean";
+  if (!entry) return "clean";
+  return `${entry.status}:${entry.hash}${entry.index === undefined ? "" : `:${entry.index}`}`
+    + (entry.worktreeMode === undefined ? "" : `:${entry.worktreeMode}`);
 }
 
 function attemptKey(snapshot: Snapshot, paths: readonly string[], evidence: string): string {
@@ -160,8 +210,7 @@ async function capturedFile(snapshot: Snapshot, path: string): Promise<Buffer | 
 function changedBetween(before: Snapshot | null, after: Snapshot): string[] {
   if (before === null) return [];
   const paths = new Set([...Object.keys(before.files), ...Object.keys(after.files)]);
-  return [...paths].filter((path) => before.files[path]?.hash !== after.files[path]?.hash
-    || before.files[path]?.status !== after.files[path]?.status);
+  return [...paths].filter((path) => fileStamp(before, path) !== fileStamp(after, path));
 }
 
 function short(commit: string): string {
@@ -185,13 +234,19 @@ function asList(value: unknown): string[] {
 
 /** 只接受能完整解释的基线；任何一处对不上都当作没有基线，退化成全量。 */
 function readFiles(value: unknown): Record<string, ChangedFile> | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = asObject(value);
   const files: Record<string, ChangedFile> = Object.create(null);
   for (const [path, entry] of Object.entries(raw)) {
     const file = asObject(entry);
     const hash = asText(file.hash);
     if (hash === "") return null;
-    files[path] = { hash, status: asText(file.status) };
+    files[path] = {
+      hash, status: asText(file.status),
+      ...(typeof file.index === "string" && { index: file.index }),
+      ...(typeof file.worktreeMode === "string" && { worktreeMode: file.worktreeMode }),
+      ...(Array.isArray(file.exports) && { exports: asList(file.exports) })
+    };
   }
   return files;
 }
@@ -303,25 +358,79 @@ function readSkipped(report: string): { known: boolean; paths: string[] } {
 
 // ---------------------------------------------------------------- 判定
 
-/** 被改文件导出的符号在别处的引用：改了签名而调用点没改，是增量之外唯一会漏审的形态。 */
-async function exportedNames(path: string): Promise<string[]> {
-  const content = await readFile(path, "utf8").catch(() => "");
-  const names: string[] = [];
+function exportedNames(content: string): string[] {
+  const declarations = new Set<string>();
+  const aliases = new Set<string>();
+  if (DEFAULT_EXPORT.test(content)) declarations.add("default");
   for (const match of content.matchAll(EXPORTED)) {
-    const name = match[1] ?? "";
-    if (name.length >= 3) names.push(name);
+    const declaration = match[1];
+    if (declaration !== undefined) {
+      declarations.add(declaration);
+      continue;
+    }
+    const specifiers = match[2]?.replace(/\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/gu, " ") ?? "";
+    for (const specifier of specifiers.split(",")) {
+      const exported = EXPORT_SPECIFIER.exec(specifier.trim());
+      const name = exported?.[3] ?? exported?.[1];
+      if (name) aliases.add(name);
+    }
   }
-  return [...new Set(names)].slice(0, SYMBOL_LIMIT);
+  return [...new Set([...declarations, ...aliases])];
 }
 
-async function reverseDeps(targets: string[], changed: Set<string>): Promise<string[]> {
-  const names = [...new Set((await Promise.all(targets.map(exportedNames))).flat())];
-  if (names.length === 0) return [];
-  const patterns = names.map((name) => `-e "${name}"`).join(" ");
+/** 删除或重命名导出后，仍要核对使用旧名字的调用方。 */
+async function reverseDeps(targets: string[], changed: Set<string>, current: Snapshot, previous: ReviewState): Promise<string[]> {
+  const currentPaths = new Set(Object.keys(current.files));
+  const moduleTargets = new Set(currentPaths.size ? targets.filter((path) => !currentPaths.has(path) && previous.files[path]
+    && SOURCE_PATTERNS.some((pattern) => path.endsWith(pattern.slice(1)))) : []);
+  const blobs = new Map<string, Set<string>>();
+  const names = new Set<string>();
+  const addNames = (path: string, exports: readonly string[]) => {
+    for (const name of exports) {
+      if (name.length >= 3 && name !== "default") names.add(name);
+      else if (currentPaths.size) moduleTargets.add(path);
+    }
+  };
+  for (const path of targets) {
+    if (moduleTargets.has(path)) continue;
+    const file = current.files[path];
+    const prior = previous.files[path];
+    const worktree = file ? file.exports ?? [] : exportedNames(await readFile(resolve(current.root ?? ".", path), "utf8").catch(() => ""));
+    addNames(path, [...worktree, ...(prior?.exports ?? [])]);
+    for (const oid of [current.headBlobs?.get(path), file?.index?.split(" ")[3], prior?.index?.split(" ")[3]]) {
+      if (!oid || !/^(?!0+$)(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(oid)) continue;
+      const paths = blobs.get(oid) ?? new Set<string>();
+      paths.add(path);
+      blobs.set(oid, paths);
+    }
+  }
+  await Promise.all([...blobs].map(async ([oid, paths]) => {
+    const result = await terminal({ command: `git cat-file blob ${oid}`, timeout_ms: GIT_TIMEOUT_MS });
+    if (result.exit_code !== 0) return;
+    const exports = exportedNames(result.stdout);
+    for (const path of paths) addNames(path, exports);
+  }));
+  const patterns = [...names].filter((name) => /^[A-Za-z_$][\w$]*$/u.test(name))
+    .map((name) => `-e "${name.replaceAll("$", "[$]")}"`);
   const pathspecs = SOURCE_PATTERNS.map((pattern) => `"${pattern}"`).join(" ");
-  const result = await terminal({ command: `git grep --no-color -l -z -w ${patterns} -- ${pathspecs}`, timeout_ms: GIT_TIMEOUT_MS });
-  if (result.exit_code !== 0) return [];
-  return [...new Set(result.stdout.split("\0"))]
+  // `--untracked` 与子模块递归互斥，单独搜索未跟踪文件才能保留普通搜索的递归行为。
+  const scopes = ["", "--no-recurse-submodules --untracked ", "--cached "];
+  const matches = new Set<string>();
+  for (let offset = 0; offset < patterns.length; offset += SYMBOL_BATCH_SIZE) {
+    const batch = patterns.slice(offset, offset + SYMBOL_BATCH_SIZE).join(" ");
+    const results = await Promise.all(scopes.map((scope) => terminal({
+      command: `git grep ${scope}--no-color -l -z -w ${batch} -- ${pathspecs}`, timeout_ms: GIT_TIMEOUT_MS
+    })));
+    for (const result of results) {
+      if (result.exit_code === 0) for (const path of result.stdout.split("\0")) matches.add(path);
+    }
+  }
+  if (moduleTargets.size) {
+    const { reverseModuleDeps } = await import("./reviewDependencies.ts");
+    const callers = await reverseModuleDeps(current.root ?? process.cwd(), moduleTargets, currentPaths, SOURCE_PATTERNS);
+    for (const path of callers) matches.add(path);
+  }
+  return [...matches]
     .filter((path) => path !== "" && !path.startsWith(STATE_PREFIX) && !changed.has(path))
     .sort();
 }
@@ -329,9 +438,14 @@ async function reverseDeps(targets: string[], changed: Set<string>): Promise<str
 /** 全量还是增量不是用户的选项，而是「有没有没审过的内容」的结论。 */
 async function planWorkspace(current: Snapshot, previous: ReviewState | null, full: boolean): Promise<WorkspacePlan> {
   const paths = Object.keys(current.files).sort();
-  const whole = (reason: string): WorkspacePlan => ({ mode: "full", reason, review: paths, deps: [], carried: [] });
   const baseline = previous?.head === current.head ? previous : null;
   const changed = new Set(changedBetween(baseline, current));
+  // A clean path can still invalidate coverage for edits that remain in the worktree or index.
+  const restored = paths.length ? [...changed].filter((path) => !current.files[path]) : [];
+  const whole = async (reason: string, deps?: string[]): Promise<WorkspacePlan> => {
+    const callers = deps ?? (baseline && restored.length ? await reverseDeps(restored, new Set(restored), current, baseline) : []);
+    return { mode: "full", reason, review: paths, deps: [...new Set([...restored, ...callers])].filter((path) => !current.files[path]), carried: [] };
+  };
   const verification = baseline?.findings?.filter(({ path, status }) => status === "pending" || (status === "open" && changed.has(path))) ?? [];
 
   if (!full && baseline?.lastVerification && !verification.length) {
@@ -347,11 +461,14 @@ async function planWorkspace(current: Snapshot, previous: ReviewState | null, fu
   }
   if (verification.length) {
     const related = new Set([...verification.map(({ path }) => path), ...previous.touched]);
+    const relatedRestored = restored.filter((path) => related.has(path));
+    const otherRelated = [...related].filter((path) => !relatedRestored.includes(path));
+    for (const caller of await reverseDeps(relatedRestored, related, current, baseline)) related.add(caller);
     const review = paths.filter((path) => related.has(path));
     const deps = [...related].filter((path) => !current.files[path]);
-    const callers = (await reverseDeps([...related], related)).slice(0, DEP_LIMIT);
+    const callers = await reverseDeps(otherRelated, related, current, baseline);
     const repairs = previous.repairs?.filter((repair) => related.has(repair.path) && fileStamp(current, repair.path) === repair.after) ?? [];
-    const outside = paths.filter((path) => changed.has(path) && !related.has(path));
+    const outside = [...paths, ...restored].filter((path) => changed.has(path) && !related.has(path));
     return {
       mode: "incremental", reason: `逐条复核 ${verification.length} 个既有问题`, review, deps,
       carried: paths.filter((path) => !related.has(path) && !deps.includes(path) && !changed.has(path)),
@@ -364,7 +481,7 @@ async function planWorkspace(current: Snapshot, previous: ReviewState | null, fu
   if (previous.findings === undefined) return whole("上一轮报告没有可逐条复核的问题记录");
 
   const forced = [...previous.skipped, ...previous.touched].filter((path) => current.files[path] !== undefined);
-  const pending = paths.filter((path) => changed.has(path));
+  const pending = [...paths.filter((path) => changed.has(path)), ...restored];
   const targets = [...new Set([...pending, ...forced])].sort();
   const extra = previous.skipped.filter((path) => current.files[path] === undefined);
   if (targets.length === 0 && extra.length === 0) {
@@ -375,12 +492,14 @@ async function planWorkspace(current: Snapshot, previous: ReviewState | null, fu
   if (targets.length / known > FULL_RATIO) {
     return whole(`${targets.length}/${known} 个文件自上一轮起有变化，超过 ${Math.round(FULL_RATIO * 100)}% 阈值`);
   }
-  const deps = [...new Set([...extra, ...await reverseDeps(targets, new Set(targets))])];
-  if (deps.length > DEP_LIMIT) return whole(`反向依赖 ${deps.length} 个文件，超过 ${DEP_LIMIT} 个阈值`);
+  const deps = [...new Set([...restored, ...extra, ...await reverseDeps(targets, new Set(targets), current, baseline)])];
+  if (deps.length > DEP_LIMIT) {
+    return whole(`反向依赖 ${deps.length} 个文件，超过 ${DEP_LIMIT} 个阈值`, deps.filter((path) => !current.files[path]));
+  }
   return {
     mode: "incremental",
     reason: `${targets.length}/${known} 个文件自上一轮起有变化`,
-    review: targets,
+    review: targets.filter((path) => current.files[path] !== undefined),
     deps,
     carried: paths.filter((path) => !targets.includes(path) && !deps.includes(path))
   };
@@ -562,7 +681,7 @@ async function reviewWorkspace(full: boolean): Promise<SkillResult> {
   if (plan.mode === "full") {
     const followUp = prior.filter(({ status }) => status === "open" || status === "pending").map(({ path }) => path);
     const skipped = previous?.head === current.head ? previous.skipped : [];
-    plan.deps.push(...[...new Set([...skipped, ...followUp])].filter((path) => !current.files[path]));
+    plan.deps = [...new Set([...plan.deps, ...skipped, ...followUp])].filter((path) => !current.files[path]);
   }
   const scope = new Set([...plan.review, ...plan.deps]);
   const targets = prior.filter(({ id, path, status }) => plan.verification
