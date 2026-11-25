@@ -27,6 +27,8 @@ Newly dirty paths:
 
 `spec.update(change, input?)` 先只读检查并拟定修订。有明确改动时，对话框会逐项显示涉及的产物、拟改内容和原因。点击「确认修订」后，同一次调用会重新核对变更及范围，再写入已确认的修订。取消会结束调用，无需修改时直接返回结论。
 
+`spec.sync(change?)` 先只读比较增量规格与主规格。省略变更 ID 时，只有一个含增量规格的活跃变更便直接评估，有多个则先选择。有待同步改动时，对话框会显示变更、OpenSpec 根目录、store、各主规格的拟改动以及跳过的规格。点击「确认同步」后，同一次调用会重新核对范围，再写入并校验已确认的改动。取消、无需同步或整轮评估受阻时直接返回。归档中选择「同步后归档」使用归档对话框的选择。
+
 ## 下一步
 
 每个 `spec.*` 的 Output 和返回的 `text` 最后都有 `### 下一步`。结果可核实时会给出可直接执行的命令，等待确认、受阻或状态未知时会说明应先处理的事项。
@@ -68,7 +70,7 @@ Newly dirty paths:
 只读的 `skill()` 没有 shell，`openspec new change` 跑不了，proposal / specs / design / tasks 只能写回回复
 正文——这就是 `propose` 曾经「执行完什么文件都没有」的原因。
 
-因此上表的写入阶段走 `agent({ skills: [id], apply: true, patch: false })`，加载对应的 `SKILL.md`，由当前 Agent CLI 写入工作区。`update` 的预览阶段用 `apply: false`。
+因此上表的写入阶段走 `agent({ skills: [id], apply: true, patch: false })`，加载对应的 `SKILL.md`，由当前 Agent CLI 写入工作区。`update` 和 `sync` 的预览阶段用 `apply: false`。
 `explore` 保持 `skill()`，因为它本来就只读。
 
 写权限要求可信本地工作区；不受信任时 `agent(apply: true)` 会直接拒绝，而不是悄悄降级成只读。

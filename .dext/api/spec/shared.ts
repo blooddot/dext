@@ -106,6 +106,7 @@ interface WorkflowOutcome {
   archiveName?: string;
   archivePrompt?: unknown;
   updatePrompt?: string;
+  syncPrompt?: unknown;
 }
 
 export interface WritingResult extends SkillResult {
@@ -154,7 +155,7 @@ function parseOutcome(line: string | undefined, requested: SpecScope): WorkflowO
   try {
     const report = JSON.parse(line) as Record<string, unknown> | null;
     if (!report) return undefined;
-    const { status, cwd, root, store, change, archiveName, archivePrompt, updatePrompt } = report;
+    const { status, cwd, root, store, change, archiveName, archivePrompt, updatePrompt, syncPrompt } = report;
     if (status !== "completed" && status !== "pending" && status !== "blocked" && status !== "unchanged") return undefined;
     const resolved = typeof cwd === "string" && !!cwd && typeof root === "string" && !!root &&
       (store === null || isId(store)) && (!requested.store || requested.store === store) && (!requested.root || requested.root === root);
@@ -164,7 +165,8 @@ function parseOutcome(line: string | undefined, requested: SpecScope): WorkflowO
       change: isExistingChangeName(change) ? change : undefined,
       archiveName: isExistingChangeName(archiveName) ? archiveName : undefined,
       archivePrompt: status === "pending" ? archivePrompt : undefined,
-      updatePrompt: status === "pending" && typeof updatePrompt === "string" ? updatePrompt.trim() : undefined
+      updatePrompt: status === "pending" && typeof updatePrompt === "string" ? updatePrompt.trim() : undefined,
+      syncPrompt: status === "pending" ? syncPrompt : undefined
     };
   } catch {
     return undefined;
@@ -175,21 +177,45 @@ export function openspecCommand(args: string, scope: SpecScope): string {
   return `openspec ${args}${scope.store ? ` --store "${scope.store}"` : ""}`;
 }
 
-export async function openSpecJson(args: string, scope: SpecScope): Promise<{ data: Record<string, unknown>; root: SpecRoot; cwd: string; exitCode: number } | undefined> {
+interface OpenSpecJson {
+  data: Record<string, unknown>;
+  root?: SpecRoot;
+  cwd: string;
+  exitCode: number;
+  errorOutput?: string;
+}
+
+export async function queryOpenSpecJson(args: string, scope: SpecScope): Promise<OpenSpecJson | "truncated" | undefined> {
   if ((scope.store !== undefined && !isId(scope.store)) ||
       (scope.cwd !== undefined && (typeof scope.cwd !== "string" || !scope.cwd.trim())) ||
       (scope.root !== undefined && (typeof scope.root !== "string" || !scope.root.trim()))) return undefined;
   try {
     const result = await terminal({ command: openspecCommand(args, scope), ...(scope.cwd ? { cwd: scope.cwd } : {}) });
-    const data = JSON.parse(result.stdout) as Record<string, unknown> | null;
+    const { stdout } = result;
+    if (stdout.endsWith("\n[output truncated]")) return "truncated";
+    let data: Record<string, unknown> | undefined;
+    try {
+      const parsed = JSON.parse(stdout);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) data = parsed;
+    } catch {
+      // The host omits the marker if one chunk lands exactly at the byte cap.
+      if (Buffer.byteLength(stdout) === 256 * 1024) return "truncated";
+    }
+    if (typeof result.cwd !== "string" || !isAbsolute(result.cwd) || (!data && result.exit_code === 0)) return undefined;
     const root = data?.root as SpecRoot | null | undefined;
-    if (!data || typeof root?.path !== "string" || !root.path || typeof result.cwd !== "string" || !isAbsolute(result.cwd) ||
-        (root.store_id != null && !isId(root.store_id)) ||
-        (scope.root && root.path !== scope.root) || (scope.store && root.store_id !== scope.store)) return undefined;
-    return { data, root, cwd: result.cwd, exitCode: result.exit_code };
+    const checkedRoot = typeof root?.path === "string" && root.path && (root.store_id == null || isId(root.store_id)) &&
+      (!scope.root || root.path === scope.root) && (!scope.store || root.store_id === scope.store) ? root : undefined;
+    const errorOutput = result.exit_code !== 0 ? [result.stderr.trim(), data ? "" : stdout.trim()].filter(Boolean).join("\n") : undefined;
+    return { data: data ?? {}, root: checkedRoot, cwd: result.cwd, exitCode: result.exit_code, errorOutput };
   } catch {
     return undefined;
   }
+}
+
+export async function openSpecJson(args: string, scope: SpecScope): Promise<(OpenSpecJson & { root: SpecRoot }) | undefined> {
+  const result = await queryOpenSpecJson(args, scope);
+  if (result && result !== "truncated" && result.root) return { ...result, root: result.root };
+  return undefined;
 }
 
 export function specCall(method: string, scope: SpecScope, ...args: string[]): string {

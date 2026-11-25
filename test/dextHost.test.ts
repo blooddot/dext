@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -57,6 +57,13 @@ async function fixture(root: string, name: string, source: string): Promise<stri
 async function installSpecApi(root: string): Promise<void> {
   const api = join(root, ".dext", "api", "spec");
   await cp(resolve(".dext/api/spec"), api, { recursive: true });
+}
+
+function syncChangeStatus(root: string, changeName: string, capabilities: string[]) {
+  const changeRoot = join(root, "openspec", "changes", changeName);
+  return { changeName, changeRoot, planningHome: { root }, artifactPaths: {
+    specs: { existingOutputPaths: capabilities.map((capability) => join(changeRoot, "specs", capability, "spec.md")) }
+  } };
 }
 
 async function installGitReviewApi(root: string): Promise<void> {
@@ -243,23 +250,34 @@ describe("Dext kernel host", () => {
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "归档目录已存在。", state: "blocked", next: "仍在活跃变更中", absent: "活跃变更已清空" },
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "归档查询出错。", queryFails: true, next: "归档状态未知", absent: "活跃变更已清空" },
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "活跃列表已找不到目标。", archiveMissing: true, next: "归档状态未知", absent: "活跃变更已清空" },
-    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "已同步 openspec/specs/example/spec.md。", next: 'spec.archive("example",' },
-    { mode: "sync", args: "", id: "openspec-sync-specs", text: "已同步 openspec/specs/。", next: 'spec.archive("example",' },
-    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格校验失败。", state: "blocked", next: "同步结果尚未确认", absent: "spec.archive" },
-    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格仍有校验错误。", queryFails: true, next: "校验未通过", absent: "spec.archive" },
+    { mode: "sync", args: "", id: "openspec-sync-specs", text: "主规格已同步。", state: "unchanged", next: 'spec.archive("example",' },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "评估期间新增了增量规格。", state: "unchanged", syncDrift: "added", next: "重新生成同步预览", absent: "spec.archive" },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "校验期间改写了增量规格。", state: "unchanged", syncDrift: "modified", next: "重新生成同步预览", absent: "spec.archive" },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格缺少要修改的需求。", state: "blocked", next: "同步结果尚未确认", absent: "spec.archive" },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "收到越界的同步路径。", state: "pending", next: "未能生成可确认的同步预览", absent: "spec.archive" },
+    { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格已同步。", state: "unchanged", queryFails: true, next: "校验未通过", absent: "spec.archive" },
     { mode: "explore", args: '"调查示例"', id: "openspec-explore", text: "探索结论和源码依据。", next: 'spec.propose' }
-  ])("shows spec.$mode output after $text", { timeout: 30000 }, async ({ mode, args, id, text, state = "completed", queryFails, archiveMissing, next, absent, changeName = "example", listedArchiveName }) => {
+  ])("shows spec.$mode output after $text", { timeout: 30000 }, async ({
+    mode, args, id, text, state = "completed", queryFails, archiveMissing, next, absent,
+    changeName = "example", listedArchiveName, syncDrift
+  }) => {
     const root = await workspace();
     await installSpecApi(root);
-    const changeRoot = join(root, "openspec", "changes", changeName);
-    const updatePath = join(changeRoot, "proposal.md");
+    const syncStatus = syncChangeStatus(root, "example", ["example"]);
+    const updatePath = join(syncStatus.changeRoot, "proposal.md");
     const updateStatus = {
-      changeName, changeRoot,
+      changeName, changeRoot: syncStatus.changeRoot,
       artifactPaths: { proposal: { resolvedOutputPath: updatePath, existingOutputPaths: [updatePath] } }
     };
     if (mode === "update") {
       await mkdir(updateStatus.changeRoot, { recursive: true });
       await writeFile(updatePath, "Original");
+    }
+    if (mode === "sync") {
+      const [path] = syncStatus.artifactPaths.specs.existingOutputPaths;
+      await mkdir(resolve(path!, ".."), { recursive: true });
+      await writeFile(path!, "## ADDED Requirements\n");
+      syncStatus.artifactPaths.specs.existingOutputPaths = [await realpath(path!)];
     }
     const archiveName = `2026-11-21-${changeName}`;
     const calls: string[] = [];
@@ -272,10 +290,18 @@ describe("Dext kernel host", () => {
         return { ...response, result: { kind: "skill", text } };
       }
       if (invocation.method === "agent") {
-        expect(args).toMatchObject({ skills: [id], apply: mode !== "update", patch: false });
+        expect(args).toMatchObject({ skills: [id], apply: mode !== "update" && mode !== "sync", patch: false });
         if (mode === "propose") expect(args.input).toContain("运行严格校验并报告结果");
+        if (mode === "sync") expect(args.input).toContain("Change: example");
+        if (syncDrift === "added") {
+          const [path] = syncChangeStatus(root, "example", ["new-capability"]).artifactPaths.specs.existingOutputPaths;
+          await mkdir(resolve(path!, ".."), { recursive: true });
+          await writeFile(path!, "## ADDED Requirements\n");
+          syncStatus.artifactPaths.specs.existingOutputPaths.push(await realpath(path!));
+        }
         const receipt = { status: state, change: changeName, root, cwd: ".", store: null,
-          ...(mode === "archive" && state === "completed" ? { archiveName } : {}) };
+          ...(mode === "archive" && state === "completed" ? { archiveName } : {}),
+          ...(mode === "sync" && state === "pending" ? { syncPrompt: { summary: text, paths: [join(root, "other", "spec.md")] } } : {}) };
         return { ...response, result: { kind: "agent", text: specReply(text, receipt) } };
       }
       const command = args.command;
@@ -284,10 +310,10 @@ describe("Dext kernel host", () => {
       const change = { name: changeName, completedTasks: 1, totalTasks: 3, lastModified: "2026-11-21T08:35:53.351Z" };
       let stdout = "";
       let exitCode = 0;
-      if (mode === "update" && command === 'openspec status --change "example" --json') {
-        stdout = JSON.stringify({ root: rootInfo, ...updateStatus });
+      if ((mode === "update" || mode === "sync") && command === 'openspec status --change "example" --json') {
+        stdout = JSON.stringify({ root: rootInfo, ...(mode === "update" ? updateStatus : syncStatus) });
       } else if (command === "openspec list --json") {
-        stdout = JSON.stringify({ root: rootInfo, changes: [
+        stdout = JSON.stringify({ root: rootInfo, changes: mode === "sync" ? [change] : [
           ...(calls.includes("agent") && state === "completed" ? [change] : []),
           { ...change, name: "other", lastModified: "2026-11-22T08:35:53.351Z" }
         ] });
@@ -298,6 +324,9 @@ describe("Dext kernel host", () => {
         stdout = queryFails ? "查询失败" : JSON.stringify({ changes, root: rootInfo });
         if (queryFails) exitCode = 1;
       } else if (command === "openspec validate --specs --json") {
+        if (syncDrift === "modified") {
+          await writeFile(syncStatus.artifactPaths.specs.existingOutputPaths[0]!, "## MODIFIED Requirements\n");
+        }
         stdout = JSON.stringify({ root: rootInfo, items: [{ id: "example", valid: !queryFails }] });
         if (queryFails) exitCode = 1;
       } else {
@@ -308,12 +337,400 @@ describe("Dext kernel host", () => {
     });
     const response = await kernel.runSource(`import { spec } from "dext/api/spec/index";\nspec.${mode}(${args});`);
     const output = response.steps?.filter((step) => step.stream?.channel === "stdout").map((step) => step.stream?.text).join("");
-    expect(output).toContain(text);
+    expect(output).toContain(syncDrift ? "同步评估后，增量规格路径或规格版本已变化" : text);
     expect(output).toContain(`### 下一步`);
     expect(output).toContain(next);
     expect(output).not.toContain("DEXT_OPENSPEC_RESULT");
     if (absent) expect(output?.slice(output.lastIndexOf("### 下一步"))).not.toContain(absent);
     expect(calls.filter((method) => method === (mode === "explore" ? "skill" : "agent"))).toHaveLength(1);
+  });
+
+  it.each([
+    "confirm", "cancel", "delta changed", "select change", "partial", "batch status error", "linked specs",
+    "backticks", "backticks at description limit", "delta content changed", "main content changed",
+    "main created", "main deleted", "already synced subset", "legacy explicit", "large batch",
+    "preview file changed and restored", "list access denied", "list non-JSON error", "list denied with truncated batch",
+    "blocked spec snapshot", "main outside spec root", "already synced spec changed", "missing main parent redirected",
+    "delta added during write", "delta modified during write", "already synced main modified during write",
+    "linked main specs", "main spec root redirected",
+    "main spec root redirected during final status"
+  ] as const)("handles spec.sync dialog with %s in the same Code turn", { timeout: 30000 }, async (choice) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    const runtime = builtinRuntime(root);
+    const store = "team-specs";
+    const scope = { cwd: root, root, store };
+    const atDescriptionLimit = choice === "backticks at description limit";
+    const phases: boolean[] = [];
+    let statusChecks = 0;
+    const capabilities = choice === "backticks" ? ["ex`ports", "nested/le``ga`cy"]
+      : ["exports", atDescriptionLimit ? "nested/le``gacy" : "nested/legacy"];
+    const name = choice === "legacy explicit" || choice === "select change" ? "legacy_change" : "example";
+    const truncatedBatch = choice === "list denied with truncated batch";
+    const listFailed = choice === "list access denied" || choice === "list non-JSON error" || truncatedBatch;
+    const batch = choice === "select change" || choice === "batch status error" || choice === "large batch" || listFailed;
+    const restoredDuringConfirmation = choice === "preview file changed and restored";
+    const blockedSpec = choice === "blocked spec snapshot";
+    const escapedSpec = choice === "main outside spec root";
+    const changedSyncedMain = choice === "already synced main modified during write";
+    const alreadySynced = choice === "already synced subset" || choice === "already synced spec changed" || changedSyncedMain;
+    const partial = choice === "partial" || blockedSpec || escapedSpec;
+    const subset = partial || alreadySynced;
+    const change = syncChangeStatus(root, name, capabilities);
+    const specsDir = join(change.changeRoot, "specs");
+    const deltaDir = choice === "linked specs" ? join(change.changeRoot, "drafts") : specsDir;
+    for (const capability of capabilities) {
+      const dir = join(deltaDir, capability);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "spec.md"), "");
+    }
+    if (choice === "linked specs") await symlink(deltaDir, specsDir, "junction");
+    const deltaPaths = await Promise.all(change.artifactPaths.specs.existingOutputPaths.map((path) => realpath(path)));
+    const originalDelta = "## ADDED Requirements\n\n### Requirement: 导出 A\n用户应能导出 A。\n";
+    if (restoredDuringConfirmation) await writeFile(deltaPaths[0]!, originalDelta);
+    change.artifactPaths.specs.existingOutputPaths = deltaPaths;
+    const approvedPaths = subset ? deltaPaths.slice(0, 1) : deltaPaths;
+    const mainPaths = capabilities.map((capability) => join(root, "openspec", "specs", capability, "spec.md"));
+    const main = mainPaths[0]!;
+    const syncedMain = mainPaths[1]!;
+    const mainParent = resolve(main, "..");
+    const redirectedDuringFinalStatus = choice === "main spec root redirected during final status";
+    const linkedMainSpecs = choice === "linked main specs" || choice === "main spec root redirected" || redirectedDuringFinalStatus;
+    const mainSpecRoot = join(root, "openspec", "specs");
+    const sharedSpecs = join(root, "shared-specs");
+    if (linkedMainSpecs) {
+      await mkdir(join(sharedSpecs, capabilities[0]!), { recursive: true });
+      await mkdir(join(sharedSpecs, "nested"));
+      await symlink(sharedSpecs, mainSpecRoot, "junction");
+      await writeFile(main, "Original");
+    }
+    if (choice === "missing main parent redirected") await mkdir(mainParent, { recursive: true });
+    if (blockedSpec) await mkdir(mainPaths[1]!, { recursive: true });
+    if (escapedSpec) {
+      const external = join(root, "external");
+      const linkedParent = resolve(mainPaths[1]!, "..");
+      await mkdir(external);
+      await mkdir(resolve(linkedParent, ".."), { recursive: true });
+      await symlink(external, linkedParent, "junction");
+    }
+    if (choice === "main content changed" || choice === "main deleted") {
+      await mkdir(resolve(main, ".."), { recursive: true });
+      await writeFile(main, "Original");
+    }
+    if (alreadySynced) {
+      await writeFile(deltaPaths[1]!, originalDelta);
+      await mkdir(resolve(syncedMain, ".."), { recursive: true });
+      await writeFile(syncedMain, "# Legacy\n\n## Requirements\n\n### Requirement: 导出 A\n用户应能导出 A。\n");
+    }
+    let summary = restoredDuringConfirmation ? "exports/spec.md：新增「导出 A」需求。" : partial
+      ? `exports/spec.md：新增「导出」需求。\nlegacy/spec.md：受阻，跳过该规格。${blockedSpec ? " EISDIR" : ""}`
+      : alreadySynced ? "exports/spec.md：新增「导出」需求。\nlegacy/spec.md：已同步。"
+      : "exports/spec.md：新增「导出」需求。";
+    if (atDescriptionLimit) {
+      const targetList = mainPaths.map((path) => `- \`${path}\``).join("\n");
+      const prefix = [
+        `OpenSpec 根目录 \`${root}\``, `Store \`${store}\``, "### 本次确认的主规格文件", targetList, "### 拟同步内容", ""
+      ].join("\n\n");
+      summary = summary.padEnd(20_000 - prefix.length, "x");
+    }
+    const diagnostic = "Unknown schema: broken-schema";
+    const other = choice === "batch status error" || listFailed
+      ? { changeName: "broken", status: [{ severity: "error", code: "change_error", message: diagnostic }] }
+      : syncChangeStatus(root, "other", ["auth"]);
+    const drafts = Array.from({ length: choice === "large batch" ? 98 : truncatedBatch ? 97 : 1 }, (_, index) => ({
+      ...syncChangeStatus(root, `draft-${index}`, []), artifacts: [{ instruction: "x".repeat(3100) }]
+    }));
+    const statuses = [other, change, ...drafts];
+    const listDiagnostic = "EACCES: permission denied, scandir 'openspec/changes/.scratch'";
+    if (truncatedBatch) {
+      for (const { changeName } of [other, ...drafts]) {
+        await mkdir(join(root, "openspec", "changes", changeName), { recursive: true });
+      }
+      for (const name of [".scratch", "archive"]) {
+        await mkdir(join(root, "openspec", "changes", name), { recursive: true });
+      }
+    }
+    if (choice === "large batch") expect(Buffer.byteLength(JSON.stringify(statuses))).toBeGreaterThan(256 * 1024);
+    const kernel = host(root, async (invocation, metadata) => {
+      if (invocation.method === "ui.form" || invocation.method === "ui.select") return runtime.execute(invocation, [], metadata);
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "agent") {
+        expect(args).toMatchObject({ skills: ["openspec-sync-specs"], apply: phases.length > 0, patch: false,
+          workspace: { kind: "dirRef", uri: pathToFileURL(root).href } });
+        phases.push(args.apply === true);
+        const input = args.input;
+        if (typeof input !== "string") throw new Error("Expected a sync Agent prompt string.");
+        expect(input).toContain(`Change: ${name}`);
+        expect(input).toContain(JSON.stringify(scope));
+        if (linkedMainSpecs && !args.apply) {
+          expect(input).toContain(JSON.stringify({ deltaPath: deltaPaths[0], mainPath: main, delta: "", main: "Original" }));
+          expect(input).toContain(JSON.stringify({ deltaPath: deltaPaths[1], mainPath: mainPaths[1], delta: "", main: null }));
+        }
+        if ((blockedSpec || escapedSpec) && !args.apply) {
+          expect(input).toContain(blockedSpec ? "EISDIR" : "主规格的实际路径超出所选规格根目录");
+          expect(input).toContain(JSON.stringify(mainPaths[1]));
+          const snapshot = input.split("\n").find((line) => line.startsWith("Dext 已读取规格快照 "));
+          expect(snapshot).toContain(JSON.stringify(deltaPaths[0]));
+          expect(snapshot).not.toContain(JSON.stringify(deltaPaths[1]));
+        }
+        if (args.apply === true) {
+          expect(input).toContain(JSON.stringify(summary));
+          expect(input).toContain(JSON.stringify(approvedPaths));
+          expect(input).toContain(JSON.stringify(mainPaths.slice(0, approvedPaths.length)));
+          if (linkedMainSpecs) expect(input).toContain(`本次确认的规格根目录 ${JSON.stringify(await realpath(sharedSpecs))}`);
+          if (subset) expect(input).not.toContain(JSON.stringify(deltaPaths));
+          await mkdir(mainParent, { recursive: true });
+          await writeFile(main, "# Main spec\n");
+          if (choice === "delta added during write") {
+            const [added] = syncChangeStatus(root, name, ["new-capability"]).artifactPaths.specs.existingOutputPaths;
+            await mkdir(resolve(added!, ".."), { recursive: true });
+            await writeFile(added!, originalDelta);
+            deltaPaths.push(await realpath(added!));
+          }
+          if (choice === "delta modified during write") await writeFile(deltaPaths[0]!, originalDelta);
+          if (changedSyncedMain) {
+            await writeFile(syncedMain, "# Legacy\n\n## Requirements\n\n### Requirement: 导出 B\n用户应能导出 B。\n");
+          }
+        }
+        const receipt = { change: name, cwd: root, root, store };
+        let previewSummary = summary;
+        if (restoredDuringConfirmation && args.apply === false) {
+          const diskVersion = originalDelta.replaceAll("导出 A", "导出 B");
+          await writeFile(deltaPaths[0]!, diskVersion);
+          const snapshotPrefix = "Dext 已读取规格快照 ";
+          const snapshotLine = input.split("\n").find((line) => line.startsWith(snapshotPrefix));
+          const snapshot = snapshotLine
+            ? JSON.parse(snapshotLine.slice(snapshotPrefix.length)) as Array<{ deltaPath: string; delta: string }>
+            : [];
+          const pair = snapshot.find((entry) => entry.deltaPath === deltaPaths[0]);
+          const comparedContent = pair?.delta ?? await readFile(deltaPaths[0]!, "utf8");
+          previewSummary = summary.replace("导出 A", comparedContent.includes("导出 A") ? "导出 A" : "导出 B");
+          if (pair) {
+            expect(pair).toMatchObject({ deltaPath: deltaPaths[0], mainPath: main, delta: originalDelta, main: null });
+            expect(input).toContain("不得重新读取");
+          }
+        }
+        const syncPrompt = { summary: previewSummary, paths: approvedPaths,
+          ...(alreadySynced ? { alreadySyncedPaths: deltaPaths.slice(1) } : {}) };
+        const text = args.apply === true
+          ? specReply("主规格已写入。", { ...receipt, status: "completed" })
+          : specReply(previewSummary, { ...receipt, status: "pending", syncPrompt });
+        return { ...response, result: { kind: "agent", text } };
+      }
+      expect(invocation.method).toBe("terminal");
+      const command = args.command;
+      if (typeof command !== "string") throw new Error("Expected a terminal command string.");
+      const rootInfo = { path: root, store_id: store };
+      let stdout = "";
+      let stderr = "";
+      let exitCode = 0;
+      if (command === `openspec status --change "${name}" --json --store "${store}"`) {
+        statusChecks++;
+        if (redirectedDuringFinalStatus && statusChecks === 3) {
+          const replacement = join(root, "replacement-specs");
+          await mkdir(replacement);
+          expect(await readFile(main, "utf8")).toBe("# Main spec\n");
+          await rm(mainSpecRoot);
+          await symlink(replacement, mainSpecRoot, "junction");
+          await expect(readFile(main, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        const target = choice === "delta changed" && statusChecks > 1 ? syncChangeStatus(root, name, ["exports"]) : change;
+        stdout = JSON.stringify({ ...target, root: rootInfo });
+      } else if (command === `openspec list --json --store "${store}"`) {
+        if (listFailed) {
+          exitCode = 1;
+          if (choice === "list access denied") {
+            stdout = JSON.stringify({ root: null, changes: [], status: [{ severity: "error", code: "list_error", message: listDiagnostic }] });
+          } else {
+            stderr = listDiagnostic;
+          }
+        } else {
+          stdout = JSON.stringify({ root: rootInfo, changes: statuses.map(({ changeName }) => ({ name: changeName })) });
+        }
+      } else if (command === `openspec status --all --json --store "${store}"`) {
+        expect(listFailed).toBe(true);
+        exitCode = 1;
+        stdout = JSON.stringify({ root: rootInfo, changes: statuses });
+        if (truncatedBatch) {
+          const bytes = Buffer.from(stdout);
+          expect(bytes.length).toBeGreaterThan(256 * 1024);
+          stdout = `${bytes.subarray(0, 256 * 1024).toString()}\n[output truncated]`;
+        }
+      } else if (command === `openspec context --json --store "${store}"`) {
+        expect(truncatedBatch).toBe(true);
+        stdout = JSON.stringify({ root: rootInfo, members: [] });
+      } else if (command === `openspec validate --specs --json --store "${store}"`) {
+        stdout = JSON.stringify({ root: rootInfo, items: [{ id: "exports", valid: true }] });
+      } else {
+        const target = statuses.find(({ changeName }) => command === `openspec status --change "${changeName}" --json --store "${store}"`);
+        if (target && "status" in target) {
+          exitCode = 1;
+          stdout = JSON.stringify({ status: target.status });
+        } else if (target) {
+          stdout = JSON.stringify({ ...target, root: rootInfo });
+        } else {
+          expect(command).toBe("git status --porcelain -uall");
+        }
+      }
+      return { ...response, result: { kind: "terminal", status: exitCode === 0 ? "succeeded" : "failed", command, cwd: root, exit_code: exitCode, stdout,
+        stderr, duration_ms: 1 } };
+    });
+    const h = createConversationHarness({
+      executeInput: (source, execution) => kernel.runSource(source, { execution, signal: execution.signal! })
+    });
+    const session = conversation(`sync-${choice}`);
+    await h.seed([session]);
+    const requested = batch ? "" : name;
+    const running = h.coordinator.execute(h.controller.active(), "code",
+      `import { spec } from "dext/api/spec/index";\nspec.sync("${requested}", { store: "${store}" });`);
+    const waitForDialog = (title: string) => vi.waitFor(() => {
+      for (const message of h.messages) {
+        if (message.type !== "agentEvent") continue;
+        const interaction = message.event.uiInteraction;
+        if (interaction?.status === "waiting" && interaction.form.title === title) return interaction;
+      }
+      throw new Error(`Waiting for dialog ${title}`);
+    }, { timeout: 8000 });
+    try {
+      if (choice === "select change" || choice === "large batch") {
+        const selection = await waitForDialog("选择要同步的变更");
+        expect(phases).toEqual([]);
+        expect(selection.form.fields[0]).toMatchObject({ options: [{ value: name }, { value: "other" }] });
+        expect(h.interactions.respondUi(selection.sessionId, selection.turnId, selection.requestId, {
+          kind: "ui", type: "form", status: "submitted", answers: { answer: { type: "select", selected: [name] } }
+        })).toBe(true);
+      }
+      const request = await waitForDialog(`同步 ${name}`);
+      expect(phases).toEqual([false]);
+      expect(statusChecks).toBe(listFailed && !truncatedBatch ? 0 : 1);
+      expect(request.form).toMatchObject({ presentation: "dialog", actions: [{ id: "sync", label: "确认同步" }], show_cancel: true });
+      expect(request.form.description).toContain(root);
+      expect(request.form.description).toContain(store);
+      expect(request.form.description).toContain(summary);
+      expect(request.form.description).toContain(mainPaths[0]);
+      if (subset) expect(request.form.description).not.toContain(mainPaths[1]);
+      else expect(request.form.description).toContain(mainPaths[1]);
+      if (atDescriptionLimit) expect(request.form.description).toHaveLength(20_000);
+      if (choice === "backticks" || atDescriptionLimit) {
+        const markdown = dextMarkdown();
+        const html = markdown.render(request.form.description);
+        for (const path of mainPaths) expect(html).toContain(`<li><code>${markdown.utils.escapeHtml(path)}</code></li>`);
+      }
+      if (choice === "delta content changed") await writeFile(deltaPaths[0]!, "Modified");
+      if (choice === "main created") await mkdir(resolve(main, ".."), { recursive: true });
+      if (choice === "main content changed" || choice === "main created") await writeFile(main, "Modified");
+      if (choice === "main deleted") await rm(main);
+      if (choice === "missing main parent redirected") {
+        const otherParent = join(resolve(mainParent, ".."), "other-exports");
+        await mkdir(otherParent);
+        await rmdir(mainParent);
+        await symlink(otherParent, mainParent, "junction");
+      }
+      if (choice === "main spec root redirected") {
+        const originalRoot = await realpath(sharedSpecs);
+        const replacement = join(root, "replacement-specs");
+        await mkdir(replacement);
+        // Keep both file paths resolving to their previewed targets after changing the root.
+        await symlink(join(originalRoot, "nested"), join(replacement, "nested"), "junction");
+        await symlink(join(originalRoot, "exports"), join(replacement, "exports"), "junction");
+        await rm(mainSpecRoot);
+        await symlink(replacement, mainSpecRoot, "junction");
+      }
+      if (choice === "already synced spec changed") await writeFile(deltaPaths[1]!, "Modified");
+      if (restoredDuringConfirmation) await writeFile(deltaPaths[0]!, originalDelta);
+      const stale = ["delta content changed", "main content changed", "main created", "main deleted", "already synced spec changed", "missing main parent redirected", "main spec root redirected"]
+        .some((reason) => choice === reason);
+      const reply = choice === "cancel" ? { status: "cancelled" } : { status: "submitted", action: "sync" };
+      expect(h.interactions.respondUi(request.sessionId, request.turnId, request.requestId,
+        { kind: "ui", type: "form", answers: {}, ...reply })).toBe(true);
+      await running;
+      const turn = (await h.history.session(session.id))!.turns[0]!;
+      const output = turn.response?.steps?.filter((step) => step.stream?.channel === "stdout").map((step) => step.stream?.text).join("");
+      const written = choice !== "cancel" && choice !== "delta changed" && !stale;
+      expect(phases).toEqual(written ? [false, true] : [false]);
+      if (written) {
+        expect(output).toContain("主规格已写入");
+        if (choice === "batch status error" || listFailed) expect(output).toContain(diagnostic);
+        if (listFailed) expect(output).toContain(listDiagnostic);
+        if (truncatedBatch) {
+          expect(output).toContain("批量状态超过 terminal() 的输出上限，已改为尝试逐项读取");
+          expect(output).not.toContain("- .scratch");
+          expect(output).not.toContain("- archive ·");
+        }
+        if (partial) {
+          expect(output).toContain("归档前请核对其余增量规格");
+          expect(output).not.toContain("spec.archive");
+        } else if (redirectedDuringFinalStatus || changedSyncedMain || choice === "delta added during write" || choice === "delta modified during write") {
+          if (redirectedDuringFinalStatus) expect(output).toContain("规格根目录已变化或无法核实");
+          expect(output).toContain("重新生成同步预览");
+          expect(output).not.toContain("spec.archive");
+        } else {
+          expect(output).toContain(`spec.archive("${name}", ${JSON.stringify(scope)})`);
+        }
+      } else {
+        expect(output).toContain(choice === "cancel" ? "已取消规格同步" : stale ? "此次确认已失效" : "未能核实指定的 OpenSpec");
+        expect(output).not.toContain("spec.archive");
+      }
+      const preWriteChecks = (listFailed && !truncatedBatch) || choice === "cancel" ? 1 : 2;
+      expect(statusChecks).toBe(preWriteChecks + (written && !partial ? 1 : 0));
+    } finally {
+      h.coordinator.abort(session.id);
+      await running;
+      h.dispose();
+    }
+  });
+
+  it.each(["single change", "batch failures", "list truncated", "status truncated", "unsafe name"] as const)("returns from spec.sync without starting an Agent when there are no confirmed delta specs (%s)", { timeout: 30000 }, async (choice) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    const commands: string[] = [];
+    const list = choice !== "single change" && choice !== "unsafe name";
+    const diagnostic = "Unknown schema: broken-schema";
+    const kernel = host(root, async (invocation) => {
+      expect(invocation.method).toBe("terminal");
+      const command = invocation.arguments.find(({ name }) => name === "command")?.value;
+      if (typeof command !== "string") throw new Error("Expected a terminal command string.");
+      commands.push(command);
+      const rootInfo = { path: root };
+      const change = syncChangeStatus(root, "example", []);
+      let exitCode = 0;
+      let stdout: string;
+      if (command === "openspec list --json") {
+        stdout = choice === "list truncated" ? '{"changes":["'.padEnd(256 * 1024, "x")
+          : JSON.stringify({ root: rootInfo, changes: [{ name: "example" }, { name: "broken" }] });
+      } else if (command === 'openspec status --change "example" --json') {
+        stdout = JSON.stringify({ root: rootInfo, ...change });
+      } else {
+        expect(command).toBe('openspec status --change "broken" --json');
+        if (choice === "status truncated") {
+          stdout = '{"artifacts":[\n[output truncated]';
+        } else {
+          exitCode = 1;
+          stdout = JSON.stringify({ status: [{ severity: "error", code: "change_error", message: diagnostic }] });
+        }
+      }
+      return { ...askResponse(invocation), result: { kind: "terminal", status: exitCode ? "failed" : "succeeded", command, cwd: root, exit_code: exitCode, stdout,
+        stderr: "", duration_ms: 1 } };
+    });
+    const args = list ? "" : JSON.stringify(choice === "unsafe name" ? "%USERNAME%" : "example");
+    const response = await kernel.runSource(`import { spec } from "dext/api/spec/index";\nspec.sync(${args});`);
+    const output = response.steps?.find((step) => step.stream?.channel === "stdout")?.stream?.text;
+    if (choice === "list truncated" || choice === "status truncated") {
+      expect(output).toContain("超过 terminal() 的输出上限");
+      expect(output).toContain('spec.sync("<change>"');
+    } else {
+      expect(output).toContain(choice === "batch failures" ? diagnostic
+        : choice === "unsafe name" ? "未能核实指定的 OpenSpec" : "example 没有增量规格");
+    }
+    const exampleStatus = 'openspec status --change "example" --json';
+    if (choice === "unsafe name") expect(commands).toEqual([]);
+    else if (choice === "single change") expect(commands).toEqual([exampleStatus]);
+    else if (choice === "list truncated") expect(commands).toEqual(["openspec list --json"]);
+    else {
+      expect(commands[0]).toBe("openspec list --json");
+      expect(commands.slice(1).sort()).toEqual(['openspec status --change "broken" --json', exampleStatus]);
+    }
   });
 
   it("reports the path and reason when spec.update cannot read a preview artifact", { timeout: 30000 }, async () => {
