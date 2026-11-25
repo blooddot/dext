@@ -113,6 +113,13 @@ export interface WritingResult extends SkillResult {
 
 export const isId = (value: unknown): value is string => typeof value === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
 
+// Existing directories may predate the naming convention. Limit the characters
+// to those that stay literal inside double quotes in both cmd.exe and POSIX shells.
+export function isExistingChangeName(value: unknown): value is string {
+  return typeof value === "string" && !!value.trim() && !value.startsWith(".") && value !== "archive" &&
+    !/[^\p{L}\p{M}\p{N}_. -]/u.test(value);
+}
+
 export function hasScope(scope: SpecScope): boolean {
   return scope.cwd !== undefined || scope.root !== undefined || scope.store !== undefined;
 }
@@ -145,8 +152,8 @@ function parseOutcome(line: string | undefined, requested: SpecScope): WorkflowO
     return {
       status,
       scope: resolved ? { cwd: requested.cwd ?? (store ? "." : cwd), root, ...(store ? { store } : {}) } : undefined,
-      change: isId(change) ? change : undefined,
-      archiveName: isId(archiveName) ? archiveName : undefined,
+      change: isExistingChangeName(change) ? change : undefined,
+      archiveName: isExistingChangeName(archiveName) ? archiveName : undefined,
       archivePrompt: status === "pending" ? archivePrompt : undefined
     };
   } catch {

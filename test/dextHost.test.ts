@@ -234,6 +234,8 @@ describe("Dext kernel host", () => {
     { mode: "update", args: '"example", "修订方案"', id: "openspec-update-change", text: "已修订 proposal.md。", next: 'spec.apply("example",' },
     { mode: "update", args: '"example"', id: "openspec-update-change", text: "待确认\n\n拟修订提案。", state: "pending", next: "先完成 Agent 说明中的确认", absent: "spec.apply" },
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "已归档到 openspec/changes/archive/2026-11-21-example。", next: 'spec.propose' },
+    { mode: "archive", args: '"legacy_change"', changeName: "legacy_change", id: "openspec-archive-change", text: "历史变更已归档。", next: "活跃变更已清空" },
+    { mode: "archive", args: '"legacy_change"', changeName: "legacy_change", listedArchiveName: "2026-11-20-legacy_change", id: "openspec-archive-change", text: "归档列表只有另一条历史归档。", next: "归档状态未知", absent: "活跃变更已清空" },
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "等待选择同步方式。", state: "pending", next: "归档确认未能完成", absent: "活跃变更已清空" },
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "归档目录已存在。", state: "blocked", next: "仍在活跃变更中", absent: "活跃变更已清空" },
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "归档查询出错。", queryFails: true, next: "归档状态未知", absent: "活跃变更已清空" },
@@ -243,9 +245,10 @@ describe("Dext kernel host", () => {
     { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格校验失败。", state: "blocked", next: "同步结果尚未确认", absent: "spec.archive" },
     { mode: "sync", args: '"example"', id: "openspec-sync-specs", text: "主规格仍有校验错误。", queryFails: true, next: "校验未通过", absent: "spec.archive" },
     { mode: "explore", args: '"调查示例"', id: "openspec-explore", text: "探索结论和源码依据。", next: 'spec.propose' }
-  ])("shows spec.$mode output after $text", { timeout: 30000 }, async ({ mode, args, id, text, state = "completed", queryFails, archiveMissing, next, absent }) => {
+  ])("shows spec.$mode output after $text", { timeout: 30000 }, async ({ mode, args, id, text, state = "completed", queryFails, archiveMissing, next, absent, changeName = "example", listedArchiveName }) => {
     const root = await workspace();
     await installSpecApi(root);
+    const archiveName = `2026-11-21-${changeName}`;
     const calls: string[] = [];
     const kernel = host(root, async (invocation) => {
       calls.push(invocation.method);
@@ -258,14 +261,14 @@ describe("Dext kernel host", () => {
       if (invocation.method === "agent") {
         expect(args).toMatchObject({ skills: [id], apply: true, patch: false });
         if (mode === "propose") expect(args.input).toContain("运行严格校验并报告结果");
-        const receipt = { status: state, change: "example", root, cwd: ".", store: null,
-          ...(mode === "archive" && state === "completed" ? { archiveName: "2026-11-21-example" } : {}) };
+        const receipt = { status: state, change: changeName, root, cwd: ".", store: null,
+          ...(mode === "archive" && state === "completed" ? { archiveName } : {}) };
         return { ...response, result: { kind: "agent", text: specReply(text, receipt) } };
       }
       const command = args.command;
       if (typeof command !== "string") throw new Error("Expected a terminal command");
       const rootInfo = { path: root, source: "nearest" };
-      const change = { name: "example", completedTasks: 1, totalTasks: 3, lastModified: "2026-11-21T08:35:53.351Z" };
+      const change = { name: changeName, completedTasks: 1, totalTasks: 3, lastModified: "2026-11-21T08:35:53.351Z" };
       let stdout = "";
       let exitCode = 0;
       if (command === "openspec list --json") {
@@ -275,7 +278,7 @@ describe("Dext kernel host", () => {
         ] });
       } else if (command === "openspec list --all --json") {
         const changes = archiveMissing ? [] : state === "completed"
-          ? [{ ...change, name: "2026-11-21-example", archived: true }]
+          ? [{ ...change, name: listedArchiveName ?? archiveName, archived: true }]
           : [{ ...change, archived: false }];
         stdout = queryFails ? "查询失败" : JSON.stringify({ changes, root: rootInfo });
         if (queryFails) exitCode = 1;
