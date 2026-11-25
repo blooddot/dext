@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -16,6 +17,8 @@ import { workflowCases } from "./dextWorkflowCases.js";
 import { conversation, createConversationHarness } from "./conversationHarness.js";
 import { renderHistoryRecord } from "../src/features/conversations/presentation/historyRender.js";
 import { UI_VIEW_MAX_BYTES, UI_VIEW_MAX_NODES } from "../src/shared/contracts/uiView.js";
+import { dextMarkdown } from "../src/shared/lib/markdown.js";
+import { markdownCodeCopy } from "../src/shared/lib/markdownCopy.js";
 
 const runnerDirectory = resolve("src", "runner");
 workflowCases(runnerDirectory);
@@ -39,8 +42,8 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
-async function workspace(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "dext-kernel-"));
+async function workspace(prefix = "dext-kernel-"): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
   roots.push(root);
   return root;
 }
@@ -231,8 +234,8 @@ describe("Dext kernel host", () => {
     { mode: "propose", args: '"新增示例"', id: "openspec-propose", text: "提案 example 的规划产物已写入。", next: 'spec.apply("example",' },
     { mode: "propose", args: '"新增示例"', id: "openspec-propose", text: "待确认\n\n请确认提案范围。", state: "pending", next: "先完成 Agent 说明中的确认", absent: "spec.apply" },
     { mode: "propose", args: '"新增示例"', id: "openspec-propose", text: "规划产物已写入，严格校验未通过。", state: "blocked", next: "尚未确认本轮提案已创建并通过检查", absent: "spec.apply" },
-    { mode: "update", args: '"example", "修订方案"', id: "openspec-update-change", text: "已修订 proposal.md。", next: 'spec.apply("example",' },
-    { mode: "update", args: '"example"', id: "openspec-update-change", text: "待确认\n\n拟修订提案。", state: "pending", next: "先完成 Agent 说明中的确认", absent: "spec.apply" },
+    { mode: "update", args: '"example", "修订方案"', id: "openspec-update-change", text: "方案无需修改。", state: "unchanged", next: 'spec.apply("example",' },
+    { mode: "update", args: '"example"', id: "openspec-update-change", text: "待确认\n\n拟修订提案。", state: "pending", next: "未能生成可确认的修订预览", absent: "spec.apply" },
     { mode: "archive", args: '"example"', id: "openspec-archive-change", text: "已归档到 openspec/changes/archive/2026-11-21-example。", next: 'spec.propose' },
     { mode: "archive", args: '"legacy_change"', changeName: "legacy_change", id: "openspec-archive-change", text: "历史变更已归档。", next: "活跃变更已清空" },
     { mode: "archive", args: '"legacy_change"', changeName: "legacy_change", listedArchiveName: "2026-11-20-legacy_change", id: "openspec-archive-change", text: "归档列表只有另一条历史归档。", next: "归档状态未知", absent: "活跃变更已清空" },
@@ -248,6 +251,16 @@ describe("Dext kernel host", () => {
   ])("shows spec.$mode output after $text", { timeout: 30000 }, async ({ mode, args, id, text, state = "completed", queryFails, archiveMissing, next, absent, changeName = "example", listedArchiveName }) => {
     const root = await workspace();
     await installSpecApi(root);
+    const changeRoot = join(root, "openspec", "changes", changeName);
+    const updatePath = join(changeRoot, "proposal.md");
+    const updateStatus = {
+      changeName, changeRoot,
+      artifactPaths: { proposal: { resolvedOutputPath: updatePath, existingOutputPaths: [updatePath] } }
+    };
+    if (mode === "update") {
+      await mkdir(updateStatus.changeRoot, { recursive: true });
+      await writeFile(updatePath, "Original");
+    }
     const archiveName = `2026-11-21-${changeName}`;
     const calls: string[] = [];
     const kernel = host(root, async (invocation) => {
@@ -259,7 +272,7 @@ describe("Dext kernel host", () => {
         return { ...response, result: { kind: "skill", text } };
       }
       if (invocation.method === "agent") {
-        expect(args).toMatchObject({ skills: [id], apply: true, patch: false });
+        expect(args).toMatchObject({ skills: [id], apply: mode !== "update", patch: false });
         if (mode === "propose") expect(args.input).toContain("运行严格校验并报告结果");
         const receipt = { status: state, change: changeName, root, cwd: ".", store: null,
           ...(mode === "archive" && state === "completed" ? { archiveName } : {}) };
@@ -271,7 +284,9 @@ describe("Dext kernel host", () => {
       const change = { name: changeName, completedTasks: 1, totalTasks: 3, lastModified: "2026-11-21T08:35:53.351Z" };
       let stdout = "";
       let exitCode = 0;
-      if (command === "openspec list --json") {
+      if (mode === "update" && command === 'openspec status --change "example" --json') {
+        stdout = JSON.stringify({ root: rootInfo, ...updateStatus });
+      } else if (command === "openspec list --json") {
         stdout = JSON.stringify({ root: rootInfo, changes: [
           ...(calls.includes("agent") && state === "completed" ? [change] : []),
           { ...change, name: "other", lastModified: "2026-11-22T08:35:53.351Z" }
@@ -299,6 +314,184 @@ describe("Dext kernel host", () => {
     expect(output).not.toContain("DEXT_OPENSPEC_RESULT");
     if (absent) expect(output?.slice(output.lastIndexOf("### 下一步"))).not.toContain(absent);
     expect(calls.filter((method) => method === (mode === "explore" ? "skill" : "agent"))).toHaveLength(1);
+  });
+
+  it("reports the path and reason when spec.update cannot read a preview artifact", { timeout: 30000 }, async () => {
+    const root = await workspace("dext-kernel-`literal`-");
+    await installSpecApi(root);
+    const changeRoot = join(root, "change");
+    const proposal = join(changeRoot, "proposal.md");
+    await mkdir(changeRoot);
+    await writeFile(proposal, "Original");
+    const resolvedProposal = await realpath(proposal);
+    const diagnostic = `EACCES: permission denied, open '${resolvedProposal}'`;
+    const calls: string[] = [];
+    const kernel = host(root, async (invocation) => {
+      calls.push(invocation.method);
+      expect(invocation.method).toBe("terminal");
+      const command = 'openspec status --change "example" --json';
+      expect(invocation.arguments.find(({ name }) => name === "command")?.value).toBe(command);
+      const stdout = JSON.stringify({ changeName: "example", root: { path: root }, changeRoot,
+        artifactPaths: { proposal: { resolvedOutputPath: proposal, existingOutputPaths: [proposal] } } });
+      return { ...askResponse(invocation), result: { kind: "terminal", status: "succeeded", command, cwd: root,
+        exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
+    });
+    const response = await kernel.runSource([
+      'import fs from "node:fs/promises";',
+      'import { syncBuiltinESMExports } from "node:module";',
+      'import { spec } from "dext/api/spec/index";',
+      'const readFile = fs.readFile;',
+      'fs.readFile = async (path, options) => {',
+      `  if (path === ${JSON.stringify(resolvedProposal)}) throw new Error(${JSON.stringify(diagnostic)});`,
+      '  return readFile(path, options);',
+      '};',
+      'syncBuiltinESMExports();',
+      'try { await spec.update("example"); }',
+      'finally { fs.readFile = readFile; syncBuiltinESMExports(); }'
+    ].join("\n"));
+    const output = response.steps?.find((step) => step.stream?.channel === "stdout")?.stream?.text ?? "";
+    expect(calls).toEqual(["terminal"]);
+    expect(output).toContain("重新生成修订预览");
+    expect(output).toContain(proposal);
+    expect(output).toContain(diagnostic);
+    const markdown = dextMarkdown().use(markdownCodeCopy);
+    const rendered = markdown.render(output);
+    const literal = markdown.utils.escapeHtml(`${proposal}：${diagnostic}\n`);
+    expect(rendered).toContain(`<pre><code>${literal}</code></pre>`);
+    expect(rendered).toContain(`data-copy="${literal}"`);
+  });
+
+  it.each(["confirm", "cancel", "scope changed", "change directory changed", "artifact path changed", "artifact content changed",
+    "preview artifact changed and restored", "legacy name"] as const)("handles spec.update dialog with %s in the same Code turn", { timeout: 30000 }, async (choice) => {
+    const root = await workspace();
+    await installSpecApi(root);
+    const runtime = builtinRuntime(root);
+    const store = "team-specs";
+    const name = choice === "legacy name" ? "legacy_change" : "example";
+    const restoredDuringConfirmation = choice === "preview artifact changed and restored";
+    const summary = "proposal.md：补充导出范围。\ntasks.md：增加导出验证。";
+    const changeRoot = join(root, "change");
+    const proposal = join(changeRoot, "proposal.md");
+    await mkdir(changeRoot);
+    await writeFile(proposal, "Original");
+    const resolvedProposal = await realpath(proposal);
+    const phases: boolean[] = [];
+    const applyCalls: string[] = [];
+    let statusChecks = 0;
+    const kernel = host(root, async (invocation, metadata) => {
+      if (invocation.method === "ui.form") return runtime.execute(invocation, [], metadata);
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "agent") {
+        if (choice === "legacy name" && (args.skills as string[])[0] === "openspec-apply-change") {
+          expect(args).toMatchObject({ apply: true, patch: false });
+          expect(args.input).toContain(`Change: ${name}`);
+          applyCalls.push("agent");
+          return { ...response, result: { kind: "agent", text: specReply("实施已完成。", {
+            status: "completed", change: name, cwd: root, root, store
+          }) } };
+        }
+        expect(args).toMatchObject({ skills: ["openspec-update-change"], apply: phases.length > 0, patch: false,
+          workspace: { kind: "dirRef", uri: pathToFileURL(root).href } });
+        phases.push(args.apply === true);
+        expect(args.input).toContain(JSON.stringify({ cwd: root, root, store }));
+        expect(args.input).toContain("修订导出方案");
+        if (args.apply === true) {
+          expect(args.input).toContain(JSON.stringify(summary));
+          expect(args.input).toContain(JSON.stringify({
+            path: proposal, resolvedPath: resolvedProposal, digest: createHash("sha256").update("Original").digest("hex")
+          }));
+          expect(args.input).toContain("写入前核对");
+        }
+        const receipt = { change: name, cwd: root, root, store };
+        let previewSummary = summary;
+        if (restoredDuringConfirmation && args.apply === false) {
+          await writeFile(proposal, "Modified");
+          const prefix = "Dext 已读取产物快照 ";
+          const line = (args.input as string).split("\n").find((line) => line.startsWith(prefix));
+          const files = line ? JSON.parse(line.slice(prefix.length)) as Array<{ path: string; content: string }> : [];
+          const content = files.find(({ path }) => path === proposal)?.content ?? await readFile(proposal, "utf8");
+          if (content === "Modified") previewSummary = "proposal.md：补充磁盘上改写后的导出范围。";
+        }
+        const text = args.apply === true
+          ? specReply("规划修订已写入。", { ...receipt, status: "completed" })
+          : specReply(previewSummary, { ...receipt, status: "pending", updatePrompt: previewSummary });
+        return { ...response, result: { kind: "agent", text } };
+      }
+      expect(invocation.method).toBe("terminal");
+      const command = args.command;
+      if (typeof command !== "string") throw new Error("Expected a terminal command string.");
+      let stdout = "";
+      if (command === `openspec status --change "${name}" --json --store "${store}"`) {
+        statusChecks++;
+        const rootPath = choice === "scope changed" && statusChecks > 1 ? join(root, "different") : root;
+        const currentChangeRoot = choice === "change directory changed" && statusChecks > 1 ? join(root, "moved") : changeRoot;
+        const output = choice === "artifact path changed" && statusChecks > 1 ? join(changeRoot, "new-tasks.md") : join(changeRoot, "tasks.md");
+        stdout = JSON.stringify({ changeName: name, root: { path: rootPath, store_id: store }, changeRoot: currentChangeRoot,
+          artifactPaths: { proposal: { resolvedOutputPath: proposal, existingOutputPaths: [proposal] },
+            tasks: { resolvedOutputPath: output, existingOutputPaths: [] } } });
+      } else if (choice === "legacy name" && command === `openspec instructions apply --change "${name}" --json --store "${store}"`) {
+        expect(args.cwd).toBe(root);
+        const done = applyCalls.includes("agent");
+        applyCalls.push(command);
+        stdout = JSON.stringify({ changeName: name, state: done ? "all_done" : "ready", root: { path: root, store_id: store },
+          tasks: [{ id: "1", description: "实施导出", done }] });
+      } else {
+        expect(command).toBe("git status --porcelain -uall");
+      }
+      return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root, exit_code: 0, stdout,
+        stderr: "", duration_ms: 1 } };
+    });
+    const h = createConversationHarness({
+      executeInput: (source, execution) => kernel.runSource(source, { execution, signal: execution.signal! })
+    });
+    const session = conversation(`update-${choice}`);
+    await h.seed([session]);
+    const running = h.coordinator.execute(h.controller.active(), "code",
+      `import { spec } from "dext/api/spec/index";\nspec.update("${name}", "修订导出方案", { store: "team-specs" });`);
+    try {
+      const request = await vi.waitFor(() => {
+        const message = h.messages.find((entry) => entry.type === "agentEvent" && entry.event.uiInteraction?.status === "waiting");
+        if (message?.type !== "agentEvent" || !message.event.uiInteraction) throw new Error("Waiting for update dialog");
+        return message.event.uiInteraction;
+      }, { timeout: 8000 });
+      expect(phases).toEqual([false]);
+      expect(statusChecks).toBe(1);
+      if (restoredDuringConfirmation) await writeFile(proposal, "Original");
+      expect(request.form).toMatchObject({ title: `修订 ${name}`, description: summary, presentation: "dialog",
+        actions: [{ id: "update" }], show_cancel: true });
+      if (choice === "artifact content changed") await writeFile(proposal, "Modified");
+      const reply = choice === "cancel" ? { status: "cancelled" } : { status: "submitted", action: "update" };
+      expect(h.interactions.respondUi(request.sessionId, request.turnId, request.requestId,
+        { kind: "ui", type: "form", answers: {}, ...reply })).toBe(true);
+      await running;
+      const turn = (await h.history.session(session.id))!.turns[0]!;
+      const output = turn.response?.steps?.filter((step) => step.stream?.channel === "stdout").map((step) => step.stream?.text).join("");
+      const written = choice === "confirm" || choice === "legacy name" || restoredDuringConfirmation;
+      expect(phases).toEqual(written ? [false, true] : [false]);
+      expect(statusChecks).toBe(choice === "cancel" ? 1 : 2);
+      if (written) {
+        expect(output).toContain("规划修订已写入");
+        const next = /`(spec\.apply\([^\r\n]+\))`/.exec(output ?? "")?.[1];
+        expect(next).toBe(`spec.apply("${name}", ${JSON.stringify({ cwd: root, root, store })})`);
+        if (choice === "legacy name") {
+          const applied = await kernel.runSource(`import { spec } from "dext/api/spec/index";\n${next};`);
+          const appliedOutput = applied.steps?.find((step) => step.stream?.channel === "stdout")?.stream?.text;
+          const command = `openspec instructions apply --change "${name}" --json --store "${store}"`;
+          expect(applyCalls).toEqual([command, "agent", command]);
+          expect(appliedOutput).toContain("1/1 项已勾选");
+        }
+      } else {
+        const message = choice === "cancel" ? "已取消规划修订" :
+          choice === "scope changed" ? "未能核实指定的 OpenSpec" : "重新生成修订预览";
+        expect(output).toContain(message);
+        expect(output).not.toContain("spec.apply");
+      }
+    } finally {
+      h.coordinator.abort(session.id);
+      await running;
+      h.dispose();
+    }
   });
 
   it.each(["sync", "skip", "cancel"] as const)("handles the spec.archive dialog action %s in the same Code turn", { timeout: 30000 }, async (choice) => {

@@ -105,6 +105,7 @@ interface WorkflowOutcome {
   change?: string;
   archiveName?: string;
   archivePrompt?: unknown;
+  updatePrompt?: string;
 }
 
 export interface WritingResult extends SkillResult {
@@ -120,12 +121,20 @@ export function isExistingChangeName(value: unknown): value is string {
     !/[^\p{L}\p{M}\p{N}_. -]/u.test(value);
 }
 
+export function statusCommand(change: string): string | undefined {
+  return isExistingChangeName(change) ? `status --change "${change}" --json` : undefined;
+}
+
 export function hasScope(scope: SpecScope): boolean {
   return scope.cwd !== undefined || scope.root !== undefined || scope.store !== undefined;
 }
 
 export function resolvedScope({ cwd, root }: { cwd: string; root: SpecRoot }): ResolvedScope {
   return { cwd, root: root.path, ...(root.store_id ? { store: root.store_id } : {}) };
+}
+
+export function matchesTarget(outcome: WorkflowOutcome | undefined, change: string, scope: ResolvedScope): boolean {
+  return outcome?.change === change && outcome.scope?.root === scope.root && outcome.scope.store === scope.store;
 }
 
 export function unverifiedScope(): WritingResult {
@@ -145,7 +154,7 @@ function parseOutcome(line: string | undefined, requested: SpecScope): WorkflowO
   try {
     const report = JSON.parse(line) as Record<string, unknown> | null;
     if (!report) return undefined;
-    const { status, cwd, root, store, change, archiveName, archivePrompt } = report;
+    const { status, cwd, root, store, change, archiveName, archivePrompt, updatePrompt } = report;
     if (status !== "completed" && status !== "pending" && status !== "blocked" && status !== "unchanged") return undefined;
     const resolved = typeof cwd === "string" && !!cwd && typeof root === "string" && !!root &&
       (store === null || isId(store)) && (!requested.store || requested.store === store) && (!requested.root || requested.root === root);
@@ -154,7 +163,8 @@ function parseOutcome(line: string | undefined, requested: SpecScope): WorkflowO
       scope: resolved ? { cwd: requested.cwd ?? (store ? "." : cwd), root, ...(store ? { store } : {}) } : undefined,
       change: isExistingChangeName(change) ? change : undefined,
       archiveName: isExistingChangeName(archiveName) ? archiveName : undefined,
-      archivePrompt: status === "pending" ? archivePrompt : undefined
+      archivePrompt: status === "pending" ? archivePrompt : undefined,
+      updatePrompt: status === "pending" && typeof updatePrompt === "string" ? updatePrompt.trim() : undefined
     };
   } catch {
     return undefined;
