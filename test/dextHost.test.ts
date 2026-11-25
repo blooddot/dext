@@ -1090,6 +1090,70 @@ describe("Dext kernel host", () => {
     if (!input) expect(result.steps?.some((step) => step.stream?.text.includes("没有可用的逐条审查结果"))).toBe(true);
   });
 
+  it("fixes an explicit batch of git.review IDs in one run", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    await installGitReviewApi(root);
+    await fixture(root, "target.ts", "const retries = 0;\nconst timeout = 0;\nconst capacity = 1;\n");
+    const statePath = join(root, ".dext", "state", "review", "workspace.json");
+    const readFindings = async () => (JSON.parse(await readFile(statePath, "utf8")) as {
+      findings: Array<{ id: string; status: string }>;
+    }).findings;
+    const prompts: unknown[] = [];
+    let selected: string[] = [];
+    let extraDecision = "";
+    const kernel = host(root, async (invocation) => {
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "terminal") {
+        const command = args.command;
+        if (typeof command !== "string") throw new Error("Expected a terminal command");
+        const stdout = command.includes("--show-toplevel") ? root : command.includes(" status ") ? " M target.ts\0"
+          : command.startsWith("git diff --raw") ? "" : "0123456789";
+        return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
+          exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
+      }
+      if (Array.isArray(args.rules) && args.rules.includes("git/fix.md")) {
+        prompts.push(args.input);
+        const decisions = selected.map((id) => `- \`${id}\` | \`fixed\` | 回归验证通过`).join("\n");
+        const summary = "| 位置 | 状态 |\n| --- | --- |\n| target.ts | 已修复 |\n\n已核对回归场景。";
+        return { ...response, result: { kind: "agent", text: `### 修复结果\n${decisions}\n\n${summary}${extraDecision}` } };
+      }
+      expectWorkspaceReviewRule(invocation);
+      const text = [
+        "### 新发现",
+        "- `target.ts:1` | `medium` | `bug` | 重试失效 | 第一次失败后没有重试",
+        "- `target.ts:2` | `low` | `style` | 超时配置 | 可以简化",
+        "- `target.ts:3` | `medium` | `bug` | 容量限制 | 无法容纳两个请求",
+        "### 本轮未审文件",
+        "（无）"
+      ].join("\n");
+      return { ...response, result: { kind: "agent", text } };
+    });
+    await kernel.runSource('import { review } from "dext/api/git/review";\nreview("workspace");');
+    const [first, second, third] = await readFindings();
+    selected = [first!.id, second!.id];
+    const fix = (ids: string[]) => kernel.runSource(`import { fix } from "dext/api/git/fix";\nfix(${JSON.stringify(ids)});`);
+    for (const [ids, message] of [
+      [[], "有效问题 ID 数组"],
+      [[first!.id, "invalid"], "有效问题 ID 数组"],
+      [[first!.id, "R-000000000000"], "当前没有可修复的 R-000000000000"]
+    ] as const) {
+      const result = await fix([...ids]);
+      expect(result.steps?.some((step) => step.stream?.text.includes(message))).toBe(true);
+    }
+    expect(prompts).toHaveLength(0);
+    extraDecision = `\n- \`${first!.id}\` | \`fixed\` | 重复结论`;
+    await fix([first!.id, second!.id]);
+    expect((await readFindings()).map(({ status }) => status)).toEqual(["open", "deferred", "open"]);
+    extraDecision = "";
+    await fix([first!.id, second!.id, first!.id]);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain(first!.id);
+    expect(prompts[1]).toContain(second!.id);
+    expect(prompts[1]).not.toContain(third!.id);
+    expect((await readFindings()).map(({ status }) => status)).toEqual(["pending", "pending", "open"]);
+  });
+
   it.each(["fix", "fix with independent edit", "manual fix with independent edit"])(
     "closes git.review findings by verifying a %s", { timeout: 30000 }, async (scenario) => {
     const independentEdit = scenario !== "fix";

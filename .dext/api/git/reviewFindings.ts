@@ -99,12 +99,22 @@ export function readNewFindings(report: string, scope: ReadonlySet<string>): Rev
   return findings;
 }
 
+function isFixSummary(lines: readonly string[]): boolean {
+  // The fix rule asks for a human-readable table and explanation after the
+  // decisions. Ignore that appendix without accepting extra decision rows.
+  const [header, delimiter, firstRow, ...rest] = lines;
+  return /^\|.*\|$/u.test(header ?? "") && /^\|(?:\s*:?-+:?\s*\|)+$/u.test(delimiter ?? "")
+    && /^\|.*\|$/u.test(firstRow ?? "") && !rest.some((line) => /^(?:[-*+]|\d+[.)])\s/u.test(line));
+}
+
 export function readDecisions(report: string, title: string, targets: readonly ReviewFinding[], done: "fixed" | "resolved") {
   const lines = section(report, title);
   if (!targets.length) return new Map<string, { done: boolean; evidence: string }>();
-  if (!lines || lines.length !== targets.length) return undefined;
+  if (!lines || lines.length < targets.length) return undefined;
+  const summary = lines.slice(targets.length);
+  if (summary.length && (done !== "fixed" || !isFixSummary(summary))) return undefined;
   const decisions = new Map<string, { done: boolean; evidence: string }>();
-  for (const line of lines) {
+  for (const line of lines.slice(0, targets.length)) {
     const match = /^- `(R-[0-9a-f]{12})` \| `(fixed|resolved|open)` \| (.+)$/u.exec(line);
     if (!match) return undefined;
     const [, id, status, evidence] = match;
