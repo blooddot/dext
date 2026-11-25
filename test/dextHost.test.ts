@@ -1542,9 +1542,16 @@ describe("Dext kernel host", () => {
         submissions++;
         return { ...response, result: { kind: "agent", text: "可以提交" } };
       }
+      if (Array.isArray(args.rules) && args.rules.includes("git/fix.md")) {
+        expect(args.input).toContain(deferredId);
+        await writeFile(join(root, "caller.ts"), "void 1;\n");
+        return { ...response, result: { kind: "agent", text: `### 修复结果\n- \`${deferredId}\` | \`fixed\` | 复现已消失` } };
+      }
       expectWorkspaceReviewRule(invocation);
       const coverage = skip ? "- `target.ts` — 尚未核对暂存内容" : "（无）";
-      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）\n### 本轮未审文件\n${coverage}` } };
+      const resolution = deferredId && typeof args.input === "string" && args.input.includes(deferredId)
+        ? `\n### 既有问题复核\n- \`${deferredId}\` | \`resolved\` | 回归检查通过` : "";
+      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）${resolution}\n### 本轮未审文件\n${coverage}` } };
     });
     const run = async (source: string) => (await kernel.runSource(source)).steps?.map((step) => step.stream?.text).join("\n");
     const review = (force = false) => run(`import { review } from "dext/api/git/review";\nawait review("workspace", ${force});`);
@@ -1583,7 +1590,14 @@ describe("Dext kernel host", () => {
     await expect(commit()).rejects.toThrow('git.review("workspace", true)');
     await review();
     expect(await readState()).toMatchObject({ head: git("rev-parse", "HEAD").trim(), findings: [{ id: deferredId, status: "deferred" }] });
-    expect(submissions).toBe(2);
+    git("-c", "user.name=Dext Test", "-c", "user.email=dext@example.invalid", "commit", "-qm", "Commit reviewed changes", "--no-gpg-sign");
+    await writeFile(source, "const value = 2;\n");
+    await run(`import { fix } from "dext/api/git/fix";\nawait fix(${JSON.stringify(deferredId)});`);
+    expect(await readState()).toMatchObject({ head: git("rev-parse", "HEAD").trim(), findings: [{ id: deferredId, status: "pending" }] });
+    await expect(commit()).rejects.toThrow(`待复核问题：${deferredId}`);
+    expect(await review()).toContain("本批审查已完成，可以运行 git.commit()");
+    expect(await commit()).toContain("可以提交");
+    expect(submissions).toBe(3);
   });
 
   it("stops git.fix retries until explicitly requested and accepts only anchored regressions from verification", { timeout: 30000 }, async () => {

@@ -34,16 +34,17 @@ async function fixFinding(input: string): Promise<AgentResult> {
   const managed = !request || Boolean(id);
   const previous = await reviewState.read();
   const before = await reviewState.snapshot(managed).catch(() => null);
-  const current = previous && before?.head === previous.head ? previous : null;
+  const current = previous && before && (before.head === previous.head || id) ? previous : null;
   let targets: ReviewFinding[] = [];
   if (managed) {
     if (!current?.findings || !before) {
       return stopFix('git.fix：当前没有可用的逐条审查结果。先运行 review("workspace")。');
     }
-    if (current.findings.some(({ status }) => status === "pending")) {
+    const findings = current.head === before.head ? current.findings : current.findings.filter(({ status }) => status === "deferred");
+    if (findings.some(({ status }) => status === "pending")) {
       return stopFix('git.fix：已有一批问题待复核，运行 review("workspace") 后再决定是否继续修。');
     }
-    const open = current.findings.filter(({ status }) => status === "open" || (id && status === "deferred"));
+    const open = findings.filter(({ status }) => status === "open" || (id && status === "deferred"));
     targets = open.filter((item) => id ? item.id === id : !item.explicitFix && !reviewState.wasTried(item, before));
     if (!targets.length) {
       if (id) return stopFix(`git.fix：当前没有可修复的 ${id}。`);

@@ -781,12 +781,20 @@ export const reviewState = {
     report: { decisions?: ReadonlyMap<string, { done: boolean; evidence: string }>; claimedPaths: readonly string[] }): Promise<void> {
     if (previous === null) return;
     const after = await snapshot(Boolean(targets.length));
-    if (!before || before.head !== previous.head || after.head !== previous.head) throw new Error("修复期间的 HEAD 无法确认");
+    if (!before || after.head !== before.head) throw new Error("修复期间的 HEAD 无法确认");
+    let baseline = previous;
+    if (before.head !== previous.head) {
+      if (!targets.length || targets.some(({ status }) => status !== "deferred")) throw new Error("修复期间的 HEAD 无法确认");
+      baseline = {
+        ...previous, head: before.head, files: {}, reviewed: [], carried: [], skipped: [], touched: [], followUp: [],
+        coverageKnown: true, findings: previous.findings?.filter(({ status }) => status === "deferred"), repairs: undefined, lastVerification: undefined
+      };
+    }
     const claimed = new Set([...targets.map(({ path }) => path), ...report.claimedPaths]);
     const fresh = changedBetween(before, after).filter((path) => !targets.length || claimed.has(path));
-    const touched = [...new Set([...previous.touched, ...fresh])].sort();
+    const touched = [...new Set([...baseline.touched, ...fresh])].sort();
     const attempted = new Set(targets.map(({ id }) => id));
-    const repairs = (previous.repairs ?? []).filter(({ path }) => !fresh.includes(path));
+    const repairs = (baseline.repairs ?? []).filter(({ path }) => !fresh.includes(path));
     let remaining = REPAIR_PROMPT_LIMIT - repairs.reduce((bytes, { hunks }) => bytes + Buffer.byteLength(hunks), 0);
     if (targets.length) for (const path of fresh) {
       if (remaining <= 0) break;
@@ -797,7 +805,7 @@ export const reviewState = {
         remaining -= size;
       }
     }
-    const findings = previous.findings?.map((item): ReviewFinding => {
+    const findings = baseline.findings?.map((item): ReviewFinding => {
       if (!attempted.has(item.id)) return item;
       const decision = report.decisions?.get(item.id);
       const evidence = decision?.evidence ?? "修复执行未返回有效的逐条验证记录。";
@@ -805,7 +813,7 @@ export const reviewState = {
       return { ...item, status: decision?.done ? "pending" : item.status, evidence,
         attempt: { paths, key: attemptKey(after, paths, evidence) } };
     });
-    await writeState({ ...previous, touched, fixRuns: previous.fixRuns + 1, findings, repairs }, previous);
+    await writeState({ ...baseline, touched, fixRuns: baseline.fixRuns + 1, findings, repairs }, previous);
     const pending = findings?.filter(({ status }) => status === "pending").length ?? 0;
     console.log(`git.fix：本轮改动 ${fresh.length} 个文件，${pending} 条待复核。${pending ? '下一步运行 review("workspace")。' : "本次修复已结束，请查看各条证据。"}`);
   }
