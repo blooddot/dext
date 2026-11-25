@@ -8,6 +8,8 @@ import { spec } from "dext/api/spec/index";
 
 每次调用启动一次独立的工作流，默认把结论写到 Output，同时返回 `{ kind: "skill", text }` 供脚本继续使用。想和 Agent 来回讨论，就在 Input 里直接选 skill。
 
+六个 API 各有一个同名 TypeScript 文件，`index.ts` 提供统一的 `spec` 入口。
+
 要写盘的那 5 个函数会在 `text` 末尾追加一段 git 观测结果：
 
 ```

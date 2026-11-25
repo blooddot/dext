@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -53,8 +53,7 @@ async function fixture(root: string, name: string, source: string): Promise<stri
 
 async function installSpecApi(root: string): Promise<void> {
   const api = join(root, ".dext", "api", "spec");
-  await mkdir(api, { recursive: true });
-  await writeFile(join(api, "index.ts"), await readFile(resolve(".dext/api/spec/index.ts")));
+  await cp(resolve(".dext/api/spec"), api, { recursive: true });
 }
 
 async function installGitReviewApi(root: string): Promise<void> {
