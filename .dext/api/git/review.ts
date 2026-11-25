@@ -5,7 +5,7 @@ import { lstat, mkdir, readFile, readlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { agent, skill, terminal, type SkillResult } from "dext";
 import {
-  readDecisions, readLegacyFindings, readNewFindings, readSavedFindings, REVIEW_DECISIONS,
+  readDecisions, readDeferredFindings, readLegacyFindings, readNewFindings, readSavedFindings, REVIEW_DECISIONS,
   reviewFindingInstructions, type ReviewFinding
 } from "./reviewFindings.ts";
 import { cleanFile, hasRepairAnchor, readRepairDeltas, repairHunks, REPAIR_FILE_LIMIT, type RepairDelta } from "./reviewRepair.ts";
@@ -23,7 +23,7 @@ const STATE_PATH = ".dext/state/review/workspace.json";
 const STATE_DIR = ".dext/state/review";
 /** 基线自己不是要审的代码：它每轮都变，混进改动清单会把自己拖进复审范围。 */
 const STATE_PREFIX = ".dext/state/";
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
 /** 变动的文件占已审文件的比例超过这个值就退回全量：增量省下的头部开销抵不过逐文件复审。 */
 const FULL_RATIO = 0.4;
 /** 反向依赖超过这个数量时退回全量：跨文件核对面太宽，一次全量比逐个补更省。 */
@@ -79,6 +79,8 @@ export interface ReviewState {
   carried: string[];
   /** 上一轮报告里明确没审的文件，下一轮无条件复审。 */
   skipped: string[];
+  /** 本批报告的回归缺少修复差异锚点，仍需核对的文件。 */
+  followUp: string[] | null;
   /** 报告是否带了「本轮未审文件」小节：缺了就无法把「没审」和「审过」分开。 */
   coverageKnown: boolean;
   /** 上一轮 fix 改过的文件，与哈希比对互为印证。 */
@@ -263,12 +265,29 @@ function readStateValue(text: string): ReviewState | null {
   const mode = raw.mode;
   const round = raw.round;
   const valid = files !== null
-    && raw.version === STATE_VERSION
+    && (raw.version === 1 || raw.version === STATE_VERSION)
     && typeof round === "number"
     && (mode === "full" || mode === "incremental")
     && typeof raw.report === "string";
   if (valid === false) return null;
   const verification = asObject(raw.lastVerification);
+  const lastVerification = Array.isArray(verification.ids) && Array.isArray(verification.paths)
+    ? { ids: asList(verification.ids), paths: asList(verification.paths) } : undefined;
+  const report = raw.report as string;
+  const findings = raw.findings === undefined ? readLegacyFindings(report) : readSavedFindings(raw.findings);
+  let followUp = Array.isArray(raw.followUp) ? asList(raw.followUp) : null;
+  if (raw.version === 1) {
+    // Version 1 mixed independent observations and possible regressions in the same path list.
+    // Rebuild the latter from the original verification report and preserve structured observations by ID.
+    for (const item of readDeferredFindings(report)) {
+      if (findings && !findings.some(({ id }) => id === item.id)) findings.push(item);
+    }
+    followUp = [];
+    if (lastVerification) {
+      const reported = readNewFindings(report, new Set(lastVerification.paths));
+      followUp = reported ? unconfirmedRegressionPaths(reported, new Set(lastVerification.ids)) : null;
+    }
+  }
   return {
     version: STATE_VERSION,
     round: round as number,
@@ -279,24 +298,61 @@ function readStateValue(text: string): ReviewState | null {
     reviewed: asList(raw.reviewed),
     carried: asList(raw.carried),
     skipped: asList(raw.skipped),
-    coverageKnown: raw.coverageKnown !== false,
+    followUp,
+    coverageKnown: typeof raw.coverageKnown === "boolean" ? raw.coverageKnown : readSkipped(raw.report as string).known,
     touched: asList(raw.touched),
     fixRuns: typeof raw.fixRuns === "number" ? raw.fixRuns : 0,
-    report: asText(raw.report),
-    findings: raw.findings === undefined ? readLegacyFindings(raw.report as string) : readSavedFindings(raw.findings),
+    report,
+    findings,
     repairs: readRepairDeltas(raw.repairs),
-    lastVerification: Array.isArray(verification.ids) && Array.isArray(verification.paths)
-      ? { ids: asList(verification.ids), paths: asList(verification.paths) } : undefined
+    lastVerification
   };
 }
 
-async function readState(): Promise<ReviewState | null> {
+function unconfirmedRegressionPaths(findings: readonly ReviewFinding[], confirmed: ReadonlySet<string>): string[] {
+  return findings.filter(({ id, status }) => status === "open" && !confirmed.has(id)).map(({ path }) => path);
+}
+
+async function readState(requireValid = false): Promise<ReviewState | null> {
   try {
-    return readStateValue(await readFile(STATE_PATH, "utf8"));
+    const state = readStateValue(await readFile(STATE_PATH, "utf8"));
+    if (requireValid && !state) throw new Error('审查记录无法读取。请运行 git.review("workspace", true) 重建基线。');
+    return state;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+}
+
+function commitCoverage(state: ReviewState, current: Snapshot) {
+  if (state.head !== current.head || !state.coverageKnown || state.findings === undefined || state.followUp === null) {
+    return null;
+  }
+  const changed = Object.keys(current.files).length ? changedBetween(state, current) : [];
+  const unreviewed = [...new Set([...changed, ...state.skipped, ...state.followUp, ...state.touched])].sort();
+  const pending = state.findings.filter(({ status }) => status === "pending").map(({ id }) => id);
+  const open = state.findings.filter(({ status }) => status === "open").map(({ id }) => id);
+  return { unreviewed, pending, open, ready: !unreviewed.length && !pending.length && !open.length };
+}
+
+async function requireCommitCoverage(): Promise<void> {
+  const state = await readState(true);
+  if (!state) return;
+  const current = await snapshot();
+  if (state.head !== current.head && !Object.keys(current.files).length) return;
+  const coverage = commitCoverage(state, current);
+  if (!coverage) throw new Error('当前审查基线无法确认。请运行 git.review("workspace", true) 后再提交。');
+  const { unreviewed, pending, open, ready } = coverage;
+  if (ready) return;
+  throw new Error([
+    "当前工作区还有审查事项待完成。",
+    unreviewed.length ? `待审文件：${unreviewed.join("、")}。` : "",
+    pending.length ? `待复核问题：${pending.join("、")}。` : "",
+    open.length ? `待处理问题：${open.join("、")}。` : "",
+    open.length && !unreviewed.length && !pending.length
+      ? "请先处理上述问题，再运行 git.review(\"workspace\")。"
+      : '请运行 git.review("workspace") 补审或复核当前改动。'
+  ].filter(Boolean).join("\n"));
 }
 
 function readLockedState(): ReviewState | null {
@@ -447,11 +503,10 @@ async function planWorkspace(current: Snapshot, previous: ReviewState | null, fu
     return { mode: "full", reason, review: paths, deps: [...new Set([...restored, ...callers])].filter((path) => !current.files[path]), carried: [] };
   };
   const verification = baseline?.findings?.filter(({ path, status }) => status === "pending" || (status === "open" && changed.has(path))) ?? [];
+  const followUp = baseline?.followUp ?? [];
+  const pendingPaths = [...new Set([...(baseline?.skipped ?? []), ...followUp, ...(baseline?.touched ?? [])])];
 
-  if (!full && baseline?.lastVerification && !verification.length) {
-    return { mode: "reuse", reason: "上一批修复复核已结束", review: [], deps: [], carried: paths };
-  }
-  if (paths.length === 0 && verification.length === 0) {
+  if (paths.length === 0 && verification.length === 0 && pendingPaths.length === 0 && baseline?.followUp !== null) {
     return { mode: "reuse", reason: "工作区相对 HEAD 没有改动", review: [], deps: [], carried: [] };
   }
   if (full) return whole("调用方传入 full = true");
@@ -459,6 +514,7 @@ async function planWorkspace(current: Snapshot, previous: ReviewState | null, fu
   if (!baseline) {
     return whole(`HEAD 已从 ${short(previous.head)} 变为 ${short(current.head)}，上一轮的逐文件哈希不再可比`);
   }
+  if (baseline.followUp === null) return whole("上一轮复核的回归记录无法确认");
   if (verification.length) {
     const related = new Set([...verification.map(({ path }) => path), ...previous.touched]);
     const relatedRestored = restored.filter((path) => related.has(path));
@@ -480,12 +536,13 @@ async function planWorkspace(current: Snapshot, previous: ReviewState | null, fu
   }
   if (previous.findings === undefined) return whole("上一轮报告没有可逐条复核的问题记录");
 
-  const forced = [...previous.skipped, ...previous.touched].filter((path) => current.files[path] !== undefined);
+  const forced = pendingPaths.filter((path) => current.files[path] !== undefined);
   const pending = [...paths.filter((path) => changed.has(path)), ...restored];
   const targets = [...new Set([...pending, ...forced])].sort();
-  const extra = previous.skipped.filter((path) => current.files[path] === undefined);
+  const extra = pendingPaths.filter((path) => current.files[path] === undefined);
   if (targets.length === 0 && extra.length === 0) {
-    return { mode: "reuse", reason: `相对第 ${previous.round} 轮没有文件内容变化`, review: [], deps: [], carried: paths };
+    const reason = previous.lastVerification ? "上一批修复复核已结束" : `相对第 ${previous.round} 轮没有文件内容变化`;
+    return { mode: "reuse", reason, review: [], deps: [], carried: paths };
   }
 
   const known = Math.max(paths.length, Object.keys(previous.files).length);
@@ -538,7 +595,7 @@ function composeWorkspaceInput(current: Snapshot, plan: WorkspacePlan, round: nu
     "审查范围以宿主的文件清单为准。候选调用点不计入覆盖，排除 `.dext/state/`。",
     `## 审查文件（${plan.review.length}）\n${bullets(plan.review, current)}`,
     `## ${verification ? "工作区没有改动的复核文件" : "调用点及定点复核文件"}（${plan.deps.length}）\n${bullets(plan.deps, current)}`,
-    verification ? "本轮目标是验收列出的 ID。哪怕当前没有 Git diff，也按文件现状复核。候选调用点供按需查证，无需逐一阅读，也不计入覆盖。" : "",
+    verification ? "逐条验收列出的 ID，并核对复核清单中各文件的当前差异。范围内未核对的文件列入「本轮未审文件」。与本批改动及修复无关的具体缺陷写入「另行审查」。哪怕当前没有 Git diff，也按现状复核。候选调用点供按需查证，无需逐一阅读，也不计入覆盖。" : "",
     verification?.callers.length ? `## 候选调用点（按需）\n${verification.callers.map((path) => `- ${path}`).join("\n")}` : "",
     verification ? `## 实际修复差异\n${repairDiff || "本轮缺少可对照的前后差异，仅复核既有问题。"}` : "",
     reviewFindingInstructions(targets, Boolean(verification)),
@@ -566,11 +623,14 @@ function reviewStatus(state: ReviewState, verification = false): string {
   const manual = open.filter(({ status, attempt, explicitFix }) => status === "open" && (attempt || explicitFix)).length;
   const verdict = state.findings === undefined || !state.coverageKnown || state.skipped.length
     ? "覆盖尚未确认" : open.length ? "还有待处理问题"
+      : state.followUp === null || state.followUp.length ? "还有文件待补审"
       : verification ? "修复复核通过，当前范围内没有待处理问题" : "通过，当前范围内没有待处理问题";
   return [
     `### 审查状态（第 ${state.round} 轮）`,
     `${verdict}。待修 ${open.length - pending}，待复核 ${pending}，已关闭 ${resolved.length}，延期建议 ${deferred.length}，未审文件 ${state.skipped.length}。`,
     manual ? `${manual} 条需要明确选择后再修。` : "",
+    state.followUp === null ? "上轮复核的回归记录无法确认，请重新全量审查。"
+      : state.followUp.length ? `待补审文件：${state.followUp.join("、")}。` : "",
     ...[...open, ...deferred, ...resolved].map((item) => `- \`${item.id}\` [${item.status}] \`${item.location}\` ${item.title}${item.status === "open" && item.evidence ? ` — ${item.evidence}` : ""}`)
   ].filter(Boolean).join("\n");
 }
@@ -583,7 +643,8 @@ async function saveRound(
   const scope = new Set([...plan.review, ...plan.deps]);
   const skipped = plan.verification ? coverage.paths.filter((path) => scope.has(path)) : coverage.paths;
   const newFindings = readNewFindings(report, scope);
-  const added = plan.verification ? (newFindings ?? []).filter((item) => {
+  if (!newFindings) return "git.review：报告缺少有效的新发现记录。本轮未更新审查基线。";
+  const added = plan.verification ? newFindings.filter((item) => {
     const line = Number(/:(\d+)/u.exec(item.location.slice(item.path.length))?.[1]);
     return plan.verification?.repairs.some((repair) => repair.path === item.path && hasRepairAnchor(repair, line))
       && targets.some(({ id }) => item.detail.includes(id));
@@ -607,7 +668,11 @@ async function saveRound(
         attempt: !decision.done && (item.attempt || plan.verification) ? { paths, key: attemptKey(after, paths, decision.evidence) } : undefined });
     }
   }
-  for (const item of added) findings.set(item.id, item);
+  for (const item of added) {
+    if (plan.verification || findings.get(item.id)?.status !== "deferred") findings.set(item.id, item);
+  }
+  const deferred = readDeferredFindings(report).filter(({ id }) => !findings.has(id));
+  for (const item of deferred) findings.set(item.id, item);
   const outside = new Set(plan.verification?.outside);
   if (plan.verification) for (const path of drift) outside.add(path);
   // Keep the earlier baseline for unrelated edits, including mid-review edits.
@@ -618,6 +683,11 @@ async function saveRound(
     else delete files[path];
   }
   const notRechecked = plan.verification ? previous?.skipped.filter((path) => !scope.has(path)) ?? [] : [];
+  const priorFollowUp = previous?.head === current.head ? previous.followUp ?? [] : [];
+  const followUp = [...new Set([
+    ...priorFollowUp.filter((path) => plan.verification || !scope.has(path) || skipped.includes(path)),
+    ...unconfirmedRegressionPaths(newFindings, new Set(added.map(({ id }) => id)))
+  ])].sort();
   const state: ReviewState = {
     version: STATE_VERSION,
     round,
@@ -628,13 +698,14 @@ async function saveRound(
     reviewed: [...scope].filter((path) => !skipped.includes(path)),
     carried: plan.carried.filter((path) => !outside.has(path)),
     skipped: [...notRechecked, ...skipped],
+    followUp,
     coverageKnown: plan.verification ? previous?.coverageKnown ?? false : true,
     touched: [],
     fixRuns: 0,
     report,
     findings: [...findings.values()],
     repairs: plan.verification && skipped.length ? previous?.repairs : undefined,
-    lastVerification: plan.verification ? { ids: [...plan.verification.ids, ...added.map(({ id }) => id)], paths: [...scope] } : undefined
+    lastVerification: plan.verification ? { ids: [...plan.verification.ids, ...[...added, ...deferred].map(({ id }) => id)], paths: [...scope] } : undefined
   };
   try {
     await writeState(state, previous);
@@ -642,11 +713,11 @@ async function saveRound(
     const reason = error instanceof Error ? error.message : String(error);
     return `git.review：基线没有写进 ${STATE_PATH}（${reason}），本轮未确认审查状态。`;
   }
-  if (!plan.verification) return reviewStatus(state);
-  const summary = savedVerificationStatus(state);
+  const summary = plan.verification ? savedVerificationStatus(state) : reviewStatus(state);
   return [summary,
     outside.size ? `另有 ${outside.size} 个独立文件变更留待单独审查。` : "",
-    !newFindings || newFindings.length !== added.length ? "报告中缺少修复差异锚点的新观察留待单独审查。" : ""
+    plan.verification && followUp.length ? `待补审文件：${followUp.join("、")}。` : "",
+    commitCoverage(state, after)?.ready ? "本批审查已完成，可以运行 git.commit()。" : ""
   ].filter(Boolean).join("\n\n");
 }
 
@@ -654,7 +725,7 @@ function savedVerificationStatus(state: ReviewState): string {
   const verification = state.lastVerification!;
   const scope = new Set(verification.paths);
   const ids = new Set(verification.ids);
-  return reviewStatus({ ...state, coverageKnown: true, skipped: state.skipped.filter((path) => scope.has(path)),
+  return reviewStatus({ ...state, coverageKnown: true, skipped: state.skipped.filter((path) => scope.has(path)), followUp: [],
     findings: state.findings?.filter(({ id }) => ids.has(id)) }, true);
 }
 
@@ -671,17 +742,19 @@ async function reviewWorkspace(full: boolean): Promise<SkillResult> {
       ? changed.some((path) => last.paths.includes(path)) ? "上次复核范围内有后续改动。" : savedVerificationStatus(previous)
       : plan.carried.length && previous ? reviewStatus(previous) : "";
     const text = [`git.review：${plan.reason}，本轮跳过模型调用。`, summary,
-      changed.length ? `有 ${changed.length} 个文件仍待另行审查。要重新审查，运行 review("workspace", true)。` : ""
+      changed.length ? `有 ${changed.length} 个文件仍待另行审查。要重新审查，运行 review("workspace", true)。` : "",
+      previous && plan.carried.length && commitCoverage(previous, current)?.ready ? "本批审查已完成，可以运行 git.commit()。" : ""
     ].filter(Boolean).join("\n\n");
     console.log(text);
     return { kind: "skill", text };
   }
 
-  const prior = previous?.head === current.head ? previous.findings ?? [] : [];
+  const prior = previous?.head === current.head ? previous.findings ?? [] : previous?.findings?.filter(({ status }) => status === "deferred") ?? [];
   if (plan.mode === "full") {
     const followUp = prior.filter(({ status }) => status === "open" || status === "pending").map(({ path }) => path);
     const skipped = previous?.head === current.head ? previous.skipped : [];
-    plan.deps = [...new Set([...plan.deps, ...skipped, ...followUp])].filter((path) => !current.files[path]);
+    const observations = previous?.head === current.head ? previous.followUp ?? [] : [];
+    plan.deps = [...new Set([...plan.deps, ...skipped, ...followUp, ...observations])].filter((path) => !current.files[path]);
   }
   const scope = new Set([...plan.review, ...plan.deps]);
   const targets = prior.filter(({ id, path, status }) => plan.verification
@@ -700,6 +773,7 @@ async function reviewWorkspace(full: boolean): Promise<SkillResult> {
 export const reviewState = {
   read: readState,
   snapshot,
+  requireCommitCoverage,
   wasTried(item: ReviewFinding, current: Snapshot): boolean {
     return item.attempt?.key === attemptKey(current, item.attempt?.paths ?? [], item.evidence);
   },

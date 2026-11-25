@@ -70,7 +70,7 @@ function syncChangeStatus(root: string, changeName: string, capabilities: string
 async function installGitReviewApi(root: string): Promise<void> {
   const api = join(root, ".dext", "api", "git");
   await mkdir(api, { recursive: true });
-  for (const name of ["fix.ts", "review.ts", "reviewDependencies.ts", "reviewFindings.ts", "reviewRepair.ts"]) {
+  for (const name of ["commit.ts", "fix.ts", "review.ts", "reviewDependencies.ts", "reviewFindings.ts", "reviewRepair.ts"]) {
     await writeFile(join(api, name), await readFile(resolve(".dext/api/git", name)));
   }
 }
@@ -1122,6 +1122,9 @@ describe("Dext kernel host", () => {
         return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
           exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
       }
+      if (Array.isArray(args.rules) && args.rules.includes("git/commit.md")) {
+        return { ...response, result: { kind: "agent", text: "可以提交" } };
+      }
       if (Array.isArray(args.rules) && args.rules.includes("git/fix.md")) {
         fixes += 1;
         expect(args.input).toContain(findingId);
@@ -1140,6 +1143,11 @@ describe("Dext kernel host", () => {
           + "- `unrelated.ts:1` | `low` | `style` | 可选清理 | 可简化局部表达式" + coverage;
         return { ...response, result: { kind: "agent", text } };
       }
+      if (reviews === 4) {
+        expect(args.input).toContain("- unrelated.ts（?? + D）");
+        expect(args.input).not.toContain("修复复核");
+        return { ...response, result: { kind: "agent", text: `### 新发现\n（无）${coverage}` } };
+      }
       expect(args.input).toContain(findingId);
       expect(args.input).toContain("caller.ts");
       expect(args.input).not.toContain("unrelated.ts");
@@ -1150,21 +1158,25 @@ describe("Dext kernel host", () => {
       if (!manual) expect(args.input).toContain("+export const retries = 1;");
       if (independentEdit && reviews === 3) await writeFile(unrelated, "export const unrelated = 3;\n");
       const proof = reviews === 2 ? "" : `\n\n### 既有问题复核\n- \`${findingId}\` | \`resolved\` | 回归检查通过`;
-      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）${proof}${coverage}` } };
+      const observation = independentEdit ? "" : "\n\n### 另行审查\n- `other.ts:1` | `medium` | `bug` | 其他入口失败 | 打开旧页面时会报错";
+      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）${proof}${observation}${coverage}` } };
     });
     const review = () => kernel.runSource('import { review } from "dext/api/git/review";\nconsole.log((await review("workspace")).kind);');
     const fix = () => kernel.runSource('import { fix } from "dext/api/git/fix";\nfix("");');
+    const commit = () => kernel.runSource('import { commit } from "dext/api/git/commit";\nconsole.log((await commit()).text);');
     const discovery = await review();
     const stdout = discovery.steps?.filter(({ stream }) => stream?.channel === "stdout").map(({ stream }) => stream?.text).join("\n");
     expect(stdout).toMatch(/^skill\r?$/m);
     const first = await readState();
     expect(first.findings.map(({ status }) => status)).toEqual(["open", "deferred"]);
     findingId = first.findings[0]!.id;
+    if (!independentEdit) await expect(commit()).rejects.toThrow(`待处理问题：${findingId}`);
     if (manual) {
       await writeFile(target, "export const retries = 1;\n");
     } else {
       await fix();
       expect((await readState()).findings[0]).toMatchObject({ id: findingId, status: "pending" });
+      if (!independentEdit) await expect(commit()).rejects.toThrow(`待复核问题：${findingId}`);
       await fix();
       expect(fixes).toBe(1);
     }
@@ -1174,15 +1186,19 @@ describe("Dext kernel host", () => {
     expect(await readState()).toMatchObject({ round: 1, findings: [{ id: findingId, status: manual ? "open" : "pending" }, { status: "deferred" }] });
     const verification = await review();
     expect(await readState()).toMatchObject({ round: 2, reviewed: ["target.ts"], carried: independentEdit ? ["caller.ts"] : ["caller.ts", "unrelated.ts"],
-      findings: [{ id: findingId, status: "resolved" }, { status: "deferred" }] });
+      findings: [{ id: findingId, status: "resolved" }, { status: "deferred" }, ...(!independentEdit ? [{ status: "deferred" }] : [])] });
     expect(verification.steps?.some((step) => step.stream?.text.includes("修复复核通过"))).toBe(true);
     if (independentEdit) {
       expect((await readState()).files["unrelated.ts"]).toEqual(first.files["unrelated.ts"]);
       expect(verification.steps?.some((step) => step.stream?.text.includes("1 个独立文件变更留待单独审查"))).toBe(true);
+      await expect(commit()).rejects.toThrow("待审文件：unrelated.ts");
+    } else {
+      expect(verification.steps?.some((step) => step.stream?.text.includes("本批审查已完成，可以运行 git.commit()"))).toBe(true);
     }
-    const reuse = await review();
-    expect(reviews).toBe(3);
-    expect(reuse.steps?.some((step) => step.stream?.text.includes("通过，当前范围内没有待处理问题"))).toBe(true);
+    const next = await review();
+    expect(reviews).toBe(independentEdit ? 4 : 3);
+    expect(next.steps?.some((step) => step.stream?.text.includes("通过，当前范围内没有待处理问题"))).toBe(true);
+    expect((await commit()).steps?.some((step) => step.stream?.text.includes("可以提交"))).toBe(true);
   });
 
   it("includes staged and untracked callers of exports across snapshots in incremental git.review", async () => {
@@ -1227,6 +1243,9 @@ describe("Dext kernel host", () => {
         return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
           exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
       }
+      if (Array.isArray(args.rules) && args.rules.includes("git/commit.md")) {
+        return { ...response, result: { kind: "agent", text: "可以提交" } };
+      }
       expectWorkspaceReviewRule(invocation);
       const input = args.input;
       const skipped = ++reviews === 2 && typeof input === "string"
@@ -1246,6 +1265,8 @@ describe("Dext kernel host", () => {
     const state = JSON.parse(await readFile(statePath, "utf8"));
     expect(state).toMatchObject({ mode: "incremental", skipped: [stagedCaller, untrackedCaller], carried: ["other-a.ts", "other-b.ts"],
       reviewed: ["target.ts", ...callers.sort().map((name) => `${name}.ts`).filter((path) => path !== stagedCaller)] });
+    await expect(kernel.runSource('import { commit } from "dext/api/git/commit";\nawait commit();'))
+      .rejects.toThrow(`待审文件：${stagedCaller}、${untrackedCaller}`);
   });
 
   it.each([
@@ -1309,6 +1330,9 @@ describe("Dext kernel host", () => {
         return { ...response, result: { kind: "terminal", status: status === 0 ? "succeeded" : "failed", command, cwd: root,
           exit_code: status, stdout, stderr, duration_ms: 1 } };
       }
+      if (Array.isArray(args.rules) && args.rules.includes("git/commit.md")) {
+        return { ...response, result: { kind: "agent", text: "可以提交" } };
+      }
       expectWorkspaceReviewRule(invocation);
       prompts.push(args.input);
       const coverage = saturated && prompts.length === 2 && typeof args.input === "string" && args.input.includes("- module-caller.ts（")
@@ -1344,6 +1368,8 @@ describe("Dext kernel host", () => {
       expect(state.reviewed).toEqual([targetPath, "caller.ts", "path-alias-caller.ts"]);
       expect(prompts[1]).not.toContain("unrelated-caller.ts");
       expect(state.skipped).toEqual(["module-caller.ts"]);
+      await expect(kernel.runSource('import { commit } from "dext/api/git/commit";\nawait commit();'))
+        .rejects.toThrow("待审文件：module-caller.ts");
     } else if (aliases) {
       expect(state.reviewed).toEqual(["target.ts", "caller.ts", "type-caller.ts"]);
     } else {
@@ -1395,6 +1421,7 @@ describe("Dext kernel host", () => {
     if (mode === "incremental") await fixture(root, "unrelated.ts", "void 0;\n");
 
     const prompts: unknown[] = [];
+    let commits = 0;
     const kernel = host(root, async (invocation) => {
       const response = askResponse(invocation);
       const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
@@ -1407,6 +1434,10 @@ describe("Dext kernel host", () => {
         return { ...response, result: { kind: "terminal", status: status === 0 ? "succeeded" : "failed", command, cwd: root,
           exit_code: status, stdout, stderr, duration_ms: 1 } };
       }
+      if (Array.isArray(args.rules) && args.rules.includes("git/commit.md")) {
+        commits++;
+        return { ...response, result: { kind: "agent", text: "可以提交" } };
+      }
       expectWorkspaceReviewRule(invocation);
       prompts.push(args.input);
       const skipped = prompts.length === 2 && typeof args.input === "string" && args.input.includes("- caller.ts（")
@@ -1414,23 +1445,145 @@ describe("Dext kernel host", () => {
       return { ...response, result: { kind: "agent", text: `### 新发现\n（无）\n### 本轮未审文件\n${skipped}` } };
     });
     const review = () => kernel.runSource('import { review } from "dext/api/git/review";\nawait review("workspace");');
+    const commit = () => kernel.runSource('import { commit } from "dext/api/git/commit";\nawait commit();');
     await review();
+    await expect(commit()).resolves.toBeDefined();
 
     git("restore", "--", "contract.ts");
     expect(git("status", "--porcelain", "--", "contract.ts")).toBe("");
+    await expect(commit()).rejects.toThrow("待审文件：contract.ts");
+    expect(commits).toBe(1);
     await review();
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain("- contract.ts（不在当前改动中，按现状核对）");
     expect(prompts[1]).not.toContain("same-name-");
+    await expect(commit()).rejects.toThrow("待审文件：caller.ts");
     expect(prompts[1]).toContain("- caller.ts（");
     const state = JSON.parse(await readFile(join(root, ".dext", "state", "review", "workspace.json"), "utf8"));
     expect(state).toMatchObject({ mode, reviewed: expect.arrayContaining(["contract.ts"]), skipped: ["caller.ts"] });
     await writeFile(caller, call("2"));
     if (stagedCaller) git("add", "--", "caller.ts");
     await review();
+    await expect(commit()).resolves.toBeDefined();
+    expect(commits).toBe(2);
     const covered = prompts.length;
     await review();
     expect(prompts).toHaveLength(covered);
+  });
+
+  it("requires a new review when the Git worktree mode changes without a change in bytes or porcelain status", async () => {
+    const root = await workspace();
+    await installGitReviewApi(root);
+    await fixture(root, "target.ts", "void 0;\n");
+    let executable = false;
+    const kernel = host(root, async (invocation) => {
+      const response = askResponse(invocation);
+      if (invocation.method === "terminal") {
+        const command = invocation.arguments.find(({ name }) => name === "command")?.value;
+        if (typeof command !== "string") throw new Error("Expected a terminal command");
+        let stdout = "0123456789";
+        if (command.includes("--show-toplevel")) stdout = root;
+        if (command.includes(" status ")) stdout = " M target.ts\0";
+        if (command.startsWith("git diff --raw")) {
+          stdout = `:100644 ${executable ? "100755" : "100644"} ${"a".repeat(40)} ${"0".repeat(40)} M\0target.ts\0`;
+        }
+        return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
+          exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
+      }
+      const rules = invocation.arguments.find(({ name }) => name === "rules")?.value;
+      if (Array.isArray(rules) && rules.includes("git/commit.md")) {
+        return { ...response, result: { kind: "agent", text: "可以提交" } };
+      }
+      expectWorkspaceReviewRule(invocation);
+      return { ...response, result: { kind: "agent", text: "### 新发现\n（无）\n### 本轮未审文件\n（无）" } };
+    });
+    const review = () => kernel.runSource('import { review } from "dext/api/git/review";\nawait review("workspace");');
+    const commit = () => kernel.runSource('import { commit } from "dext/api/git/commit";\nconsole.log((await commit()).text);');
+    await review();
+    await expect(commit()).resolves.toBeDefined();
+    executable = true;
+    await expect(commit()).rejects.toThrow("待审文件：target.ts");
+    await review();
+    await expect(commit()).resolves.toBeDefined();
+  });
+
+  it("checks actual staged versions and legacy coverage before git.commit", { timeout: 30000 }, async () => {
+    const root = await workspace();
+    await installGitReviewApi(root);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("config", "core.autocrlf", "false");
+    await mkdir(join(root, ".git", "info"), { recursive: true });
+    await writeFile(join(root, ".git", "info", "exclude"), "/.dext/\n");
+    const source = await fixture(root, "target.ts", "const value = 0;\n");
+    await fixture(root, "caller.ts", "void 0;\n");
+    git("add", "--", "target.ts", "caller.ts");
+    git("-c", "user.name=Dext Test", "-c", "user.email=dext@example.invalid", "commit", "-qm", "Initial", "--no-gpg-sign");
+    const stage = async (value: number) => {
+      await writeFile(source, `const value = ${value};\n`);
+      git("add", "--", "target.ts");
+      await writeFile(source, "const value = 0;\n");
+    };
+    await stage(1);
+    let skip = true;
+    let submissions = 0;
+    let deferredId = "";
+    const kernel = host(root, async (invocation) => {
+      const response = askResponse(invocation);
+      const args = Object.fromEntries(invocation.arguments.map(({ name, value }) => [name, value]));
+      if (invocation.method === "terminal") {
+        const command = args.command;
+        if (typeof command !== "string") throw new Error("Expected a terminal command");
+        const stdout = git(...command.replace(/^git /u, "").split(" "));
+        return { ...response, result: { kind: "terminal", status: "succeeded", command, cwd: root,
+          exit_code: 0, stdout, stderr: "", duration_ms: 1 } };
+      }
+      if (Array.isArray(args.rules) && args.rules.includes("git/commit.md")) {
+        submissions++;
+        return { ...response, result: { kind: "agent", text: "可以提交" } };
+      }
+      expectWorkspaceReviewRule(invocation);
+      const coverage = skip ? "- `target.ts` — 尚未核对暂存内容" : "（无）";
+      return { ...response, result: { kind: "agent", text: `### 新发现\n（无）\n### 本轮未审文件\n${coverage}` } };
+    });
+    const run = async (source: string) => (await kernel.runSource(source)).steps?.map((step) => step.stream?.text).join("\n");
+    const review = (force = false) => run(`import { review } from "dext/api/git/review";\nawait review("workspace", ${force});`);
+    const commit = () => run('import { commit } from "dext/api/git/commit";\nconsole.log((await commit()).text);');
+    await review(true);
+    await expect(commit()).rejects.toThrow("待审文件：target.ts");
+    skip = false;
+    await review();
+    expect(await commit()).toContain("可以提交");
+
+    const status = git("status", "--porcelain", "--", "target.ts");
+    await stage(2);
+    expect(git("status", "--porcelain", "--", "target.ts")).toBe(status);
+    await expect(commit()).rejects.toThrow("待审文件：target.ts");
+    await review();
+
+    const path = join(root, ".dext", "state", "review", "workspace.json");
+    const readState = async () => JSON.parse(await readFile(path, "utf8")) as {
+      version: number; mode: string; report: string; followUp: string[]; files: Record<string, { index?: string }>;
+      head: string; findings: Array<{ id: string; path: string; title: string; status: string }>;
+    };
+    const state = await readState();
+    state.version = 1;
+    state.followUp = ["caller.ts"];
+    delete state.files["target.ts"]!.index;
+    state.mode = "incremental";
+    state.report += "\n### 另行审查\n- `caller.ts:1` | `medium` | `bug` | 旧调用失败 | 打开菜单时无法加载数据";
+    await writeFile(path, JSON.stringify(state));
+    await expect(commit()).rejects.toThrow("待审文件：target.ts");
+    expect(await review()).toContain("本批审查已完成，可以运行 git.commit()");
+    const migrated = await readState();
+    expect(migrated).toMatchObject({ version: 2, followUp: [], findings: [{ path: "caller.ts", title: "旧调用失败", status: "deferred" }] });
+    deferredId = migrated.findings[0]!.id;
+    expect(await commit()).toContain("可以提交");
+    git("-c", "user.name=Dext Test", "-c", "user.email=dext@example.invalid", "commit", "-qm", "Move HEAD", "--no-gpg-sign", "--only", "--allow-empty");
+    await expect(commit()).rejects.toThrow('git.review("workspace", true)');
+    await review();
+    expect(await readState()).toMatchObject({ head: git("rev-parse", "HEAD").trim(), findings: [{ id: deferredId, status: "deferred" }] });
+    expect(submissions).toBe(2);
   });
 
   it("stops git.fix retries until explicitly requested and accepts only anchored regressions from verification", { timeout: 30000 }, async () => {
@@ -1440,8 +1593,10 @@ describe("Dext kernel host", () => {
     const statePath = join(root, ".dext", "state", "review", "workspace.json");
     const readState = async () => JSON.parse(await readFile(statePath, "utf8")) as {
       findings: Array<{ id: string; status: string; title: string; explicitFix?: boolean }>;
+      followUp: string[];
     };
     let issue = "";
+    let regression = "";
     let fixes = 0;
     let reviews = 0;
     const kernel = host(root, async (invocation) => {
@@ -1466,9 +1621,14 @@ describe("Dext kernel host", () => {
       expectWorkspaceReviewRule(invocation);
       const text = ++reviews === 1
         ? "### 新发现\n- `target.ts:1` | `medium` | `bug` | 重试失效 | 未重试请求"
-        : `### 新发现\n- \`target.ts:1\` | \`medium\` | \`bug\` | 重复提交 | ${issue} 将 retries 改为 1 后重复提交\n`
+        : reviews === 3 ? `### 新发现\n（无）\n### 既有问题复核\n- \`${regression}\` | \`open\` | 仍会重复提交`
+          : `### 新发现\n- \`target.ts:1\` | \`medium\` | \`bug\` | 重复提交 | ${issue} 将 retries 改为 1 后重复提交\n`
           + `- \`target.ts:2\` | \`medium\` | \`bug\` | 容量限制 | ${issue} 的附近存在另一个问题\n`
-          + `### 既有问题复核\n- \`${issue}\` | \`resolved\` | 失败时会重试`;
+          + `### 既有问题复核\n- \`${issue}\` | \`resolved\` | 失败时会重试\n`
+          + "### 另行审查\n- `ignored.ts:1` 还有独立改动\n"
+          + "- `target.ts:1` | `medium` | `bug` | 重复提交 | 仍会重复提交\n"
+          + "- `follow-up.ts:1` | `medium` | `bug` | 菜单打不开 | 保存后再打开会报错\n"
+          + "- `style.ts:1` | `low` | `style` | 可简化命名 | 当前命名不够直接";
       return { ...response, result: { kind: "agent", text: `${text}\n### 本轮未审文件\n（无）` } };
     });
     const review = () => kernel.runSource('import { review } from "dext/api/git/review";\nreview("workspace");');
@@ -1481,14 +1641,20 @@ describe("Dext kernel host", () => {
     expect(stop.steps?.some((step) => step.stream?.text.includes("当前无法复现网络错误"))).toBe(true);
     await fix(issue);
     await review();
-    expect((await readState()).findings).toMatchObject([
+    const verified = await readState();
+    expect(verified.followUp).toEqual(["target.ts"]);
+    expect(verified.findings).toMatchObject([
       { id: issue, status: "resolved" },
-      { title: "重复提交", status: "open", explicitFix: true }
+      { title: "重复提交", status: "open", explicitFix: true },
+      { title: "菜单打不开", status: "deferred" },
+      { title: "可简化命名", status: "deferred" }
     ]);
+    regression = verified.findings[1]!.id;
     await fix();
     await review();
     expect(fixes).toBe(2);
-    expect(reviews).toBe(2);
+    expect(reviews).toBe(3);
+    expect((await readState()).followUp).toEqual([]);
   });
 
   it("allows one concurrent git.review writer to publish its baseline", { timeout: 30000 }, async () => {

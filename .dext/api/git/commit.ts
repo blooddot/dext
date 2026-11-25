@@ -5,16 +5,6 @@ import { reviewState } from "./review.ts";
 /** Default request when the caller only selects the API. */
 const DEFAULT_TASK = "请整理当前工作区的改动，按功能创建独立的 Conventional Commit。";
 
-/** 增量审查只复审变动的文件：复用过的文件带着没核对的跨文件回归进历史，是提交前唯一的盲区。 */
-async function requireFullReview(): Promise<void> {
-  const state = await reviewState.read();
-  if (state === null || state.mode === "full") return;
-  throw new Error(
-    `提交前需要一次全量审查：最近一次 git.review 是第 ${state.round} 轮的增量审查（复审 ${state.reviewed.length} 个文件，沿用 ${state.carried.length} 个）。`
-    + '运行 review("workspace", true) 后再提交，或者在确认没有跨文件影响时用 commit("spec", change) 指定改动归属。'
-  );
-}
-
 /** Change names are the directory names the OpenSpec skills take as `--change`. */
 const CHANGE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DATE_PREFIX = /^\d{4}-\d{2}-\d{2}-/;
@@ -88,7 +78,7 @@ async function scopeBrief(change: string, sweep: boolean): Promise<string> {
  * @param input Additional requirements for this run.
  */
 async function commitChanges(input: string): Promise<AgentResult> {
-  await requireFullReview();
+  await reviewState.requireCommitCoverage();
   return agent({
     input: input || DEFAULT_TASK,
     patch: false,

@@ -18,10 +18,12 @@ export interface ReviewFinding {
 }
 
 const TITLE = "### 新发现";
+const FOLLOW_UP = "### 另行审查";
 export const REVIEW_DECISIONS = "### 既有问题复核";
 export const FIX_DECISIONS = "### 修复结果";
 export const FIX_PATHS = "### 本次修复文件";
 const NONE = "（无）";
+const FINDING_ROW = /^- `([^`]+)` \| `(critical|high|medium|low)` \| `([a-z_]+)` \| ([^|]+) \| (.+)$/u;
 
 function section(report: string, title: string): string[] | undefined {
   const lines = report.split(/\r?\n/u);
@@ -29,6 +31,15 @@ function section(report: string, title: string): string[] | undefined {
   if (start === -1) return undefined;
   const end = lines.findIndex((line, i) => i > start && /^#{1,6}\s/u.test(line));
   return lines.slice(start + 1, end === -1 ? undefined : end).map((line) => line.trim()).filter(Boolean);
+}
+
+export function readDeferredFindings(report: string): ReviewFinding[] {
+  const findings = new Map<string, ReviewFinding>();
+  for (const line of section(report, FOLLOW_UP) ?? []) {
+    const item = parseFindingRow(line);
+    if (item && !findings.has(item.id)) findings.set(item.id, { ...item, status: "deferred" });
+  }
+  return [...findings.values()];
 }
 
 export function readFixPaths(report: string): string[] {
@@ -41,10 +52,16 @@ export function readFixPaths(report: string): string[] {
 function finding(location: string, severity: string, category: string, title: string, detail: string): ReviewFinding | null {
   const path = location.replace(/:\d+(?:[–-]\d+)?$/u, "").replace(/^\.\//u, "");
   if (path === location || !path || !title.trim() || !detail.trim()) return null;
+  if (/^[A-Za-z]:|\\/u.test(path) || path.split("/").some((part) => !part || part === "." || part === "..")) return null;
   if (severity !== "critical" && severity !== "high" && severity !== "medium" && severity !== "low") return null;
   const id = `R-${createHash("sha256").update(JSON.stringify([path, title.trim().toLowerCase()])).digest("hex").slice(0, 12)}`;
   const status = severity === "critical" || severity === "high" || category === "bug" ? "open" : "deferred";
   return { id, path, location, severity, category, title: title.trim(), detail: detail.trim(), status, evidence: "" };
+}
+
+function parseFindingRow(line: string): ReviewFinding | null {
+  const match = FINDING_ROW.exec(line);
+  return match && finding(match[1]!, match[2]!, match[3]!, match[4]!, match[5]!);
 }
 
 export function readLegacyFindings(report: string): ReviewFinding[] | undefined {
@@ -75,8 +92,7 @@ export function readNewFindings(report: string, scope: ReadonlySet<string>): Rev
   if (lines.length === 1 && lines[0] === NONE) return [];
   const findings: ReviewFinding[] = [];
   for (const line of lines) {
-    const match = /^- `([^`]+)` \| `(critical|high|medium|low)` \| `([a-z_]+)` \| ([^|]+) \| (.+)$/u.exec(line);
-    const entry = match && finding(match[1]!, match[2]!, match[3]!, match[4]!, match[5]!);
+    const entry = parseFindingRow(line);
     if (!entry || !scope.has(entry.path) || findings.some(({ id }) => id === entry.id)) return undefined;
     findings.push(entry);
   }
@@ -109,6 +125,7 @@ export function reviewFindingInstructions(targets: readonly ReviewFinding[], ver
     : "只列本轮范围内有具体证据的新问题。真实的功能、崩溃和逻辑缺陷用 bug 类别。";
   return [
     `${TITLE}\n${newFindings} 每条独占一行，格式为 - \`path:123\` | \`medium\` | \`bug\` | 标题 | 影响、触发条件与证据。没有新问题时只写 ${NONE}。`,
+    `${FOLLOW_UP}\n与本批改动及修复无关的缺陷可以延期，使用「新发现」的同一逐行格式，保留触发条件和实际影响。已排定的问题以及本批直接引入的回归在相应小节报告。`,
     targets.length ? [
       `## 本轮待复核问题\n${findingList(targets)}`,
       `${REVIEW_DECISIONS}\n逐条检查上面的问题及对应验证。每个 ID 恰好一行，格式为 - \`ID\` | \`resolved\` | 验证证据，或 - \`ID\` | \`open\` | 尚未解决的证据。证据不足保留 open。仍存在的既有问题使用原 ID，不写入「新发现」。`
