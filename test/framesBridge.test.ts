@@ -78,7 +78,7 @@ describe("the video frame bridge", () => {
       args: ["C:\\Dext\\dist\\framesMcp.js"],
       env: { ELECTRON_RUN_AS_NODE: "1" }
     });
-    expect(endpointOf(started)).toMatch(/dext-frames-[a-f0-9]{48}/);
+    expect(endpointOf(started)).toMatch(/dext-frames-[a-f0-9]{24}/);
   });
 
   it("answers with the captured stills", async () => {

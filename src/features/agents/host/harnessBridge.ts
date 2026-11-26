@@ -1,10 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { parseHarnessQuestionRequest, type HarnessQuestionOutcome, type HarnessQuestionRequest } from "../domain/harnessQuestions.js";
 import { parseHarnessResultRequest, type HarnessResultOutcome, type HarnessResultRequest, type HarnessResultTool } from "../domain/harnessResultTool.js";
+import { bridgeSocketPath } from "./bridgeSocket.js";
 
 /** Endpoint the Harness overlay plugin connects to: a named pipe or unix socket. */
 export const HARNESS_BRIDGE_ENV = "DEXT_HARNESS_BRIDGE";
@@ -55,7 +54,7 @@ export class HarnessBridge {
   ) {
     this.endpoint = process.platform === "win32"
       ? `\\\\.\\pipe\\dext-harness-${this.token}`
-      : join(tmpdir(), `dext-harness-${this.token}.sock`);
+      : bridgeSocketPath("dext-harness-", this.token);
     if (process.platform !== "win32") { try { unlinkSync(this.endpoint); } catch { /* no stale socket */ } }
     this.server = createServer((socket) => this.accept(socket));
     // A listener that cannot start leaves the channel absent, which the Harness

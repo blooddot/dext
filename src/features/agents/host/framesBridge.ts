@@ -1,11 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { MAX_CAPTURED_FRAMES, type VideoFrameCapture } from "../../conversations/contracts/videoFrames.js";
 import type { AgentMcpServer } from "../contracts/agent.js";
+import { bridgeSocketPath } from "./bridgeSocket.js";
 
 /** One request is a path and a dozen numbers; one answer carries a dozen stills. */
 const MAX_REQUEST_BYTES = 64 * 1024;
@@ -16,7 +15,7 @@ export class FramesBridge {
   private readonly token = randomBytes(24).toString("hex");
   private readonly endpoint = process.platform === "win32"
     ? `\\\\.\\pipe\\dext-frames-${this.token}`
-    : join(tmpdir(), `dext-frames-${this.token}.sock`);
+    : bridgeSocketPath("dext-frames-", this.token);
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
   private disposed = false;

@@ -1,11 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { unlinkSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { z } from "zod";
 import { piObject, type PiBridgeConfig, type PiBridgeRequest } from "../contracts/pi.js";
+import { bridgeSocketPath } from "./bridgeSocket.js";
 
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
 
@@ -21,7 +20,7 @@ const requests = z.discriminatedUnion("kind", [
 
 export class PiBridge {
   readonly token = randomBytes(24).toString("hex");
-  readonly endpoint = process.platform === "win32" ? `\\\\.\\pipe\\dext-pi-${this.token}` : join(tmpdir(), `dext-pi-${this.token}.sock`);
+  readonly endpoint = process.platform === "win32" ? `\\\\.\\pipe\\dext-pi-${this.token}` : bridgeSocketPath("dext-pi-", this.token);
   private readonly server: Server;
   private readonly sockets = new Set<Socket>();
   private peer: Socket | undefined;
