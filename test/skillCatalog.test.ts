@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rename, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rename, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,8 +11,10 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+// Resolve the OS temp directory's symbolic links (macOS `/var` → `/private/var`)
+// so assertions compare the catalog's canonical paths with the root's real path.
 async function tempRoot(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "dext-skills-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "dext-skills-")));
   roots.push(root);
   return root;
 }

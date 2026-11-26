@@ -43,8 +43,10 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
+// Resolve the OS temp directory's symbolic links (macOS `/var` → `/private/var`)
+// so a kernel's physical `process.cwd()` and the scoped workspace paths agree.
 async function workspace(prefix = "dext-kernel-"): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), prefix));
+  const root = await realpath(await mkdtemp(join(tmpdir(), prefix)));
   roots.push(root);
   return root;
 }
